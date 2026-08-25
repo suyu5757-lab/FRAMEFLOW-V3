@@ -1,0 +1,9 @@
+{
+  "name": "frameflow-workbench",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "npm --prefix web test",
+    "verify": "node scripts/verify.mjs"
+  }
+}

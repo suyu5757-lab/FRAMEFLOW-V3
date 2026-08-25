@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Node / frontend
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+web/dist/
+web/.vite/
+web/.cache/
+*.tsbuildinfo
+web/test-results/
+web/playwright-report/
+web/artifacts/
+
+# Environment and credentials
+.env
+.env.*
+!.env.example
+
+# Local runtime data, media, databases, backups and logs
+data/
+generated/
+backups/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.log
+
+# IDE and editor state
+.idea/
+.vscode/
+*.iml
+*.swp
+*.swo
+
+# Windows and OS metadata
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# AI/editor attachments and staging
+.codex-remote-attachments/
+.skill-staging/
