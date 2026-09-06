@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Connection, Edge, EdgeChange, Node, NodeChange, Viewport } from '@xyflow/react';
-import { studioApi } from './api';
+import { StudioApiError, studioApi } from './api';
 import { AudioStudioView } from './AudioStudioView';
 import { EDGE_RELATIONS, autoLayoutNodes, edgeRelationPresentation, wouldCreateExecutionCycle, type EdgeRelation } from './graph-editor';
 import type { AgentPlan, AudioStudioDocument, AudioStudioEnvelope, AssetAuditEnvelope, AssetBoard, AssetBoardEdgeRelation, AssetBoardEnvelope, AssetBoardNode, AssetLibraryEnvelope, DashboardEnvelope, DashboardTask, GraphEnvelope, GraphNodeData, HomeStatus, LibraryAsset, ProjectCreateInput, ProjectDashboard, ProjectRecord, ProjectHomeSummary, RenderJob, RunEstimate, SettingsEnvelope, SettingsProvider, SettingsPreset, StoryChecks, StoryDiff, StoryDocument, StoryEnvelope, StoryRun, StoryShot, TimelineClip, TimelineDocument, TimelineEnvelope, TimelinePreflight, TimelinePreflightShot, WorkflowGraph, WorkflowManifest, WorkflowRun, WorkflowRunDetail } from './types';
@@ -2841,9 +2841,22 @@ function Studio() {
   const refreshAssetBoard = async (preserveLayout = true, libraryOverride?: AssetLibraryEnvelope, selectedAssetId?: string | null) => {
     if (!projectId) return null;
     const current = assetBoardEnvelope;
-    const refreshed = current && preserveLayout
-      ? await studioApi.syncAssetBoard(projectId, current.revision, true)
-      : await studioApi.assetBoard(projectId);
+    let refreshed: AssetBoardEnvelope;
+    if (!current || !preserveLayout) {
+      refreshed = await studioApi.assetBoard(projectId);
+    } else {
+      try {
+        refreshed = await studioApi.syncAssetBoard(projectId, current.revision, true);
+      } catch (error) {
+        // Uploading a candidate changes the asset library, while other UI
+        // actions may have advanced the board revision in the meantime. A
+        // stale revision must not make a successful upload look like a no-op;
+        // reload the latest board and retry the layout-preserving sync once.
+        if (!(error instanceof StudioApiError) || error.status !== 409) throw error;
+        const latest = await studioApi.assetBoard(projectId);
+        refreshed = await studioApi.syncAssetBoard(projectId, latest.revision, true);
+      }
+    }
     const assets = libraryOverride?.assets || assetLibrary?.assets || [];
     const boardNodes = assetBoardToFlowNodes(refreshed.board, assets, assetBoardFilter, assetBoardShowShots, story?.story.shots || [], { preset: assetBoardLayoutPreset, columnWidth: assetBoardColumnWidth, gap: assetBoardGap, layoutMode: assetBoardLayoutMode, collapsedScopes: assetBoardCollapsedScopes, onlyBlocked: assetBoardOnlyBlocked, showCandidates: assetBoardShowCandidates, shotId: assetBoardShotId, onToggleScope: toggleAssetBoardScope, onContextMenu: openAssetContextMenu, onApprovePrompt: approveAssetPromptCard, onGenerateImage: generateAssetImageCard, onCopyPrompt: copyAssetPromptCard, onUploadAsset: uploadAssetFromBoard, onApproveAsset: approveAssetFromBoard, onRejectAsset: rejectAssetFromBoard, onRegisterAsset: registerAssetFromBoard, onOpenAssetProduction: openAssetProductionShortcut });
     const selectedNode = selectedAssetId ? boardNodes.find((node) => !node.data.presentationOnly && node.data.node_type === 'asset' && String(node.data.asset_id || '') === selectedAssetId) : undefined;

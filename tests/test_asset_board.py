@@ -139,6 +139,26 @@ class AssetBoardV3Tests(unittest.TestCase):
         char = next(asset for asset in library["assets"] if asset["id"] == "CHAR_01")
         self.assertFalse(char["readiness"]["ready"])
 
+    def test_asset_board_sync_refreshes_prompt_card_after_candidate_intake(self) -> None:
+        initial = self.client.get("/api/v2/projects/PRJ_BOARD/asset-board")
+        self.assertEqual(initial.status_code, 200, initial.text)
+        response = self.client.post(
+            "/api/v2/projects/PRJ_BOARD/asset-intake",
+            data={"logical_asset_id": "CHAR_01", "asset_class": "character", "source_type": "chatgpt-web"},
+            files={"file": ("candidate.png", PNG_1X1, "image/png")},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        artifact_id = response.json()["artifact"]["id"]
+
+        synced = self.client.post(
+            "/api/v2/projects/PRJ_BOARD/asset-board/sync",
+            json={"expected_revision": initial.json()["revision"], "preserve_layout": True},
+        )
+        self.assertEqual(synced.status_code, 200, synced.text)
+        handoff = next(node for node in synced.json()["board"]["nodes"] if node["id"] == "handoff:CHAR_01")
+        self.assertEqual(handoff["config"]["artifact_id"], artifact_id)
+        self.assertTrue(handoff["config"]["artifact_url"].endswith("candidate.png"))
+
     def test_v3_qa_and_registration_keep_active_version_gated(self) -> None:
         intake = self.client.post(
             "/api/v2/projects/PRJ_BOARD/asset-intake",

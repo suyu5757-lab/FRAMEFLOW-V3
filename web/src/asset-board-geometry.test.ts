@@ -64,6 +64,34 @@ describe('asset board geometry', () => {
     expect(Math.abs(assetCard!.position.y - promptCard!.position.y)).toBeLessThanOrEqual(2);
   });
 
+  it('keeps uploaded candidate metadata on the Prompt card', () => {
+    const board = {
+      metadata: {},
+      nodes: [
+        { id: 'asset:ENV01', node_type: 'asset', asset_id: 'ENV01', label: 'ENV01', status: 'partial', config: {} },
+        {
+          id: 'handoff:ENV01',
+          node_type: 'handoff',
+          asset_id: 'ENV01',
+          label: '资产 Prompt · ENV01',
+          status: 'prompt_draft_ready',
+          config: {
+            prompt_card: true,
+            prompt: '未来都市平台',
+            artifact_id: 'ART_ENV01',
+            artifact_url: '/api/project-files/PRJ/artifacts/intake/env01.png',
+            artifact_status: 'generated_pending_qa',
+          },
+        },
+      ],
+      edges: [],
+    } as unknown as AssetBoard;
+    const asset = { id: 'ENV01', name: 'ENV01', assetClass: 'environment', readiness: {} } as unknown as LibraryAsset;
+    const promptCard = assetBoardToFlowNodes(board, [asset], 'all', true, [], { layoutMode: 'adaptive' }).find((node) => node.data.node_type === 'handoff');
+    expect(promptCard?.data.config.artifact_id).toBe('ART_ENV01');
+    expect(promptCard?.data.config.artifact_url).toBe('/api/project-files/PRJ/artifacts/intake/env01.png');
+  });
+
   it('resolves the production workspace target from prompt and media readiness', () => {
     expect(resolveAssetProductionTarget({ hasPrompt: false, hasMedia: false })).toBe('prompt');
     expect(resolveAssetProductionTarget({ hasPrompt: false, hasMedia: true })).toBe('prompt');
