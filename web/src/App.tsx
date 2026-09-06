@@ -3474,6 +3474,7 @@ function Studio() {
       setNotice('仅支持 PNG/JPEG/WebP 图片、MP4/WebM/MOV 视频和 WAV/MP3/M4A 音频。');
       return;
     }
+    setNotice(`正在上传候选${mediaType.startsWith('video/') ? '视频' : mediaType.startsWith('audio/') ? '声音' : '图片'}「${file.name}」…`);
     setBusy(true);
     try {
       const form = new FormData();
@@ -3499,7 +3500,7 @@ function Studio() {
       setNotice(`候选${mediaType.startsWith('video/') ? '视频' : mediaType.startsWith('audio/') ? '声音' : '图片'}已导入 · ${artifact?.id || 'artifact'} · 待 QA，不会覆盖当前版本`);
       void refreshDashboard(false);
     } catch (error) {
-      setNotice((error as Error).message);
+      setNotice(`上传失败：${(error as Error).message}`);
     } finally { setBusy(false); }
   };
 
@@ -3660,7 +3661,11 @@ function Studio() {
 
   function uploadAssetFromBoard(assetId: string, file: File) {
     const asset = assetLibrary?.assets.find((candidate) => candidate.id === assetId);
-    if (asset) void importAssetCandidate(asset, file);
+    if (!asset) {
+      setNotice(`未找到资产 ${assetId}，请刷新资产画布后重试。`);
+      return;
+    }
+    void importAssetCandidate(asset, file);
   }
 
   function approveAssetFromBoard(_assetId: string, artifactId: string) {

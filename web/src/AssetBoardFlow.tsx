@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import type { CSSProperties, MouseEvent } from 'react';
+import type { CSSProperties, DragEvent, MouseEvent } from 'react';
 import {
   Background,
   Controls,
@@ -151,17 +151,31 @@ function AssetBoardCard({ data, selected }: NodeProps<AssetFlowNode>) {
     const productionDraft = Boolean(data.config.production_draft);
     const artifactApproved = artifactQa === 'Approved' || ['approved_pending_registration', 'ready', 'active'].includes(artifactStatus);
     const artifactState = artifactApproved ? (artifactStatus === 'approved_pending_registration' ? '图片已审核 · 待登记' : '图片已审核') : '图片待审核';
+    const handlePromptFileDrop = (event: DragEvent<HTMLElement>) => {
+      if (artifactId) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.dataTransfer.dropEffect = 'copy';
+      const file = event.dataTransfer.files?.[0];
+      if (file) data.onUploadAsset?.(String(data.asset_id), file);
+    };
+    const handlePromptFileDragOver = (event: DragEvent<HTMLElement>) => {
+      if (artifactId) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.dataTransfer.dropEffect = 'copy';
+    };
     return <article className={`asset-board-card asset-board-prompt-card ${selected ? 'selected' : ''}`} data-asset-card-type="handoff" data-asset-id={String(data.asset_id || '')} data-grid-row={rowKey} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); data.onContextMenu?.({ nodeId: data.id, assetId: String(data.asset_id), label: data.label, nodeType: data.node_type, rowKey, x: event.clientX, y: event.clientY }); }}>
       <Handle type="target" position={Position.Left} />
       {artifactUrl ? <div className="asset-board-prompt-media"><img src={artifactUrl} alt={`${data.label} 已上传资产`} /><div><span>已上传资产</span><i>{artifactState}</i></div></div> : productionDraft && <div className="asset-board-prompt-media asset-board-prompt-media-empty"><strong>图片位置</strong><span>可从右侧上传候选图片</span></div>}
-      <div className="asset-board-prompt-content">
+      <div className={`asset-board-prompt-content${!artifactId ? ' asset-board-prompt-drop-target nodrag nopan' : ''}`} onDragOver={!artifactId ? handlePromptFileDragOver : undefined} onDrop={!artifactId ? handlePromptFileDrop : undefined}>
         <div className="asset-board-card-meta"><span>{isFusionPrompt ? (fusionPromptReady ? '正式融合 Prompt' : '融合规划 / 历史 Prompt') : '资产 Prompt'}</span><i>{fusionPromptStale ? '输入已变化 · 待重新融合' : !fusionPromptReady ? '等待实际资产连线' : artifactId ? artifactState : promptQa === 'Approved' ? 'Prompt 已通过' : promptQa}</i></div>
         <strong>{data.label}</strong>
         <small>{data.asset_id || '资产'} · {String(data.config.target_skill || 'video-asset-regulator')}{relevantShots ? ` · ${relevantShots}` : ''}</small>
         <pre tabIndex={0} aria-label={`${data.label} Prompt`} className={`asset-board-prompt-text ${productionDraft && !String(data.config.prompt || '').trim() ? 'empty' : ''}`}>{String(data.config.prompt || '').trim() || '提示词为空，可点击“编辑 Prompt”手动填写，或使用 AI 编写 Prompt。'}</pre>
         <div className="asset-board-prompt-state"><span>{!fusionPromptReady ? '正式 Prompt：尚未生成' : artifactId ? `图片：${artifactState}` : `图像执行：${generationStatus}`}</span>{fusionPromptStale && <span>请重新确认融合连线</span>}{!eligible && <span>非图像资产</span>}</div>
         <div className="asset-board-prompt-actions">
-          {fusionPromptReady && !artifactId && <label className="asset-board-upload-button">上传资产<input type="file" accept="image/png,image/jpeg,image/webp" onClick={(event) => event.stopPropagation()} onChange={(event) => { const file = event.target.files?.[0]; if (file) data.onUploadAsset?.(String(data.asset_id), file); event.currentTarget.value = ''; }} /></label>}
+          {fusionPromptReady && !artifactId && <label className="asset-board-upload-button nodrag nopan">上传资产<input className="nodrag nopan" type="file" accept="image/png,image/jpeg,image/webp" onClick={(event) => event.stopPropagation()} onChange={(event) => { const file = event.target.files?.[0]; if (file) data.onUploadAsset?.(String(data.asset_id), file); event.currentTarget.value = ''; }} /></label>}
           {productionDraft && !String(data.config.prompt || '').trim() && <button className="asset-board-prompt-primary" onClick={(event) => { event.stopPropagation(); data.onOpenAssetProduction?.(String(data.asset_id), 'prompt', data.id); }}>编辑 Prompt</button>}
           {productionDraft && !String(data.config.prompt || '').trim() && <button onClick={(event) => { event.stopPropagation(); data.onGeneratePrompt?.(String(data.asset_id)); }}>AI 编写 Prompt</button>}
           {fusionPromptReady && !artifactId && String(data.config.prompt || '').trim() && <button onClick={(event) => { event.stopPropagation(); data.onCopyPrompt?.(String(data.asset_id)); }}>复制并打开 ChatGPT</button>}

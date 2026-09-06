@@ -946,6 +946,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .asset-board-prompt-card > strong { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .asset-board-prompt-text { max-height: 172px; margin: 9px 0 6px; overflow: auto; border: 1px solid rgba(215,255,75,.16); border-radius: 6px; background: rgba(2,7,3,.48); color: #d9e8cf; padding: 8px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 8px; line-height: 1.45; white-space: pre-wrap; }
 .asset-board-prompt-text.empty { color: #92a58b; font-style: italic; }
+.asset-board-prompt-drop-target { position: relative; }
+.asset-board-prompt-drop-target::after { content: '拖入图片上传'; position: absolute; top: 7px; right: 9px; padding: 3px 5px; border: 1px dashed rgba(215,255,75,.28); border-radius: 4px; color: rgba(215,255,75,.58); font-size: 7px; pointer-events: none; opacity: .75; }
 .asset-board-prompt-media-empty { min-height: 112px; place-items: center; border: 1px dashed rgba(215,255,75,.38); border-radius: 7px; background: rgba(215,255,75,.045); text-align: center; }
 .asset-board-prompt-media-empty strong { color: var(--acid); font-size: 10px; }
 .asset-board-prompt-media-empty span { color: #9db28f; font-size: 8px; }
