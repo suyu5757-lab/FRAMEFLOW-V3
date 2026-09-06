@@ -1888,6 +1888,10 @@ function StoryView({ story, storyRun, storyDiff, dirty, busy, notice, onChange, 
     : assetGapIssues.length
       ? '当前没有会阻止后续制作的故事结构错误；资产引用会在下一步资产生产中登记或自动提取。'
       : '当前没有会阻止后续制作的故事结构错误。';
+  const storyActionFeedback = busy
+    ? (notice && notice !== 'V3 工作台已连接' ? notice : '正在处理当前操作，请稍候…')
+    : notice !== 'V3 工作台已连接' ? notice : '';
+  const storyActionFeedbackTone = /失败|错误|无法|未能|阻塞|请先|不存在|冲突|异常/.test(storyActionFeedback) ? ' error' : busy ? ' pending' : ' done';
   const shotById = new Map(story.story.shots.map((shot) => [shot.id, shot]));
   const warningGroups = Array.from(warningIssues.reduce((groups, issue) => {
     const current = groups.get(issue.code) || { code: issue.code, message: issue.message, count: 0 };
@@ -1907,8 +1911,8 @@ function StoryView({ story, storyRun, storyDiff, dirty, busy, notice, onChange, 
     target.querySelector<HTMLInputElement>('input, textarea')?.focus({ preventScroll: true });
   };
   return (
-    <section className="story-view">
-      <header className="section-heading"><div><span>STORY & SHOT DESIGN</span><h2>故事与分镜</h2></div><div className="story-heading-actions"><div className="story-heading-status" role="status" aria-live="polite" aria-label={`故事阻塞 ${blockingIssues.length} 个，提醒 ${warningIssues.length} 个${pendingAssetCount ? `，资产待登记 ${pendingAssetCount} 项` : ''}${storyRunLabel ? `，${storyRunLabel}` : ''}`}><span className={`story-status-pill${blockingIssues.length ? ' blocked' : ' clear'}`}>{blockingIssues.length ? `阻塞 ${blockingIssues.length}` : '检查通过'}</span><span className="story-status-pill muted">提醒 {warningIssues.length}</span>{pendingAssetCount > 0 && <span className="story-status-pill asset">资产待登记 {pendingAssetCount}</span>}{storyRunLabel && <span className="story-status-pill run">{storyRunLabel}</span>}</div>{storyRun && ['storyboard_review_required', 'regulator_review_required'].includes(storyRun.status) && <button onClick={() => onAccept('all')} disabled={busy}>接受下一层</button>}<button className="asset-prompt-button" onClick={onGenerateAssetPrompts} disabled={promptGenerationBlocked} title={promptGenerationTitle}>资产 Prompt 生成</button><button className="asset-entry-button" onClick={onOpenAssetBoard} disabled={busy || !story.story.shots.length}>进入资产生产</button><button onClick={onSave} disabled={!dirty || busy}>保存故事剧本</button></div></header>
+    <section className="story-view" aria-busy={busy}>
+      <header className="section-heading"><div><span>STORY & SHOT DESIGN</span><h2>故事与分镜</h2></div><div className="story-heading-actions"><div className="story-heading-status" role="status" aria-live="polite" aria-label={`故事阻塞 ${blockingIssues.length} 个，提醒 ${warningIssues.length} 个${pendingAssetCount ? `，资产待登记 ${pendingAssetCount} 项` : ''}${storyRunLabel ? `，${storyRunLabel}` : ''}`}><span className={`story-status-pill${blockingIssues.length ? ' blocked' : ' clear'}`}>{blockingIssues.length ? `阻塞 ${blockingIssues.length}` : '检查通过'}</span><span className="story-status-pill muted">提醒 {warningIssues.length}</span>{pendingAssetCount > 0 && <span className="story-status-pill asset">资产待登记 {pendingAssetCount}</span>}{storyRunLabel && <span className="story-status-pill run">{storyRunLabel}</span>}</div>{storyActionFeedback && <span className={`story-action-feedback${storyActionFeedbackTone}`} role="status" aria-live="polite">{busy && <i aria-hidden="true" />}{storyActionFeedback}</span>}{storyRun && ['storyboard_review_required', 'regulator_review_required'].includes(storyRun.status) && <button type="button" onClick={() => onAccept('all')} disabled={busy}>接受下一层</button>}<button type="button" className="asset-prompt-button" onClick={() => { void onGenerateAssetPrompts(); }} disabled={promptGenerationBlocked} title={promptGenerationTitle}>资产 Prompt 生成</button><button type="button" className="asset-entry-button" onClick={onOpenAssetBoard} disabled={busy || !story.story.shots.length}>进入资产生产</button><button type="button" onClick={onSave} disabled={!dirty || busy}>保存故事剧本</button></div></header>
       <section className={`story-check-overview ${storyCheckTone}`} aria-label="故事与分镜检查结果">
         <div className="story-check-overview-heading">
           <div><span>PRODUCTION GATE</span><h3>{storyCheckTitle}</h3><p>{storyCheckDescription}</p></div>
@@ -3388,7 +3392,11 @@ function Studio() {
   };
 
   const generateAssetPrompts = async (targetAssetId?: string) => {
-    if (!projectId || !story) return;
+    if (!projectId || !story) {
+      setNotice('请先选择项目并加载故事与分镜。');
+      return;
+    }
+    setNotice(targetAssetId ? '正在生成当前资产的 Prompt 草稿，请稍候…' : '正在执行资产总控并生成 Prompt 卡，请稍候；不要重复点击。');
     setBusy(true);
     try {
       const currentStory = storyDirty ? await saveStory(false) : story;

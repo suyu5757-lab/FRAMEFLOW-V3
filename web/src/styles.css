@@ -144,6 +144,12 @@ button { color: inherit; }
 .story-status-pill.muted { border-color: rgba(255,202,102,.32); background: rgba(255,202,102,.055); color: #ffca66; }
 .story-status-pill.asset { border-color: rgba(205,228,154,.3); background: rgba(205,228,154,.055); color: #cde49a; }
 .story-status-pill.run { border-color: rgba(143,205,192,.26); background: rgba(143,205,192,.045); color: #aeb9a4; }
+.story-action-feedback { display: inline-flex; min-width: 0; max-width: min(100%, 360px); align-items: flex-start; gap: 6px; padding: 5px 7px; border: 1px solid rgba(143,171,129,.3); border-radius: 7px; background: rgba(21,25,18,.68); color: #b9c5b0; font-size: 8px; line-height: 1.4; overflow-wrap: anywhere; }
+.story-action-feedback.pending { border-color: rgba(255,202,102,.42); background: rgba(255,202,102,.07); color: #ffca66; }
+.story-action-feedback.error { border-color: rgba(255,142,118,.48); background: rgba(255,142,118,.08); color: #ffb0a2; }
+.story-action-feedback.done { border-color: rgba(143,205,192,.32); background: rgba(143,205,192,.055); color: #b8d3c9; }
+.story-action-feedback i { display: block; flex: 0 0 8px; width: 8px; height: 8px; margin-top: 1px; border: 1px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: story-action-spin .75s linear infinite; }
+@keyframes story-action-spin { to { transform: rotate(360deg); } }
 .story-view .story-heading-actions button { flex: 0 0 auto; white-space: nowrap; }
 .story-heading-actions button { border: 1px solid var(--acid); border-radius: 7px; background: var(--acid); color: #11140b; padding: 8px 10px; font-size: 10px; font-weight: 800; cursor: pointer; }
 .story-heading-actions button:disabled { opacity: .4; cursor: default; }
@@ -629,6 +635,7 @@ button { color: inherit; }
   .story-heading-actions { width: 100%; justify-content: flex-start; align-items: flex-start; }
   .story-view .story-heading-actions { flex: 0 1 auto; min-height: 0; }
   .story-view .story-heading-status { flex: 0 1 100%; justify-content: flex-start; }
+  .story-action-feedback { flex: 1 1 100%; max-width: none; order: 3; }
   .story-view .story-heading-actions button { flex: 0 1 auto; align-self: flex-start; }
   .story-check-overview-heading { flex-direction: column; }
   .story-check-overview-counters { width: 100%; }
