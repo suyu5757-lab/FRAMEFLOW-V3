@@ -672,7 +672,7 @@ export type StoryChecks = {
   ok: boolean;
   errors: number;
   warnings: number;
-  issues: Array<{ code: string; severity: string; message: string; shot_id?: string }>;
+  issues: Array<{ code: string; severity: string; message: string; shot_id?: string; details?: Record<string, unknown> }>;
   metrics: { scene_count: number; shot_count: number; total_duration: number; target_duration: number; estimated_dialogue_duration?: number };
 };
 

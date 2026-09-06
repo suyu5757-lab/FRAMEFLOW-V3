@@ -3,7 +3,7 @@ import type { Connection, Edge, EdgeChange, Node, NodeChange, Viewport } from '@
 import { studioApi } from './api';
 import { AudioStudioView } from './AudioStudioView';
 import { EDGE_RELATIONS, autoLayoutNodes, edgeRelationPresentation, wouldCreateExecutionCycle, type EdgeRelation } from './graph-editor';
-import type { AgentPlan, AudioStudioDocument, AudioStudioEnvelope, AssetAuditEnvelope, AssetBoard, AssetBoardEdgeRelation, AssetBoardEnvelope, AssetBoardNode, AssetLibraryEnvelope, DashboardEnvelope, DashboardTask, GraphEnvelope, GraphNodeData, HomeStatus, LibraryAsset, ProjectCreateInput, ProjectDashboard, ProjectRecord, ProjectHomeSummary, RenderJob, RunEstimate, SettingsEnvelope, SettingsProvider, SettingsPreset, StoryDiff, StoryDocument, StoryEnvelope, StoryRun, StoryShot, TimelineClip, TimelineDocument, TimelineEnvelope, TimelinePreflight, TimelinePreflightShot, WorkflowGraph, WorkflowManifest, WorkflowRun, WorkflowRunDetail } from './types';
+import type { AgentPlan, AudioStudioDocument, AudioStudioEnvelope, AssetAuditEnvelope, AssetBoard, AssetBoardEdgeRelation, AssetBoardEnvelope, AssetBoardNode, AssetLibraryEnvelope, DashboardEnvelope, DashboardTask, GraphEnvelope, GraphNodeData, HomeStatus, LibraryAsset, ProjectCreateInput, ProjectDashboard, ProjectRecord, ProjectHomeSummary, RenderJob, RunEstimate, SettingsEnvelope, SettingsProvider, SettingsPreset, StoryChecks, StoryDiff, StoryDocument, StoryEnvelope, StoryRun, StoryShot, TimelineClip, TimelineDocument, TimelineEnvelope, TimelinePreflight, TimelinePreflightShot, WorkflowGraph, WorkflowManifest, WorkflowRun, WorkflowRunDetail } from './types';
 import { dashboardHasActiveWork, progressLabel, stageProgress, statusClass, statusIcon, statusLabel, taskPriorityLabel } from './dashboard-state';
 import { assetClassLabels as sharedAssetClassLabels, assetMatchesFilter, assetMatchesScope, assetNextAction, assetProductionStatus, assetStatusBucket, assetStatusFilterLabels, assetStatusLabels as sharedAssetStatusLabels, assetStatusPresentationOrder, filterAssets, parseJsonObject, productionStatusLabels, type AssetLibraryFilter, type AssetLibraryScope, type AssetLibraryStatusFilter, type AssetSort } from './asset-state';
 import { applyAssetBoardSelection, assetBoardSelectionKey, selectedAssetBoardCards as getSelectedAssetBoardCards, singleSelectedAssetBoardCard, type AssetBoardSelectionKey } from './asset-board-selection';
@@ -1759,6 +1759,53 @@ function ProjectManager({ projects, archivedProjects, currentId, busy, onClose, 
   </div>;
 }
 
+type StoryCheckIssue = StoryChecks['issues'][number];
+
+const storyCheckFieldLabels: Record<string, string> = {
+  composition: '构图', movement: '运镜 / 动作', performance: '表演', dialogue: '对白', narration: '旁白',
+  lighting: '光线', color: '色彩', style: '风格', firstFrame: '首帧', lastFrame: '尾帧', continuity: '连续性',
+};
+
+function storyIssueTitle(issue: StoryCheckIssue): string {
+  const titles: Record<string, string> = {
+    dialogue_overrun: '对白 / 旁白超出镜头时长',
+    asset_gap: '镜头引用了尚未登记的资产',
+    shot_field_missing: '镜头缺少必填字段',
+    shot_duration_invalid: '镜头时长无效',
+    generator_duration_limit: '镜头超过当前生成器的时长限制',
+    shot_id_missing: '镜头缺少稳定 ID',
+    shot_id_duplicate: '镜头 ID 重复',
+  };
+  return titles[issue.code] || issue.message;
+}
+
+function storyIssueGuidance(issue: StoryCheckIssue, shot?: StoryShot): string {
+  const details = issue.details || {};
+  if (issue.code === 'dialogue_overrun') {
+    const estimated = Number(details.estimated_dialogue_duration || 0);
+    const duration = Number(shot?.duration || 0);
+    return `${shot?.id || '该镜头'} 当前约 ${duration || '—'} 秒，对白 / 旁白估算约 ${estimated || '—'} 秒。请缩短对白，或把镜头时长调整到不小于约 ${estimated || '—'} 秒；也可以用“拆分”把对白和动作拆成两个镜头，修改后点击“保存镜头表”。`;
+  }
+  if (issue.code === 'asset_gap') {
+    return '这些 ID 已被镜头引用，但统一资产库中没有对应登记。进入“资产生产”，登记或关联角色、场景、道具和声音资产，完成后回到此页刷新检查。';
+  }
+  if (issue.code === 'shot_field_missing') {
+    const field = String(details.field || '必填字段');
+    return `定位到对应镜头，在“${storyCheckFieldLabels[field] || field}”字段补齐内容，然后点击“保存镜头表”。`;
+  }
+  if (issue.code === 'shot_duration_invalid') return '定位到对应镜头，把时长改为大于 0 的有效数字，然后保存镜头表。';
+  if (issue.code === 'generator_duration_limit') return '定位到对应镜头，把单镜头时长缩短到生成器允许的范围，或拆分为多个镜头后保存。';
+  if (issue.code === 'shot_id_missing' || issue.code === 'shot_id_duplicate') return '请在镜头表中修复稳定 ID，确保每个镜头都有唯一 ID，再保存镜头表。';
+  return '请定位到对应镜头，按检查信息补齐或修正字段，然后点击“保存镜头表”重新检查。';
+}
+
+function storyIssueMissingAssets(issue: StoryCheckIssue): Array<{ shot_id: string; asset_id: string }> {
+  const raw = issue.details?.missing_assets;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null)
+    .map((item) => ({ shot_id: String(item.shot_id || '—'), asset_id: String(item.asset_id || '—') }));
+}
+
 function StoryView({ story, storyRun, storyDiff, dirty, busy, notice, onChange, onSave, onGenerate, onAccept, onRollback, onOpenAssetBoard, onGenerateAssetPrompts }: { story: StoryEnvelope | null; storyRun: StoryRun | null; storyDiff: StoryDiff | null; dirty: boolean; busy: boolean; notice: string; onChange: (story: StoryDocument) => void; onSave: () => void; onGenerate: () => void; onAccept: (scope?: 'all' | 'script_only' | 'shots_only', shotIds?: string[]) => void; onRollback: (versionId: string, scope: 'script' | 'shots') => void; onOpenAssetBoard: () => void; onGenerateAssetPrompts: () => void }) {
   const [selectedCandidateIds, setSelectedCandidateIds] = useState<string[]>([]);
   const creativeGoalRef = useRef<HTMLTextAreaElement | null>(null);
@@ -1814,9 +1861,48 @@ function StoryView({ story, storyRun, storyDiff, dirty, busy, notice, onChange, 
     shots[index] = { ...source, duration: half }; shots.splice(index + 1, 0, { ...source, id: stableId('SH'), duration: Math.max(.1, Number((source.duration - half).toFixed(2))), purpose: `${source.purpose || '镜头'}（拆分）` }); onChange({ ...story.story, shots });
   };
   const linesToItems = (value: string, prefix: string) => value.split('\n').map((line) => line.trim()).filter(Boolean).map((label, index) => ({ id: `${prefix}${String(index + 1).padStart(2, '0')}`, label }));
+  const allCheckIssues = story.checks.issues;
+  const blockingIssues = allCheckIssues.filter((issue) => issue.severity === 'error');
+  const warningIssues = allCheckIssues.filter((issue) => issue.severity !== 'error');
+  const shotById = new Map(story.story.shots.map((shot) => [shot.id, shot]));
+  const warningGroups = Array.from(warningIssues.reduce((groups, issue) => {
+    const current = groups.get(issue.code) || { code: issue.code, message: issue.message, count: 0 };
+    current.count += 1;
+    groups.set(issue.code, current);
+    return groups;
+  }, new Map<string, { code: string; message: string; count: number }>() ).values());
+  const focusShot = (shotId: string) => {
+    const target = document.querySelector<HTMLElement>(`[data-story-shot-id="${CSS.escape(shotId)}"]`);
+    if (!target) return;
+    target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    target.classList.remove('story-check-focus');
+    window.requestAnimationFrame(() => {
+      target.classList.add('story-check-focus');
+      window.setTimeout(() => target.classList.remove('story-check-focus'), 1800);
+    });
+    target.querySelector<HTMLInputElement>('input, textarea')?.focus({ preventScroll: true });
+  };
   return (
     <section className="story-view">
       <header className="section-heading"><div><span>STORY & SHOT DESIGN</span><h2>故事与分镜</h2></div><div className="story-heading-actions"><p className="story-heading-status">{promptGenerationBlockingIssues.length} 个故事阻塞问题 · {story.checks.warnings} 个提醒{assetGapIssueCount ? ` · ${assetGapIssueCount} 个资产待提取` : ''}{storyRun ? ` · ${storyRun.active_step}` : ''}</p>{storyRun && ['storyboard_review_required', 'regulator_review_required'].includes(storyRun.status) && <button onClick={() => onAccept('all')} disabled={busy}>接受下一层</button>}<button className="asset-prompt-button" onClick={onGenerateAssetPrompts} disabled={promptGenerationBlocked} title={promptGenerationTitle}>资产 Prompt 生成</button><button className="asset-entry-button" onClick={onOpenAssetBoard} disabled={busy || !story.story.shots.length}>进入资产生产</button><button onClick={onSave} disabled={!dirty || busy}>保存故事剧本</button></div></header>
+      <section className={`story-check-overview${blockingIssues.length ? ' has-blockers' : ' is-clear'}`} aria-label="故事与分镜检查结果">
+        <div className="story-check-overview-heading">
+          <div><span>PRODUCTION GATE</span><h3>{blockingIssues.length ? `先处理 ${blockingIssues.length} 个阻塞问题` : '故事与分镜检查通过'}</h3><p>{blockingIssues.length ? '下面列出会阻止后续资产 Prompt 或生产步骤的问题，并提供直接修改入口。' : '当前没有会阻止后续制作的故事结构错误。'}</p></div>
+          <div className="story-check-overview-counters"><strong>{blockingIssues.length}<small>阻塞</small></strong><strong>{warningIssues.length}<small>提醒</small></strong><strong>{story.story.shots.length}<small>镜头</small></strong></div>
+        </div>
+        {blockingIssues.length ? <div className="story-blocker-list">{blockingIssues.map((issue, index) => {
+          const shot = issue.shot_id ? shotById.get(issue.shot_id) : undefined;
+          const missingAssets = storyIssueMissingAssets(issue);
+          return <article className="story-blocker-card" key={`${issue.code}-${issue.shot_id || 'project'}-${index}`}>
+            <div className="story-blocker-card-heading"><span className="story-check-severity">阻塞</span><strong>{storyIssueTitle(issue)}</strong>{issue.shot_id && <b className="story-check-target">{issue.shot_id}</b>}</div>
+            <p className="story-blocker-message">{issue.message}{issue.shot_id ? ` · ${issue.shot_id}` : ''}</p>
+            <p className="story-blocker-guidance">怎么改：{storyIssueGuidance(issue, shot)}</p>
+            {missingAssets.length > 0 && <div className="story-missing-assets"><small>未登记引用 · {missingAssets.length} 项</small><div>{missingAssets.map((item, missingIndex) => <span key={`${item.shot_id}-${item.asset_id}-${missingIndex}`}>{item.shot_id} → {item.asset_id}</span>)}</div></div>}
+            <div className="story-blocker-actions">{issue.shot_id && <button type="button" onClick={() => focusShot(issue.shot_id as string)}>定位到 {issue.shot_id}</button>}{issue.code === 'asset_gap' && <button type="button" className="story-blocker-primary" onClick={onOpenAssetBoard} disabled={busy}>进入资产生产登记资产</button>}</div>
+          </article>;
+        })}</div> : <div className="story-check-clear">可以继续进行资产 Prompt 生成和资产生产。</div>}
+        {warningIssues.length > 0 && <details className="story-warning-drawer"><summary><span>提醒明细</span><small>{warningIssues.length} 条提醒 · {warningGroups.map((group) => `${group.message} ×${group.count}`).join(' · ')}</small></summary><div className="story-warning-list">{warningIssues.map((issue, index) => <div className="story-warning-item" key={`${issue.code}-${issue.shot_id || 'project'}-${index}`}><b>提醒</b><span>{issue.message}{issue.shot_id ? ` · ${issue.shot_id}` : ''}</span>{issue.shot_id && <button type="button" onClick={() => focusShot(issue.shot_id as string)}>定位</button>}</div>)}</div></details>}
+      </section>
       <div className="story-spec-grid">
         <label>创意目标 / 补充想法<textarea id="story-creative-goal" name="story-creative-goal" ref={creativeGoalRef} value={story.story.spec.creative_goal} onChange={(event) => updateSpec('creative_goal', event.target.value)} onInput={resizeCreativeGoal} /></label>
         <label>平台<input id="story-platform" name="story-platform" value={story.story.spec.platform} onChange={(event) => updateSpec('platform', event.target.value)} /></label>
@@ -1839,10 +1925,9 @@ function StoryView({ story, storyRun, storyDiff, dirty, busy, notice, onChange, 
         </div>
       </section>
       <div className="story-section-title"><div><span>SHOT TABLE</span><h3>镜头表</h3></div><div className="story-section-actions"><small>{story.story.shots.length} 个镜头 · {story.checks.metrics.total_duration}s</small><button type="button" onClick={addShot} disabled={busy}>＋ 新增镜头</button><button onClick={onSave} disabled={!dirty || busy}>保存镜头表</button></div></div>
-      <div className="shot-table">{story.story.shots.length ? story.story.shots.map((shot, index) => <article className="shot-row" key={shot.id}><div className="shot-id"><b>{shot.id}</b><small>{shot.scene}</small></div><label>时长<input id={`shot-${shot.id}-duration`} name={`shot-${shot.id}-duration`} type="number" min="0.1" step="0.1" value={shot.duration} onChange={(event) => updateShot(shot.id, 'duration', Number(event.target.value) || 0.1)} /></label><label>景别<input id={`shot-${shot.id}-size`} name={`shot-${shot.id}-size`} value={shot.size} onChange={(event) => updateShot(shot.id, 'size', event.target.value)} /></label><label>机位/运镜<input id={`shot-${shot.id}-camera`} name={`shot-${shot.id}-camera`} value={shot.camera} onChange={(event) => updateShot(shot.id, 'camera', event.target.value)} /></label><label>动作/表演<input id={`shot-${shot.id}-action`} name={`shot-${shot.id}-action`} value={shot.action} onChange={(event) => updateShot(shot.id, 'action', event.target.value)} /></label><label>叙事目的<input id={`shot-${shot.id}-purpose`} name={`shot-${shot.id}-purpose`} value={shot.purpose} onChange={(event) => updateShot(shot.id, 'purpose', event.target.value)} /></label><div className="shot-row-actions"><button type="button" aria-label={`上移 ${shot.id}`} onClick={() => moveShot(shot.id, -1)} disabled={busy || index === 0}>↑</button><button type="button" aria-label={`下移 ${shot.id}`} onClick={() => moveShot(shot.id, 1)} disabled={busy || index === story.story.shots.length - 1}>↓</button><button type="button" onClick={() => duplicateShot(shot.id)} disabled={busy}>复制</button><button type="button" onClick={() => splitShot(shot.id)} disabled={busy}>拆分</button><button type="button" onClick={() => removeShot(shot.id)} disabled={busy}>删除</button></div></article>) : <div className="empty-state">暂无镜头。点击“新增镜头”即可手工建立生产链，不需要 Provider。</div>}</div>
+      <div className="shot-table">{story.story.shots.length ? story.story.shots.map((shot, index) => <article className="shot-row" data-story-shot-id={shot.id} key={shot.id}><div className="shot-id"><b>{shot.id}</b><small>{shot.scene}</small></div><label>时长<input id={`shot-${shot.id}-duration`} name={`shot-${shot.id}-duration`} type="number" min="0.1" step="0.1" value={shot.duration} onChange={(event) => updateShot(shot.id, 'duration', Number(event.target.value) || 0.1)} /></label><label>景别<input id={`shot-${shot.id}-size`} name={`shot-${shot.id}-size`} value={shot.size} onChange={(event) => updateShot(shot.id, 'size', event.target.value)} /></label><label>机位/运镜<input id={`shot-${shot.id}-camera`} name={`shot-${shot.id}-camera`} value={shot.camera} onChange={(event) => updateShot(shot.id, 'camera', event.target.value)} /></label><label>动作/表演<input id={`shot-${shot.id}-action`} name={`shot-${shot.id}-action`} value={shot.action} onChange={(event) => updateShot(shot.id, 'action', event.target.value)} /></label><label>叙事目的<input id={`shot-${shot.id}-purpose`} name={`shot-${shot.id}-purpose`} value={shot.purpose} onChange={(event) => updateShot(shot.id, 'purpose', event.target.value)} /></label><div className="shot-row-actions"><button type="button" aria-label={`上移 ${shot.id}`} onClick={() => moveShot(shot.id, -1)} disabled={busy || index === 0}>↑</button><button type="button" aria-label={`下移 ${shot.id}`} onClick={() => moveShot(shot.id, 1)} disabled={busy || index === story.story.shots.length - 1}>↓</button><button type="button" onClick={() => duplicateShot(shot.id)} disabled={busy}>复制</button><button type="button" onClick={() => splitShot(shot.id)} disabled={busy}>拆分</button><button type="button" onClick={() => removeShot(shot.id)} disabled={busy}>删除</button></div></article>) : <div className="empty-state">暂无镜头。点击“新增镜头”即可手工建立生产链，不需要 Provider。</div>}</div>
       {reviewReady && <section className="candidate-review"><div className="story-section-title"><div><span>CANDIDATE REVIEW</span><h3>候选差异审阅</h3></div><small>候选不会覆盖当前版本</small></div><details open><summary>候选剧本</summary><pre>{proposedScript || '候选未提供剧本改动'}</pre></details><div className="candidate-shots" aria-label="候选镜头"><div className="candidate-shots-heading"><div><span>SHOT OPTIONS</span><strong>候选镜头</strong></div><small>勾选后可局部接受 · 共 {proposedShots.length} 个候选</small></div><div className="candidate-shot-list">{proposedShots.map((candidate, index) => { const selected = selectedCandidateIds.includes(candidate.id); const purpose = String(candidate.purpose || candidate.action || '未命名镜头'); const action = candidate.action && String(candidate.action) !== purpose ? String(candidate.action) : ''; const metadata = [Number.isFinite(Number(candidate.duration)) ? `${candidate.duration}s` : '', candidate.size ? String(candidate.size) : '', candidate.scene ? String(candidate.scene) : ''].filter(Boolean).join(' · '); const camera = candidate.camera ? String(candidate.camera) : ''; return <label className={`candidate-shot-card${selected ? ' selected' : ''}`} key={candidate.id}><input type="checkbox" checked={selected} aria-label={`选择 ${candidate.id}`} onChange={(event) => setSelectedCandidateIds((current) => event.target.checked ? [...current, candidate.id] : current.filter((id) => id !== candidate.id))} /><span className="candidate-shot-order" aria-hidden="true">{String(index + 1).padStart(2, '0')}</span><span className="candidate-shot-copy"><span className="candidate-shot-topline"><b>{candidate.id}</b>{metadata && <small>{metadata}</small>}</span><strong>{purpose}</strong>{action && <span className="candidate-shot-action">{action}</span>}{camera && <small className="candidate-shot-camera">机位 · {camera}</small>}</span><span className="candidate-shot-state">{selected ? '已选择' : '待选择'}</span></label>; })}</div></div><div className="candidate-actions"><button onClick={() => onAccept('script_only')}>仅接受剧本</button><button onClick={() => onAccept('shots_only', selectedCandidateIds)} disabled={!selectedCandidateIds.length}>接受选中镜头</button><button onClick={() => onAccept('all')}>接受全部候选</button></div></section>}
       {storyDiff && <section className="story-diff"><div className="story-section-title"><div><span>VERSION DIFF</span><h3>最近版本差异</h3></div><small>{storyDiff.shot_diff.added.length} 新增 · {storyDiff.shot_diff.changed.length} 修改 · {storyDiff.shot_diff.removed.length} 移除</small></div><pre>{storyDiff.script_diff.filter((item) => item.type !== 'same').map((item) => `${item.type === 'add' ? '+' : '-'} ${item.text}`).join('\n') || '剧本文本无变化'}</pre></section>}
-      <div className="story-checks"><h3>自动检查</h3>{story.checks.issues.length ? story.checks.issues.slice(0, 12).map((issue, index) => <div className={`check-item ${issue.severity}`} key={`${issue.code}-${issue.shot_id || index}`}><b>{issue.severity === 'error' ? '阻塞' : '提醒'}</b><span>{issue.message}{issue.shot_id ? ` · ${issue.shot_id}` : ''}</span></div>) : <p>当前结构化故事通过基础检查。</p>}</div>
       <div className="version-history"><div className="story-section-title"><div><span>VERSION HISTORY</span><h3>版本与回退</h3></div><small>回退会创建新版本，不覆盖历史</small></div>{story.story.script_versions.filter((version) => version.status !== 'active').slice(-5).map((version) => <div className="version-row" key={String(version.id)}><span>{String(version.id)} · {String(version.source || 'unknown')}</span><button onClick={() => onRollback(String(version.id), 'script')} disabled={busy}>回退剧本</button></div>)}{story.story.storyboard_versions.filter((version) => version.status !== 'active').slice(-5).map((version) => <div className="version-row" key={String(version.id)}><span>{String(version.id)} · 分镜</span><button onClick={() => onRollback(String(version.id), 'shots')} disabled={busy}>回退分镜</button></div>)}</div>
     </section>
   );
