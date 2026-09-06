@@ -10,6 +10,11 @@ import { applyAssetBoardSelection, assetBoardSelectionKey, selectedAssetBoardCar
 import { VirtualAssetList } from './components/VirtualAssetList';
 
 type StudioMode = 'home' | 'story' | 'canvas' | 'timeline' | 'audio' | 'assets' | 'settings';
+type AssetPromptRunState = {
+  status: 'idle' | 'preparing' | 'running' | 'success' | 'error';
+  message: string;
+  startedAt: number | null;
+};
 const LazyAssetBoardFlow = lazy(() => import('./AssetBoardFlow').then(({ AssetBoardFlow }) => ({ default: AssetBoardFlow })));
 type FlowNode = Node<GraphNodeData, 'workflow'>;
 type AssetBoardCollapseTarget = { type: 'shot' | 'asset'; id: string; keepNodeId?: string; scopeKey?: string };
@@ -1810,9 +1815,10 @@ function storyIssueMissingAssets(issue: StoryCheckIssue): Array<{ shot_id: strin
     .map((item) => ({ shot_id: String(item.shot_id || '—'), asset_id: String(item.asset_id || '—') }));
 }
 
-function StoryView({ story, storyRun, storyDiff, dirty, busy, notice, onChange, onSave, onGenerate, onAccept, onRollback, onOpenAssetBoard, onGenerateAssetPrompts }: { story: StoryEnvelope | null; storyRun: StoryRun | null; storyDiff: StoryDiff | null; dirty: boolean; busy: boolean; notice: string; onChange: (story: StoryDocument) => void; onSave: () => void; onGenerate: () => void; onAccept: (scope?: 'all' | 'script_only' | 'shots_only', shotIds?: string[]) => void; onRollback: (versionId: string, scope: 'script' | 'shots') => void; onOpenAssetBoard: () => void; onGenerateAssetPrompts: () => void }) {
+function StoryView({ story, storyRun, storyDiff, dirty, busy, notice, assetPromptRun, onChange, onSave, onGenerate, onAccept, onRollback, onOpenAssetBoard, onGenerateAssetPrompts }: { story: StoryEnvelope | null; storyRun: StoryRun | null; storyDiff: StoryDiff | null; dirty: boolean; busy: boolean; notice: string; assetPromptRun: AssetPromptRunState; onChange: (story: StoryDocument) => void; onSave: () => void; onGenerate: () => void; onAccept: (scope?: 'all' | 'script_only' | 'shots_only', shotIds?: string[]) => void; onRollback: (versionId: string, scope: 'script' | 'shots') => void; onOpenAssetBoard: () => void; onGenerateAssetPrompts: () => void }) {
   const [selectedCandidateIds, setSelectedCandidateIds] = useState<string[]>([]);
   const creativeGoalRef = useRef<HTMLTextAreaElement | null>(null);
+  const [assetPromptNow, setAssetPromptNow] = useState(() => Date.now());
   const resizeCreativeGoal = () => {
     const textarea = creativeGoalRef.current;
     if (!textarea) return;
@@ -1820,6 +1826,12 @@ function StoryView({ story, storyRun, storyDiff, dirty, busy, notice, onChange, 
     textarea.style.height = `${textarea.scrollHeight}px`;
   };
   useEffect(() => { if (story) resizeCreativeGoal(); }, [story?.story.spec.creative_goal]);
+  useEffect(() => {
+    if (!['preparing', 'running'].includes(assetPromptRun.status)) return;
+    setAssetPromptNow(Date.now());
+    const timer = window.setInterval(() => setAssetPromptNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [assetPromptRun.status]);
   if (!story) return <div className="empty-state">正在读取故事与分镜…</div>;
   const proposedScript = typeof storyRun?.storyboard_output?.proposedScript === 'string' ? storyRun.storyboard_output.proposedScript : '';
   const proposedShots = Array.isArray(storyRun?.storyboard_output?.shots) ? storyRun.storyboard_output.shots.filter((item): item is StoryShot => typeof item === 'object' && item !== null && typeof (item as Record<string, unknown>).id === 'string') : [];
@@ -1892,6 +1904,17 @@ function StoryView({ story, storyRun, storyDiff, dirty, busy, notice, onChange, 
     ? (notice && notice !== 'V3 工作台已连接' ? notice : '正在处理当前操作，请稍候…')
     : notice !== 'V3 工作台已连接' ? notice : '';
   const storyActionFeedbackTone = /失败|错误|无法|未能|阻塞|请先|不存在|冲突|异常/.test(storyActionFeedback) ? ' error' : busy ? ' pending' : ' done';
+  const assetPromptRunLabel = assetPromptRun.status === 'preparing'
+    ? '准备资产 Prompt 任务'
+    : assetPromptRun.status === 'running'
+      ? '资产 Prompt 生成执行中'
+      : assetPromptRun.status === 'success'
+        ? '资产 Prompt 生成完成'
+        : assetPromptRun.status === 'error' ? '资产 Prompt 生成失败' : '';
+  const assetPromptRunElapsed = assetPromptRun.startedAt ? Math.max(0, Math.floor(((assetPromptRun.status === 'preparing' || assetPromptRun.status === 'running' ? assetPromptNow : Date.now()) - assetPromptRun.startedAt) / 1000)) : 0;
+  const assetPromptRunElapsedLabel = assetPromptRunElapsed < 60
+    ? `${Math.floor(assetPromptRunElapsed)} 秒`
+    : `${Math.floor(assetPromptRunElapsed / 60)} 分 ${Math.floor(assetPromptRunElapsed % 60)} 秒`;
   const shotById = new Map(story.story.shots.map((shot) => [shot.id, shot]));
   const warningGroups = Array.from(warningIssues.reduce((groups, issue) => {
     const current = groups.get(issue.code) || { code: issue.code, message: issue.message, count: 0 };
@@ -1913,6 +1936,7 @@ function StoryView({ story, storyRun, storyDiff, dirty, busy, notice, onChange, 
   return (
     <section className="story-view" aria-busy={busy}>
       <header className="section-heading"><div><span>STORY & SHOT DESIGN</span><h2>故事与分镜</h2></div><div className="story-heading-actions"><div className="story-heading-status" role="status" aria-live="polite" aria-label={`故事阻塞 ${blockingIssues.length} 个，提醒 ${warningIssues.length} 个${pendingAssetCount ? `，资产待登记 ${pendingAssetCount} 项` : ''}${storyRunLabel ? `，${storyRunLabel}` : ''}`}><span className={`story-status-pill${blockingIssues.length ? ' blocked' : ' clear'}`}>{blockingIssues.length ? `阻塞 ${blockingIssues.length}` : '检查通过'}</span><span className="story-status-pill muted">提醒 {warningIssues.length}</span>{pendingAssetCount > 0 && <span className="story-status-pill asset">资产待登记 {pendingAssetCount}</span>}{storyRunLabel && <span className="story-status-pill run">{storyRunLabel}</span>}</div>{storyActionFeedback && <span className={`story-action-feedback${storyActionFeedbackTone}`} role="status" aria-live="polite">{busy && <i aria-hidden="true" />}{storyActionFeedback}</span>}{storyRun && ['storyboard_review_required', 'regulator_review_required'].includes(storyRun.status) && <button type="button" onClick={() => onAccept('all')} disabled={busy}>接受下一层</button>}<button type="button" className="asset-prompt-button" onClick={() => { void onGenerateAssetPrompts(); }} disabled={promptGenerationBlocked} title={promptGenerationTitle}>资产 Prompt 生成</button><button type="button" className="asset-entry-button" onClick={onOpenAssetBoard} disabled={busy || !story.story.shots.length}>进入资产生产</button><button type="button" onClick={onSave} disabled={!dirty || busy}>保存故事剧本</button></div></header>
+      {assetPromptRun.status !== 'idle' && <section className={`asset-prompt-runtime ${assetPromptRun.status}`} role="status" aria-live="polite" aria-label={assetPromptRunLabel}><div className="asset-prompt-runtime-icon" aria-hidden="true">{assetPromptRun.status === 'success' ? '✓' : assetPromptRun.status === 'error' ? '!' : <i />}</div><div className="asset-prompt-runtime-copy"><strong>{assetPromptRunLabel}</strong><span>{assetPromptRun.message}</span></div>{['preparing', 'running'].includes(assetPromptRun.status) && <time>{assetPromptRunElapsedLabel}</time>}</section>}
       <section className={`story-check-overview ${storyCheckTone}`} aria-label="故事与分镜检查结果">
         <div className="story-check-overview-heading">
           <div><span>PRODUCTION GATE</span><h3>{storyCheckTitle}</h3><p>{storyCheckDescription}</p></div>
@@ -2240,6 +2264,7 @@ function Studio() {
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('V3 工作台已连接');
+  const [assetPromptRun, setAssetPromptRun] = useState<AssetPromptRunState>({ status: 'idle', message: '', startedAt: null });
   const [storyDirty, setStoryDirty] = useState(false);
   const [newEdgeRelation, setNewEdgeRelation] = useState<EdgeRelation>('execution');
   const [agentPlan, setAgentPlan] = useState<AgentPlan | null>(null);
@@ -3394,13 +3419,21 @@ function Studio() {
   const generateAssetPrompts = async (targetAssetId?: string) => {
     if (!projectId || !story) {
       setNotice('请先选择项目并加载故事与分镜。');
+      setAssetPromptRun({ status: 'error', message: '没有加载项目或故事与分镜，任务未启动。', startedAt: null });
       return;
     }
+    const startedAt = Date.now();
+    const preparingMessage = storyDirty ? '正在保存故事与分镜，保存完成后开始资产审计…' : '正在准备资产 Prompt 生成任务…';
+    setAssetPromptRun({ status: storyDirty ? 'preparing' : 'running', message: preparingMessage, startedAt });
     setNotice(targetAssetId ? '正在生成当前资产的 Prompt 草稿，请稍候…' : '正在执行资产总控并生成 Prompt 卡，请稍候；不要重复点击。');
     setBusy(true);
     try {
       const currentStory = storyDirty ? await saveStory(false) : story;
-      if (!currentStory) return;
+      if (!currentStory) {
+        setAssetPromptRun({ status: 'error', message: '故事与分镜保存失败，资产 Prompt 任务未启动。', startedAt });
+        return;
+      }
+      setAssetPromptRun({ status: 'running', message: '正在调用资产总控模型，执行依赖审计并生成 Prompt 卡…', startedAt });
       const result = await studioApi.generateAssetPrompts(projectId, { expected_revision: currentStory.revision, ...(targetAssetId ? { target_asset_id: targetAssetId } : {}) });
       setStory(result.story); setStoryDirty(false); setAssetLibrary(result.library); setProjects((current) => current.map((item) => item.document.id === projectId ? { ...item, revision: result.revision } : item));
       setAssetBoardEnvelope(result.asset_board);
@@ -3412,8 +3445,14 @@ function Studio() {
         setAssetPromptDraft(generated ? { assetId: targetAssetId, prompt: generated } : null);
         setAssetProductionFocus({ assetId: targetAssetId, target: 'prompt' });
       }
+      const successMessage = targetAssetId ? '当前资产 Prompt 草稿已生成，请编辑并保存后进入 Prompt QA。' : `已生成 ${result.run.promptCards.length} 张资产 Prompt 卡，等待 Prompt QA 和用户确认。`;
+      setAssetPromptRun({ status: 'success', message: successMessage, startedAt });
       setNotice(targetAssetId ? '已为当前资产生成 Prompt 草稿 · 请编辑并保存后进入 Prompt QA' : `已生成 ${result.run.promptCards.length} 张资产 Prompt 卡 · 等待 Prompt QA 和用户确认`); void refreshDashboard(false);
-    } catch (error) { setNotice((error as Error).message); } finally { setBusy(false); }
+    } catch (error) {
+      const message = (error as Error).message;
+      setAssetPromptRun({ status: 'error', message: `任务未完成：${message}`, startedAt });
+      setNotice(message);
+    } finally { setBusy(false); }
   };
   generateAssetPromptRef.current = (assetId: string) => { void generateAssetPrompts(assetId); };
 
@@ -4564,7 +4603,7 @@ function Studio() {
         </header>
         <div className="studio-content">
           {busy && <div className="progress-bar" />}
-          {mode === 'story' && <StoryView story={story} storyRun={storyRun} storyDiff={storyDiff} dirty={storyDirty} busy={busy} notice={notice} onChange={(next) => { setStory((current) => current ? { ...current, story: next } : current); setStoryDirty(true); }} onSave={saveStory} onGenerate={generateStoryCandidate} onAccept={acceptStoryLayer} onRollback={rollbackStory} onOpenAssetBoard={openAssetBoard} onGenerateAssetPrompts={generateAssetPrompts} />}
+          {mode === 'story' && <StoryView story={story} storyRun={storyRun} storyDiff={storyDiff} dirty={storyDirty} busy={busy} notice={notice} assetPromptRun={assetPromptRun} onChange={(next) => { setStory((current) => current ? { ...current, story: next } : current); setStoryDirty(true); }} onSave={saveStory} onGenerate={generateStoryCandidate} onAccept={acceptStoryLayer} onRollback={rollbackStory} onOpenAssetBoard={openAssetBoard} onGenerateAssetPrompts={generateAssetPrompts} />}
           {mode === 'home' && <HomeView dashboard={dashboard} error={dashboardError} currentProjectId={projectId} busy={busy} onSelectProject={(id) => { setProjectId(id); setMode('home'); }} onOpenTask={openDashboardTask} onOpenStage={openDashboardStage} onRefresh={() => { void refreshDashboard(); }} />}
           {mode === 'assets' && <AssetLibraryViewV3 library={assetLibrary} focusAssetId={focusAssetId} busy={busy} scope={assetLibraryScope} filter={assetLibraryFilter} search={assetLibrarySearch} sort={assetLibrarySort} audit={assetAudit} onScopeChange={setAssetLibraryScope} onFilterChange={(value) => setAssetLibraryFilter(value as AssetLibraryStatusFilter)} onSearchChange={setAssetLibrarySearch} onSortChange={setAssetLibrarySort} onRefresh={refreshAssets} onSave={saveAssetMetadata} onFusionGate={checkFusionGate} onReview={reviewAssetCandidate} onCreateAsset={openAssetCreate} onOpenImport={() => setAssetImportOpen(true)} onRefreshAudit={refreshAssetAudit} onManualProductionApproval={manualProductionApproval} onDeleteAsset={(assetId, label) => { void deleteAssetById(assetId, label); }} onStartQa={(artifactId, qaType) => startAssetQa(artifactId, qaType, true)} onSubmitQa={submitAssetQaReview} onRegisterArtifact={registerAssetCandidate} />}
           {mode === 'audio' && <AudioStudioView projectId={projectId} projectName={project?.document.name || '当前项目'} envelope={audioStudio} assetLibrary={assetLibrary} settings={settings} story={story} busy={busy} onSave={saveAudioStudio} onRefresh={refreshAudioStudio} onCreateAsset={createAudioAsset} onNotice={setNotice} onDirtyChange={setAudioDirty} onOpenStory={() => setMode('story')} />}
