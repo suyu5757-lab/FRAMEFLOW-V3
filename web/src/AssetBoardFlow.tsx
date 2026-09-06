@@ -135,6 +135,7 @@ function AssetBoardCard({ data, selected }: NodeProps<AssetFlowNode>) {
   const promptCard = data.node_type === 'handoff' && Boolean(data.config.prompt_card);
   if (promptCard) {
     const isFusionPrompt = assetClass === 'fusion';
+    const isCharacterPrompt = assetClass === 'character';
     const fusionPromptSource = String(data.config.fusion_prompt_source || '');
     const fusionPromptState = String(data.config.fusion_prompt_state || 'awaiting_connection');
     const fusionPromptReady = !isFusionPrompt || fusionPromptSource === 'fusion-connection-agent';
@@ -168,7 +169,7 @@ function AssetBoardCard({ data, selected }: NodeProps<AssetFlowNode>) {
           {fusionPromptReady && artifactId && !artifactApproved && <button onClick={(event) => { event.stopPropagation(); data.onRejectAsset?.(String(data.asset_id), artifactId); }}>审核不通过并重写提示词</button>}
           {fusionPromptReady && artifactId && artifactStatus === 'approved_pending_registration' && <button className="asset-board-prompt-primary" onClick={(event) => { event.stopPropagation(); data.onRegisterAsset?.(String(data.asset_id), artifactId); }}>登记为资产</button>}
           {fusionPromptReady && !artifactId && String(data.config.prompt || '').trim() && promptQa !== 'Approved' && <button className="asset-board-prompt-primary" onClick={(event) => { event.stopPropagation(); data.onApprovePrompt?.(String(data.asset_id)); }}>通过 Prompt QA</button>}
-          {fusionPromptReady && !artifactId && promptQa === 'Approved' && eligible && generationStatus !== 'generated-pending-qa' && <button className="asset-board-prompt-primary" onClick={(event) => { event.stopPropagation(); data.onGenerateImage?.(String(data.asset_id)); }}>确认并生成</button>}
+          {fusionPromptReady && !artifactId && promptQa === 'Approved' && eligible && generationStatus !== 'generated-pending-qa' && <button className="asset-board-prompt-primary" onClick={(event) => { event.stopPropagation(); data.onGenerateImage?.(String(data.asset_id)); }}>{isCharacterPrompt ? '确认生成角色结构参考图' : '确认并生成'}</button>}
         </div>
       </div>
       <Handle type="source" position={Position.Right} />
