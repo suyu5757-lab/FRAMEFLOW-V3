@@ -159,7 +159,11 @@ def story_checks(document: dict[str, Any]) -> dict[str, Any]:
             issue("generator_capability_mismatch", "warning", "镜头要求的生成器与项目当前生成器不一致。", shot_id, {"required": shot.get("requiredGenerator"), "actual": generator})
         previous_shot = shot
     if missing_assets:
-        issue("asset_gap", "error", "镜头引用了尚未登记的资产。", details={"missing_assets": missing_assets})
+        # Storyboard completion intentionally precedes asset registration. Keep
+        # these references visible so the asset workflow can extract and
+        # register them, but do not block the transition from story/shot work
+        # into asset production.
+        issue("asset_gap", "warning", "镜头引用了待资产生产登记的资产。", details={"missing_assets": missing_assets})
 
     target_duration = float(payload["spec"].get("duration") or document.get("duration") or 0)
     if shots and target_duration > 0 and abs(total_duration - target_duration) > max(1.0, target_duration * 0.1):

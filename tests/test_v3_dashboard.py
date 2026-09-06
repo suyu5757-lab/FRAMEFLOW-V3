@@ -66,6 +66,23 @@ class DashboardApiTests(unittest.TestCase):
         self.assertLessEqual(len(selected["task_queue"]), 6)
         self.assertEqual(selected["project"]["ratio"], "16:9")
 
+    def test_missing_story_asset_reference_points_to_asset_work_not_story_blocker(self) -> None:
+        changed = document("DASH_1")
+        changed.update({
+            "script": "完成故事后准备资产。",
+            "shots": [{
+                "id": "SH01", "scene": "SC01", "duration": 4, "purpose": "建立空间",
+                "size": "中景", "camera": "固定", "action": "人物入画",
+                "assetRequirements": [{"assetId": "CHAR_MISSING", "assetClass": "character"}],
+            }],
+        })
+        saved = self.client.put("/api/v2/projects/DASH_1", json={"document": changed, "expected_revision": 1})
+        self.assertEqual(saved.status_code, 200, saved.text)
+        selected = self.client.get("/api/v2/dashboard?project_id=DASH_1").json()["selected_project"]
+        self.assertNotEqual(selected["project"]["status"], "blocked")
+        self.assertEqual(selected["stages"][0]["status"], "completed")
+        self.assertEqual(selected["primary_next_task"]["action"], "run_regulator")
+
     def test_required_a_asset_is_a_blocker_and_is_targeted(self) -> None:
         changed = document("DASH_1")
         changed["assets"] = [{"id": "CHAR_A", "type": "角色", "grade": "A", "name": "主角"}]

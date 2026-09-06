@@ -293,6 +293,29 @@ class FrameflowV3Tests(unittest.TestCase):
         })
         self.assertEqual(conflict.status_code, 409)
 
+    def test_story_asset_gap_is_pending_asset_work_not_a_story_blocker(self) -> None:
+        response = self.client.put("/api/v2/projects/PRJ_V3/story", json={
+            "expected_revision": 1,
+            "spec": {"creative_goal": "资产准备阶段", "duration": 6, "ratio": "16:9"},
+            "script": "镜头完成后进入资产生产。",
+            "scenes": [{"id": "SC01", "name": "夜景平台"}],
+            "shots": [{
+                "id": "SH01", "scene": "SC01", "duration": 6, "purpose": "建立空间",
+                "size": "中景", "camera": "固定", "action": "人物站在平台边缘",
+                "composition": "中心构图", "performance": "观察", "dialogue": "",
+                "narration": "", "lighting": "冷光", "color": "蓝紫", "style": "电影感",
+                "firstFrame": "人物入画", "lastFrame": "人物抬头", "sound": "风声",
+                "continuity": "保持站位", "assetRequirements": [{"assetId": "CHAR_MISSING", "assetClass": "character"}],
+            }],
+        })
+        self.assertEqual(response.status_code, 200, response.text)
+        checks = response.json()["checks"]
+        self.assertTrue(checks["ok"])
+        self.assertEqual(checks["errors"], 0)
+        gap = next(issue for issue in checks["issues"] if issue["code"] == "asset_gap")
+        self.assertEqual(gap["severity"], "warning")
+        self.assertEqual(gap["details"]["missing_assets"][0]["asset_id"], "CHAR_MISSING")
+
     def test_story_diff_and_rollback_create_new_versions_without_overwriting_history(self) -> None:
         shot = {"id": "SH01", "scene": "SC01", "duration": 4, "purpose": "建立", "size": "近景", "camera": "固定", "action": "按键"}
         base = {"expected_revision": 1, "spec": {"creative_goal": "测试", "duration": 4, "ratio": "16:9"}, "script": "第一版", "scenes": [{"id": "SC01", "name": "室内"}], "shots": [shot]}

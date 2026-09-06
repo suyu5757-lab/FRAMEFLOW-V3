@@ -1769,7 +1769,7 @@ const storyCheckFieldLabels: Record<string, string> = {
 function storyIssueTitle(issue: StoryCheckIssue): string {
   const titles: Record<string, string> = {
     dialogue_overrun: '对白 / 旁白超出镜头时长',
-    asset_gap: '镜头引用了尚未登记的资产',
+    asset_gap: '资产引用待登记（下一步）',
     shot_field_missing: '镜头缺少必填字段',
     shot_duration_invalid: '镜头时长无效',
     generator_duration_limit: '镜头超过当前生成器的时长限制',
@@ -1787,7 +1787,7 @@ function storyIssueGuidance(issue: StoryCheckIssue, shot?: StoryShot): string {
     return `${shot?.id || '该镜头'} 当前约 ${duration || '—'} 秒，对白 / 旁白估算约 ${estimated || '—'} 秒。请缩短对白，或把镜头时长调整到不小于约 ${estimated || '—'} 秒；也可以用“拆分”把对白和动作拆成两个镜头，修改后点击“保存镜头表”。`;
   }
   if (issue.code === 'asset_gap') {
-    return '这些 ID 已被镜头引用，但统一资产库中没有对应登记。进入“资产生产”，登记或关联角色、场景、道具和声音资产，完成后回到此页刷新检查。';
+    return '这是故事与分镜完成后进入资产生产前的正常待处理项。这些 ID 已被镜头引用，但统一资产库中还没有对应登记；进入“资产生产”后登记或关联角色、场景、道具和声音资产即可。';
   }
   if (issue.code === 'shot_field_missing') {
     const field = String(details.field || '必填字段');
@@ -1825,7 +1825,8 @@ function StoryView({ story, storyRun, storyDiff, dirty, busy, notice, onChange, 
   // asset_gap is therefore expected at this point and must not disable this
   // action. Other story structure errors still block Prompt generation.
   const promptGenerationBlockingIssues = story.checks.issues.filter((issue) => issue.severity === 'error' && issue.code !== 'asset_gap');
-  const assetGapIssueCount = story.checks.issues.filter((issue) => issue.code === 'asset_gap').length;
+  const assetGapIssues = story.checks.issues.filter((issue) => issue.code === 'asset_gap');
+  const assetGapIssueCount = assetGapIssues.length;
   const promptGenerationBlocked = busy || !story.story.shots.length || promptGenerationBlockingIssues.length > 0;
   const promptGenerationTitle = !story.story.shots.length
     ? '请先完成至少一个镜头'
@@ -1868,8 +1869,21 @@ function StoryView({ story, storyRun, storyDiff, dirty, busy, notice, onChange, 
   };
   const linesToItems = (value: string, prefix: string) => value.split('\n').map((line) => line.trim()).filter(Boolean).map((label, index) => ({ id: `${prefix}${String(index + 1).padStart(2, '0')}`, label }));
   const allCheckIssues = story.checks.issues;
-  const blockingIssues = allCheckIssues.filter((issue) => issue.severity === 'error');
-  const warningIssues = allCheckIssues.filter((issue) => issue.severity !== 'error');
+  const blockingIssues = allCheckIssues.filter((issue) => issue.severity === 'error' && issue.code !== 'asset_gap');
+  const warningIssues = allCheckIssues.filter((issue) => issue.severity !== 'error' && issue.code !== 'asset_gap');
+  const pendingAssetRefs = assetGapIssues.flatMap(storyIssueMissingAssets);
+  const pendingAssetCount = pendingAssetRefs.length || assetGapIssueCount;
+  const storyCheckTone = blockingIssues.length ? 'has-blockers' : assetGapIssues.length ? 'has-assets' : 'is-clear';
+  const storyCheckTitle = blockingIssues.length
+    ? `先处理 ${blockingIssues.length} 个阻塞问题`
+    : assetGapIssues.length
+      ? '故事与分镜已通过，下一步准备资产'
+      : '故事与分镜检查通过';
+  const storyCheckDescription = blockingIssues.length
+    ? '下面列出会阻止后续资产 Prompt 或生产步骤的问题，并提供直接修改入口。'
+    : assetGapIssues.length
+      ? '当前没有会阻止后续制作的故事结构错误；资产引用会在下一步资产生产中登记或自动提取。'
+      : '当前没有会阻止后续制作的故事结构错误。';
   const shotById = new Map(story.story.shots.map((shot) => [shot.id, shot]));
   const warningGroups = Array.from(warningIssues.reduce((groups, issue) => {
     const current = groups.get(issue.code) || { code: issue.code, message: issue.message, count: 0 };
@@ -1890,11 +1904,11 @@ function StoryView({ story, storyRun, storyDiff, dirty, busy, notice, onChange, 
   };
   return (
     <section className="story-view">
-      <header className="section-heading"><div><span>STORY & SHOT DESIGN</span><h2>故事与分镜</h2></div><div className="story-heading-actions"><div className="story-heading-status" role="status" aria-live="polite" aria-label={`故事阻塞 ${blockingIssues.length} 个，提醒 ${warningIssues.length} 个${assetGapIssueCount ? `，资产待提取 ${assetGapIssueCount} 个` : ''}${storyRunLabel ? `，${storyRunLabel}` : ''}`}><span className={`story-status-pill${blockingIssues.length ? ' blocked' : ' clear'}`}>{blockingIssues.length ? `阻塞 ${blockingIssues.length}` : '检查通过'}</span><span className="story-status-pill muted">提醒 {warningIssues.length}</span>{assetGapIssueCount > 0 && <span className="story-status-pill asset">资产待提取 {assetGapIssueCount}</span>}{storyRunLabel && <span className="story-status-pill run">{storyRunLabel}</span>}</div>{storyRun && ['storyboard_review_required', 'regulator_review_required'].includes(storyRun.status) && <button onClick={() => onAccept('all')} disabled={busy}>接受下一层</button>}<button className="asset-prompt-button" onClick={onGenerateAssetPrompts} disabled={promptGenerationBlocked} title={promptGenerationTitle}>资产 Prompt 生成</button><button className="asset-entry-button" onClick={onOpenAssetBoard} disabled={busy || !story.story.shots.length}>进入资产生产</button><button onClick={onSave} disabled={!dirty || busy}>保存故事剧本</button></div></header>
-      <section className={`story-check-overview${blockingIssues.length ? ' has-blockers' : ' is-clear'}`} aria-label="故事与分镜检查结果">
+      <header className="section-heading"><div><span>STORY & SHOT DESIGN</span><h2>故事与分镜</h2></div><div className="story-heading-actions"><div className="story-heading-status" role="status" aria-live="polite" aria-label={`故事阻塞 ${blockingIssues.length} 个，提醒 ${warningIssues.length} 个${pendingAssetCount ? `，资产待登记 ${pendingAssetCount} 项` : ''}${storyRunLabel ? `，${storyRunLabel}` : ''}`}><span className={`story-status-pill${blockingIssues.length ? ' blocked' : ' clear'}`}>{blockingIssues.length ? `阻塞 ${blockingIssues.length}` : '检查通过'}</span><span className="story-status-pill muted">提醒 {warningIssues.length}</span>{pendingAssetCount > 0 && <span className="story-status-pill asset">资产待登记 {pendingAssetCount}</span>}{storyRunLabel && <span className="story-status-pill run">{storyRunLabel}</span>}</div>{storyRun && ['storyboard_review_required', 'regulator_review_required'].includes(storyRun.status) && <button onClick={() => onAccept('all')} disabled={busy}>接受下一层</button>}<button className="asset-prompt-button" onClick={onGenerateAssetPrompts} disabled={promptGenerationBlocked} title={promptGenerationTitle}>资产 Prompt 生成</button><button className="asset-entry-button" onClick={onOpenAssetBoard} disabled={busy || !story.story.shots.length}>进入资产生产</button><button onClick={onSave} disabled={!dirty || busy}>保存故事剧本</button></div></header>
+      <section className={`story-check-overview ${storyCheckTone}`} aria-label="故事与分镜检查结果">
         <div className="story-check-overview-heading">
-          <div><span>PRODUCTION GATE</span><h3>{blockingIssues.length ? `先处理 ${blockingIssues.length} 个阻塞问题` : '故事与分镜检查通过'}</h3><p>{blockingIssues.length ? '下面列出会阻止后续资产 Prompt 或生产步骤的问题，并提供直接修改入口。' : '当前没有会阻止后续制作的故事结构错误。'}</p></div>
-          <div className="story-check-overview-counters"><strong>{blockingIssues.length}<small>阻塞</small></strong><strong>{warningIssues.length}<small>提醒</small></strong><strong>{story.story.shots.length}<small>镜头</small></strong></div>
+          <div><span>PRODUCTION GATE</span><h3>{storyCheckTitle}</h3><p>{storyCheckDescription}</p></div>
+          <div className="story-check-overview-counters"><strong>{blockingIssues.length}<small>阻塞</small></strong><strong>{warningIssues.length}<small>提醒</small></strong><strong>{assetGapIssues.length ? pendingAssetCount : story.story.shots.length}<small>{assetGapIssues.length ? '待资产' : '镜头'}</small></strong></div>
         </div>
         {blockingIssues.length ? <div className="story-blocker-list">{blockingIssues.map((issue, index) => {
           const shot = issue.shot_id ? shotById.get(issue.shot_id) : undefined;
@@ -1907,7 +1921,8 @@ function StoryView({ story, storyRun, storyDiff, dirty, busy, notice, onChange, 
             {missingAssets.length > 0 && <div className="story-missing-assets"><small>未登记引用 · {missingAssets.length} 项</small><div>{missingAssets.map((item, missingIndex) => <span key={`${item.shot_id}-${item.asset_id}-${missingIndex}`}>{item.shot_id} → {item.asset_id}</span>)}</div></div>}
             <div className="story-blocker-actions">{issue.shot_id && <button type="button" onClick={() => focusShot(issue.shot_id as string)}>定位到 {issue.shot_id}</button>}{issue.code === 'asset_gap' && <button type="button" className="story-blocker-primary" onClick={onOpenAssetBoard} disabled={busy}>进入资产生产登记资产</button>}</div>
           </article>;
-        })}</div> : <div className="story-check-clear">可以继续进行资产 Prompt 生成和资产生产。</div>}
+        })}</div> : <div className={`story-check-clear${assetGapIssues.length ? ' has-assets' : ''}`}>{assetGapIssues.length ? '故事与分镜已通过。可以继续进行资产 Prompt 生成和资产生产；下面列出待登记引用。' : '可以继续进行资产 Prompt 生成和资产生产。'}</div>}
+        {assetGapIssues.length > 0 && <article className="story-asset-pending-card"><div className="story-asset-pending-heading"><div><span>ASSET PREPARATION · NEXT STEP</span><strong>{pendingAssetCount} 项资产引用待登记</strong></div><b>正常下一步</b></div><p>剧本与分镜完成后，镜头会先保留所需的角色、场景、道具和声音引用；进入资产生产后再登记、提取并完成资产审阅，不会阻止当前阶段继续。</p><div className="story-missing-assets"><small>镜头引用 · {pendingAssetRefs.length || pendingAssetCount} 项</small><div>{pendingAssetRefs.map((item, index) => <span key={`${item.shot_id}-${item.asset_id}-${index}`}>{item.shot_id} → {item.asset_id}</span>)}</div></div><div className="story-blocker-actions story-asset-pending-actions"><button type="button" className="story-blocker-primary" onClick={onOpenAssetBoard} disabled={busy}>进入资产生产登记资产</button></div></article>}
         {warningIssues.length > 0 && <details className="story-warning-drawer"><summary><span>提醒明细</span><small>{warningIssues.length} 条提醒 · {warningGroups.map((group) => `${group.message} ×${group.count}`).join(' · ')}</small></summary><div className="story-warning-list">{warningIssues.map((issue, index) => <div className="story-warning-item" key={`${issue.code}-${issue.shot_id || 'project'}-${index}`}><b>提醒</b><span>{issue.message}{issue.shot_id ? ` · ${issue.shot_id}` : ''}</span>{issue.shot_id && <button type="button" onClick={() => focusShot(issue.shot_id as string)}>定位</button>}</div>)}</div></details>}
       </section>
       <div className="story-spec-grid">
