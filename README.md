@@ -16,7 +16,7 @@ React/Vite Studio  →  FastAPI application  →  FrameFlow domain modules
 - `tests/`：Python 单元/集成测试；`web/src` 和 `web/tests` 包含前端与浏览器测试。
 - `.github/workflows/ci.yml`：Windows CI，执行后端、前端、类型、构建和浏览器验收门禁。
 
-运行时数据库、生成媒体、上传文件、日志、备份和 CLI 登录态只保存在本机 `data/`、`generated/` 或 `backups/` 中，这些目录不会提交到 Git。
+运行时数据库、生成媒体、上传文件、日志、备份和 CLI 登录态只保存在本机资源目录中，这些目录不会提交到 Git。默认资源目录是项目根目录；可以通过 `FRAMEFLOW_RESOURCE_DIR` 将它们统一放到工作台之外的独立磁盘目录。
 
 ## 技术栈
 
@@ -48,6 +48,7 @@ Pop-Location
 复制 `.env.example` 为本地 `.env`，或在启动前设置环境变量。`.env` 永远不要提交。
 
 - `FRAMEFLOW_BIND_HOST`：绑定地址，默认只允许 `127.0.0.1`、`localhost` 或 `::1`。
+- `FRAMEFLOW_RESOURCE_DIR`：可选的本地制作资源根目录。配置后，`data/`、`generated/`、项目上传素材、生成媒体、代理文件、交付文件和安全备份都会位于该目录下；工作台代码和 `web/dist` 仍位于项目目录。
 - `FRAMEFLOW_DB_PATH`：可选的 SQLite 路径；默认使用运行时数据目录。
 - `JIMENG_CLI_HOME`、`JIMENG_CLI_PATH`：即梦 CLI 的本地登录目录和可执行文件配置。
 - `FRAMEFLOW_FFMPEG_PATH`、`FRAMEFLOW_FFPROBE_PATH`：可选的 FFmpeg/FFprobe 完整路径；未设置时从系统 PATH 查找。
@@ -55,6 +56,29 @@ Pop-Location
 - `OPENCODE_SERVER_PASSWORD`：OpenCode Server 的可选 Basic Auth 密码。
 
 应用不会把凭据写入项目 JSON、运行快照、前端存储或日志。不要把真实密钥写进源代码、测试夹具或文档。
+
+macOS 示例：
+
+```env
+FRAMEFLOW_RESOURCE_DIR="/Users/yusu/Desktop/framflow v3 resource"
+```
+
+配置后，资源目录结构大致为：
+
+```text
+/Users/yusu/Desktop/framflow v3 resource/
+├── data/
+│   ├── frameflow.db
+│   ├── projects/
+│   ├── exports/
+│   ├── safety-backups/
+│   └── dreamina-home/
+└── generated/
+    └── audio/
+        └── references/
+```
+
+代码目录仍然保留在当前项目目录，前端构建目录也仍然是 `web/dist/`。
 
 ## 启动
 

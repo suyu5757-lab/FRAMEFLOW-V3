@@ -10,6 +10,7 @@ from urllib.parse import unquote
 from zipfile import ZipFile
 
 import uvicorn
+from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
@@ -41,8 +42,17 @@ from frameflow.workflows import WORKFLOWS, evaluate_project_gates, workflow_mani
 from frameflow.story import story_checks, story_document
 from frameflow.upload_storage import UploadTooLarge, cleanup_file, cleanup_staged_upload, finalize_staged_upload, stage_upload
 
-ROOT=Path(__file__).resolve().parent; DATA_DIR=ROOT/"data"; DEFAULT_DATA_DIR=DATA_DIR; GENERATED_DIR=ROOT/"generated"; STUDIO_DIST=ROOT/"web"/"dist"; GENERATED_AUDIO_DIR=GENERATED_DIR/"audio"; REFERENCE_AUDIO_DIR=GENERATED_AUDIO_DIR/"references"
-DB_PATH=Path(os.environ.get("FRAMEFLOW_DB_PATH", DATA_DIR/"frameflow.db")); os.environ.setdefault("JIMENG_CLI_HOME", str(DATA_DIR/"dreamina-home")); MAX_UPLOAD=1024**3; MAX_AUDIO_UPLOAD=25*1024**2
+ROOT=Path(__file__).resolve().parent
+if __name__ == "__main__":
+    load_dotenv(ROOT / ".env", override=False)
+configured_resource_dir=os.environ.get("FRAMEFLOW_RESOURCE_DIR", "").strip()
+RESOURCE_DIR=Path(configured_resource_dir or ROOT).expanduser().resolve()
+DATA_DIR=RESOURCE_DIR/"data"; DEFAULT_DATA_DIR=DATA_DIR; GENERATED_DIR=RESOURCE_DIR/"generated"; STUDIO_DIST=ROOT/"web"/"dist"; GENERATED_AUDIO_DIR=GENERATED_DIR/"audio"; REFERENCE_AUDIO_DIR=GENERATED_AUDIO_DIR/"references"
+configured_db_path=os.environ.get("FRAMEFLOW_DB_PATH", "").strip()
+DB_PATH=Path(configured_db_path or (DATA_DIR/"frameflow.db")).expanduser().resolve()
+if not os.environ.get("JIMENG_CLI_HOME", "").strip():
+    os.environ["JIMENG_CLI_HOME"]=str(DATA_DIR/"dreamina-home")
+MAX_UPLOAD=1024**3; MAX_AUDIO_UPLOAD=25*1024**2
 DEFAULT_BIND_HOST="127.0.0.1"; DEFAULT_BIND_PORT=8787; LOOPBACK_BIND_HOSTS={"127.0.0.1","localhost","::1"}
 STATIC_FILES={"/":"web/dist/index.html","/index.html":"web/dist/index.html"}
 ALLOWED_TTS_MODELS={"gpt-4o-mini-tts","gpt-4o-mini-tts-2025-12-15"}; ALLOWED_TTS_VOICES={"alloy","ash","ballad","coral","echo","fable","onyx","nova","sage","shimmer","verse","marin","cedar"}
@@ -478,7 +488,7 @@ async def doctor(request:Request):
     try:import keyring; keyring_ok=not keyring.get_keyring().__class__.__module__.startswith("keyring.backends.fail")
     except Exception:keyring_ok=False
     frontend_ok = (STUDIO_DIST / "index.html").exists()
-    return {"ok":bool(find_binary("ffmpeg") and find_binary("ffprobe") and frontend_ok),"ffmpeg":find_binary("ffmpeg"),"ffprobe":find_binary("ffprobe"),"frontend_dist":str(STUDIO_DIST),"frontend_ready":frontend_ok,"database":str(db(request).path),"keyring_available":keyring_ok,"disk_free_bytes":shutil.disk_usage(ROOT).free}
+    return {"ok":bool(find_binary("ffmpeg") and find_binary("ffprobe") and frontend_ok),"ffmpeg":find_binary("ffmpeg"),"ffprobe":find_binary("ffprobe"),"frontend_dist":str(STUDIO_DIST),"frontend_ready":frontend_ok,"resource_dir":str(RESOURCE_DIR),"data_dir":str(DATA_DIR),"generated_dir":str(GENERATED_DIR),"database":str(db(request).path),"keyring_available":keyring_ok,"disk_free_bytes":shutil.disk_usage(RESOURCE_DIR if RESOURCE_DIR.exists() else ROOT).free}
 
 
 @app.get("/api/v2/system/data-audit")

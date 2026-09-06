@@ -390,7 +390,7 @@ test.describe('FrameFlow V3 workbench', () => {
     await shotRows.first().getByRole('button', { name: '拆分' }).click();
     await expect(shotRows).toHaveCount(4);
     await page.getByRole('button', { name: '保存镜头表' }).click();
-    await expect(page.locator('.save-state')).toContainText('故事与分镜已保存');
+    await expect(page.locator('.story-section-status')).toContainText('故事与分镜已保存');
     const story = await (await page.request.get(`/api/v2/projects/${projectId}/story`)).json() as { story: { scenes: Array<Record<string, unknown>>; shots: Array<{ id: string }> } };
     expect(story.story.scenes.some((scene) => scene.name === '人工场景 A')).toBeTruthy();
     expect(story.story.shots.map((shot) => shot.id)).toContain(initialIds[2]);
