@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import time
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -107,6 +109,22 @@ def split_model_ref(model_ref: str) -> tuple[str, str]:
     return provider_id, model_id
 
 
+def _opencode_directory(profile: dict[str, Any]) -> str:
+    """Return a directory OpenCode can use as a project context.
+
+    OpenCode 1.18 resolves providers relative to the session's directory. A
+    session created at ``/`` can list connected providers but cannot resolve
+    them when a model is selected through the HTTP API. Prefer an explicit
+    profile/env override, then fall back to the FrameFlow checkout itself.
+    """
+    configured = str(
+        profile.get("model_config", {}).get("directory")
+        or os.environ.get("FRAMEFLOW_OPENCODE_DIRECTORY", "")
+    ).strip()
+    directory = Path(configured).expanduser() if configured else Path(__file__).resolve().parents[1]
+    return str(directory.resolve())
+
+
 def _structured_result(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ProviderError("OpenCode 返回了无效的消息对象。", "validation", 502)
@@ -140,24 +158,36 @@ async def opencode_structured(
     input_text: str, schema: dict[str, Any], title: str = "FRAMEFLOW"
 ) -> dict[str, Any]:
     provider_id, model_id = split_model_ref(model_ref)
-    session = await opencode_request_json(profile, "POST", "/session", password, json={"title": title})
+    directory = _opencode_directory(profile)
+    thinking_strength = str(profile.get("model_config", {}).get("thinking_strength") or "auto").lower()
+    session_model: dict[str, str] = {"id": model_id, "providerID": provider_id}
+    if thinking_strength in {"low", "medium", "high", "max"}:
+        # OpenCode resolves the model/variant in the session context. Passing
+        # it only on the message request makes 1.18.x look for a model under
+        # the wrong project context and return ProviderModelNotFoundError.
+        session_model["variant"] = thinking_strength
+    session = await opencode_request_json(
+        profile,
+        "POST",
+        "/session",
+        password,
+        params={"directory": directory},
+        json={"title": title, "agent": str(profile.get("model_config", {}).get("agent") or "build"), "model": session_model},
+    )
     if not isinstance(session, dict) or not session.get("id"):
         raise ProviderError("OpenCode 未能创建会话。", "validation", 502)
     body = {
-        "model": {"providerID": provider_id, "modelID": model_id},
-        "agent": str(profile.get("model_config", {}).get("agent") or "build"),
         "system": instructions,
         "parts": [{"type": "text", "text": input_text}],
         "format": {"type": "json_schema", "schema": schema, "retryCount": 2},
     }
-    thinking_strength = str(profile.get("model_config", {}).get("thinking_strength") or "auto").lower()
-    if thinking_strength in {"low", "medium", "high", "max"}:
-        # OpenCode exposes model-specific reasoning presets through `variant`.
-        # `auto` intentionally omits the field so the selected model keeps its
-        # own default behavior.
-        body["variant"] = thinking_strength
     payload = await opencode_request_json(
-        profile, "POST", f"/session/{session['id']}/message", password, json=body
+        profile,
+        "POST",
+        f"/session/{session['id']}/message",
+        password,
+        params={"directory": directory},
+        json=body,
     )
     result = _structured_result(payload)
     result["response_id"] = (payload.get("info") or {}).get("id") if isinstance(payload, dict) else None

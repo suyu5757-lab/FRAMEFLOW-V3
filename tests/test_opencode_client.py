@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from frameflow.opencode_client import normalize_opencode_providers, opencode_structured, probe_opencode, split_model_ref
@@ -41,17 +42,23 @@ class OpenCodeClientTests(unittest.IsolatedAsyncioTestCase):
     async def test_structured_prompt_passes_provider_and_model_separately(self) -> None:
         calls = []
         self.profile["model_config"]["thinking_strength"] = "max"
+        self.profile["model_config"]["directory"] = "/tmp/frameflow-opencode-test"
         async def fake_request(profile, method, path, password="", **kwargs):
-            calls.append((method, path, kwargs.get("json")))
+            calls.append((method, path, kwargs.get("json"), kwargs.get("params")))
             if path == "/session":
                 return {"id": "SES_TEST"}
             return {"info": {"id": "MSG_TEST", "structured_output": {"reply": "ok"}}, "parts": []}
         with mock.patch("frameflow.opencode_client.opencode_request_json", new=fake_request):
             result = await opencode_structured(self.profile, "", "openrouter/anthropic/claude-3.7", "system", "prompt", {"type": "object"})
-        body = calls[1][2]
-        self.assertEqual(body["model"], {"providerID": "openrouter", "modelID": "anthropic/claude-3.7"})
-        self.assertEqual(body["agent"], "build")
-        self.assertEqual(body["variant"], "max")
+        session_body = calls[0][2]
+        message_body = calls[1][2]
+        self.assertEqual(session_body["model"], {"id": "anthropic/claude-3.7", "providerID": "openrouter", "variant": "max"})
+        self.assertEqual(session_body["agent"], "build")
+        self.assertNotIn("model", message_body)
+        self.assertNotIn("agent", message_body)
+        expected_directory = str(Path("/tmp/frameflow-opencode-test").resolve())
+        self.assertEqual(calls[0][3], {"directory": expected_directory})
+        self.assertEqual(calls[1][3], {"directory": expected_directory})
         self.assertEqual(result["opencode_session_id"], "SES_TEST")
 
     def test_structured_result_accepts_server_field_name(self) -> None:
