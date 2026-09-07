@@ -7,6 +7,8 @@ from typing import Any, AsyncIterator
 
 import httpx
 
+from .prompt_design import prompt_contract_instructions
+
 
 class ProviderError(RuntimeError):
     def __init__(self, message: str, kind: str = "retryable", status_code: int = 502) -> None:
@@ -151,6 +153,7 @@ async def openai_assistant(profile: dict[str, Any], api_key: str, model: str, me
         "你是 FRAMEFLOW 视频工作台内的创作助手。只输出对项目的结构化建议，不执行付费媒体调用，"
         "不批准媒体 QA，不更改稳定 ID。所有新增或修改内容必须放入 patch，用户确认后才会应用。"
         "Prompt QA 不代表执行授权。回答使用中文。"
+        + prompt_contract_instructions()
     )
     if skill:
         instructions += f" 当前工作流：{skill['skill_id']} v{skill['skill_version']}；审批策略：{skill['approval_policy']}。"
@@ -227,6 +230,16 @@ STORYBOARD_OUTPUT_SCHEMA = {
                     "size": {"type": "string"},
                     "camera": {"type": "string"},
                     "action": {"type": "string"},
+                    "visibleEvent": {"type": "string"},
+                    "eventConsequence": {"type": "string"},
+                    "spatialGeography": {"type": ["string", "object"], "additionalProperties": True},
+                    "materialEvidence": {"type": ["string", "object"], "additionalProperties": True},
+                    "lightingCausality": {"type": ["string", "object"], "additionalProperties": True},
+                    "cameraExecution": {"type": "object", "additionalProperties": True},
+                    "atmosphereBehavior": {"type": ["string", "object"], "additionalProperties": True},
+                    "continuity": {"type": ["string", "array"], "items": {"type": "string"}},
+                    "referenceRoles": {"type": "array", "items": {"type": "object", "additionalProperties": True}},
+                    "visualStyle": {"type": "object", "additionalProperties": True},
                     "dialogue": {"type": "string"},
                     "environment": {"type": "string"},
                     "sound": {"type": "string"},
@@ -287,6 +300,52 @@ REGULATOR_OUTPUT_SCHEMA = {
     "additionalProperties": True,
 }
 
+PROMPT_PACK_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "schemaVersion": {"type": "string"},
+        "workflow": {"type": "string"},
+        "assetType": {"type": "string"},
+        "promptIntent": {"type": "string"},
+        "referenceRoles": {"type": "array", "items": {"type": "object", "additionalProperties": True}},
+        "identityAnchor": {"type": "string"},
+        "identityLock": {"type": "string"},
+        "visibleEvent": {"type": "string"},
+        "eventConsequence": {"type": "string"},
+        "spatialGeography": {"type": ["string", "object"], "additionalProperties": True},
+        "materialEvidence": {"type": ["string", "object"], "additionalProperties": True},
+        "lightingCausality": {"type": ["string", "object"], "additionalProperties": True},
+        "cameraExecution": {"type": "object", "additionalProperties": True},
+        "atmosphereBehavior": {"type": ["string", "object"], "additionalProperties": True},
+        "characterDetails": {"type": "object", "additionalProperties": True},
+        "sceneDetails": {"type": "object", "additionalProperties": True},
+        "propDetails": {"type": "object", "additionalProperties": True},
+        "itemDetails": {"type": "object", "additionalProperties": True},
+        "fusionDetails": {"type": "object", "additionalProperties": True},
+        "shotPlan": {"type": "array", "items": {"type": "object", "additionalProperties": True}},
+        "visualStyle": {"type": "object", "additionalProperties": True},
+        "referenceStrategy": {"type": "object", "additionalProperties": True},
+        "detailAnchorRegistry": {"type": "object", "additionalProperties": True},
+        "continuityChecklist": {"type": "array", "items": {"type": "string"}},
+        "mustPreserve": {"type": "array", "items": {"type": "string"}},
+        "mustAvoid": {"type": "array", "items": {"type": "string"}},
+        "generationNotes": {"type": "string"},
+        "suggestedSize": {"type": "string"},
+        "negativePrompt": {"type": "array", "items": {"type": "string"}},
+        # Keep the schema forwards-compatible with domain-specific fields;
+        # the named fields above are the stable contract that the UI audits.
+    },
+    "required": [
+        "schemaVersion", "workflow", "assetType", "promptIntent", "referenceRoles", "identityAnchor", "identityLock", "visibleEvent",
+        "spatialGeography", "materialEvidence", "lightingCausality", "cameraExecution", "atmosphereBehavior",
+        "characterDetails", "sceneDetails", "propDetails", "fusionDetails", "shotPlan", "visualStyle",
+        "referenceStrategy", "detailAnchorRegistry", "continuityChecklist", "mustPreserve", "mustAvoid", "negativePrompt",
+        "generationNotes", "suggestedSize",
+    ],
+    "additionalProperties": True,
+}
+
+
 ASSET_PROMPT_OUTPUT_SCHEMA = {
     "type": "object",
     "properties": {
@@ -303,7 +362,8 @@ ASSET_PROMPT_OUTPUT_SCHEMA = {
                     "targetSkill": {"type": "string"},
                     "relevantShots": {"type": "array", "items": {"type": "string"}},
                     "prompt": {"type": "string"},
-                    "promptPack": {"type": "object", "additionalProperties": True},
+                    "promptPack": PROMPT_PACK_SCHEMA,
+                    "promptQuality": {"type": "object", "additionalProperties": True},
                     "mustPreserve": {"type": "array", "items": {"type": "string"}},
                     "mustAvoid": {"type": "array", "items": {"type": "string"}},
                     "imageGenerationEligible": {"type": "boolean"},
@@ -346,7 +406,7 @@ FUSION_PROMPT_OUTPUT_SCHEMA = {
         "shotId": {"type": "string"},
         "sourceAssetIds": {"type": "array", "items": {"type": "string"}},
         "prompt": {"type": "string"},
-        "promptPack": {"type": "object", "additionalProperties": True},
+        "promptPack": PROMPT_PACK_SCHEMA,
         "mustPreserve": {"type": "array", "items": {"type": "string"}},
         "mustAvoid": {"type": "array", "items": {"type": "string"}},
         "warnings": {"type": "array", "items": {"type": "string"}},

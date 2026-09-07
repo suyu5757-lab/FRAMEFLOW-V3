@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { assetBoardCardHeight, assetBoardCardIsLocked, assetBoardFixedColumnBounds, assetBoardMinimumColumnWidth, assetBoardSafeColumnWidths, assetBoardToFlowNodes, resolveAssetProductionTarget } from './App';
-import type { AssetBoard, LibraryAsset } from './types';
+import { assetBoardCardHeight, assetBoardCardIsLocked, assetBoardFixedColumnBounds, assetBoardMinimumColumnWidth, assetBoardSafeColumnWidths, assetBoardToFlowEdges, assetBoardToFlowNodes, resolveAssetProductionTarget } from './App';
+import type { AssetBoard, LibraryAsset, StoryShot } from './types';
 
 describe('asset board geometry', () => {
   it('reserves enough width for the asset-flow title and prompt cards', () => {
@@ -90,6 +90,98 @@ describe('asset board geometry', () => {
     const promptCard = assetBoardToFlowNodes(board, [asset], 'all', true, [], { layoutMode: 'adaptive' }).find((node) => node.data.node_type === 'handoff');
     expect(promptCard?.data.config.artifact_id).toBe('ART_ENV01');
     expect(promptCard?.data.config.artifact_url).toBe('/api/project-files/PRJ/artifacts/intake/env01.png');
+  });
+
+  it('keeps S02 fusion inputs on the S02 row when source assets also appear in other shots', () => {
+    const board = {
+      metadata: {},
+      nodes: [
+        { id: 'shot:S02', node_type: 'shot', shot_id: 'S02', label: 'S02', status: 'ready', config: {} },
+        { id: 'shot:S03', node_type: 'shot', shot_id: 'S03', label: 'S03', status: 'ready', config: {} },
+        { id: 'asset:ENV01', node_type: 'asset', asset_id: 'ENV01', label: 'ENV01', status: 'ready', config: {} },
+        { id: 'asset:P01', node_type: 'asset', asset_id: 'P01', label: 'P01', status: 'ready', config: {} },
+        { id: 'asset:P02', node_type: 'asset', asset_id: 'P02', label: 'P02', status: 'ready', config: {} },
+        { id: 'handoff:ENV01', node_type: 'handoff', asset_id: 'ENV01', label: '资产 Prompt · ENV01', status: 'prompt_draft_ready', config: { prompt_card: true, asset_class: 'scene' } },
+        { id: 'handoff:P01', node_type: 'handoff', asset_id: 'P01', label: '资产 Prompt · P01', status: 'prompt_draft_ready', config: { prompt_card: true, asset_class: 'character' } },
+        { id: 'handoff:P02', node_type: 'handoff', asset_id: 'P02', label: '资产 Prompt · P02', status: 'prompt_draft_ready', config: { prompt_card: true, asset_class: 'character' } },
+        { id: 'asset:FUSION_S02', node_type: 'asset', asset_id: 'FUSION_S02', label: 'S02 镜头融合', status: 'planned', config: { asset_class: 'fusion' } },
+        { id: 'handoff:FUSION_S02', node_type: 'handoff', asset_id: 'FUSION_S02', label: '资产 Prompt · S02 镜头融合', status: 'production_draft', config: { prompt_card: true, asset_class: 'fusion', fusion_slot: true } },
+      ],
+      edges: [
+        { id: 'shot:S02:ENV01', source: 'shot:S02', target: 'asset:ENV01', relation: 'shot_dependency' },
+        { id: 'shot:S02:P01', source: 'shot:S02', target: 'asset:P01', relation: 'shot_dependency' },
+        { id: 'shot:S02:P02', source: 'shot:S02', target: 'asset:P02', relation: 'shot_dependency' },
+        { id: 'shot:S02:FUSION', source: 'shot:S02', target: 'asset:FUSION_S02', relation: 'shot_dependency' },
+        { id: 'shot:S03:P01', source: 'shot:S03', target: 'asset:P01', relation: 'shot_dependency' },
+        { id: 'candidate:ENV01', source: 'asset:ENV01', target: 'handoff:ENV01', relation: 'candidate' },
+        { id: 'candidate:P01', source: 'asset:P01', target: 'handoff:P01', relation: 'candidate' },
+        { id: 'candidate:P02', source: 'asset:P02', target: 'handoff:P02', relation: 'candidate' },
+        { id: 'fusion:ENV01:S02', source: 'asset:ENV01', target: 'asset:FUSION_S02', relation: 'fusion_input' },
+        { id: 'fusion:P01:S02', source: 'asset:P01', target: 'asset:FUSION_S02', relation: 'fusion_input' },
+        { id: 'fusion:P02:S02', source: 'asset:P02', target: 'asset:FUSION_S02', relation: 'fusion_input' },
+      ],
+    } as unknown as AssetBoard;
+    const assets = [
+      { id: 'ENV01', name: '平台环境', assetClass: 'scene', prompt: '环境', readiness: {} },
+      { id: 'P01', name: '黑甲忍者', assetClass: 'character', prompt: '角色一', readiness: {} },
+      { id: 'P02', name: '银白骑士', assetClass: 'character', prompt: '角色二', readiness: {} },
+      { id: 'FUSION_S02', name: 'S02 镜头融合', assetClass: 'fusion', fusionSlot: true, fusionSourceAssetIds: ['ENV01', 'P01', 'P02'], promptRelevantShots: ['S02'], readiness: {} },
+    ] as unknown as LibraryAsset[];
+    const nodes = assetBoardToFlowNodes(board, assets, 'all', true, [
+      { id: 'S02', scene: '平台' },
+      { id: 'S03', scene: '平台' },
+    ] as unknown as StoryShot[], { layoutMode: 'adaptive' });
+    const edges = assetBoardToFlowEdges(board, nodes).filter((edge) => edge.data?.relation === 'fusion_input');
+    const s02FusionEdges = edges.filter((edge) => edge.target === 'handoff:FUSION_S02');
+
+    expect(s02FusionEdges).toHaveLength(3);
+    expect(s02FusionEdges.map((edge) => edge.source).sort()).toEqual(['handoff:ENV01', 'handoff:P01', 'handoff:P02']);
+    expect(edges.some((edge) => edge.source.includes(':row:S03') && edge.target === 'handoff:FUSION_S02')).toBe(false);
+    const allFlowEdges = assetBoardToFlowEdges(board, nodes);
+    expect(allFlowEdges.some((edge) => edge.data?.relation === 'candidate' && edge.source === 'asset:P02' && edge.target === 'handoff:P02')).toBe(false);
+  });
+
+  it('centers the default fusion group inside its shot row and keeps it in the fusion column', () => {
+    const board = {
+      metadata: { layout_mode: 'shot_asset_table_v8', layout_view: 'adaptive' },
+      nodes: [
+        { id: 'shot:S02', node_type: 'shot', shot_id: 'S02', label: 'S02', status: 'ready', config: {} },
+        { id: 'asset:ENV01', node_type: 'asset', asset_id: 'ENV01', label: 'ENV01', status: 'ready', config: {} },
+        { id: 'asset:P01', node_type: 'asset', asset_id: 'P01', label: 'P01', status: 'ready', config: {} },
+        { id: 'asset:P02', node_type: 'asset', asset_id: 'P02', label: 'P02', status: 'ready', config: {} },
+        { id: 'asset:FUSION_S02', node_type: 'asset', asset_id: 'FUSION_S02', label: 'S02 镜头融合', status: 'planned', config: { asset_class: 'fusion' } },
+        { id: 'handoff:ENV01', node_type: 'handoff', asset_id: 'ENV01', label: '资产 Prompt · ENV01', status: 'prompt_draft_ready', config: { prompt_card: true, asset_class: 'scene' } },
+        { id: 'handoff:P01', node_type: 'handoff', asset_id: 'P01', label: '资产 Prompt · P01', status: 'prompt_draft_ready', config: { prompt_card: true, asset_class: 'character' } },
+        { id: 'handoff:P02', node_type: 'handoff', asset_id: 'P02', label: '资产 Prompt · P02', status: 'prompt_draft_ready', config: { prompt_card: true, asset_class: 'character' } },
+        { id: 'handoff:FUSION_S02', node_type: 'handoff', asset_id: 'FUSION_S02', label: '资产 Prompt · S02 镜头融合', status: 'production_draft', config: { prompt_card: true, asset_class: 'fusion', fusion_slot: true } },
+      ],
+      edges: [
+        { id: 'shot:S02:ENV01', source: 'shot:S02', target: 'asset:ENV01', relation: 'shot_dependency' },
+        { id: 'shot:S02:P01', source: 'shot:S02', target: 'asset:P01', relation: 'shot_dependency' },
+        { id: 'shot:S02:P02', source: 'shot:S02', target: 'asset:P02', relation: 'shot_dependency' },
+        { id: 'shot:S02:FUSION', source: 'shot:S02', target: 'asset:FUSION_S02', relation: 'shot_dependency' },
+      ],
+    } as unknown as AssetBoard;
+    const assets = [
+      { id: 'ENV01', name: '平台环境', assetClass: 'scene', prompt: '环境', readiness: {} },
+      { id: 'P01', name: '黑甲忍者', assetClass: 'character', prompt: '角色一', readiness: {} },
+      { id: 'P02', name: '银白骑士', assetClass: 'character', prompt: '角色二', readiness: {} },
+      { id: 'FUSION_S02', name: 'S02 镜头融合', assetClass: 'fusion', fusionSlot: true, fusionSourceAssetIds: ['ENV01', 'P01', 'P02'], promptRelevantShots: ['S02'], readiness: {} },
+    ] as unknown as LibraryAsset[];
+    const nodes = assetBoardToFlowNodes(board, assets, 'all', true, [{ id: 'S02', scene: '平台' }] as unknown as StoryShot[], { layoutMode: 'adaptive' });
+    const table = nodes.find((node) => node.id === 'asset-grid:table');
+    const fusionPrompt = nodes.find((node) => node.id === 'handoff:FUSION_S02');
+    const fusionBound = (table?.data.config.grid_column_bounds as Array<{ key: string; x: number; width: number }> | undefined)?.find((bound) => bound.key === 'fusion');
+    const row = (table?.data.config.grid_rows as Array<{ key: string; y: number; height: number }> | undefined)?.find((item) => item.key === 'S02');
+    expect(fusionPrompt).toBeDefined();
+    expect(fusionBound).toBeDefined();
+    expect(row).toBeDefined();
+    expect(fusionPrompt!.data.config.grid_column_key).toBe('fusion');
+    expect(fusionPrompt!.position.x).toBeGreaterThanOrEqual(fusionBound!.x);
+    const promptHeight = 350;
+    const fusionCenter = fusionPrompt!.position.y + promptHeight / 2;
+    const rowCenter = row!.y + row!.height / 2;
+    expect(Math.abs(fusionCenter - rowCenter)).toBeLessThanOrEqual(80);
   });
 
   it('resolves the production workspace target from prompt and media readiness', () => {

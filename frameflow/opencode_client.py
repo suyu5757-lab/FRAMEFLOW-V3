@@ -12,6 +12,9 @@ import httpx
 from frameflow.providers import ProviderError, error_from_response
 
 
+DEFAULT_OPENCODE_DIRECTORY = Path.home() / ".local" / "share" / "frameflow-opencode-context"
+
+
 def _auth_headers(profile: dict[str, Any], password: str = "") -> dict[str, str]:
     if not password:
         return {}
@@ -121,7 +124,13 @@ def _opencode_directory(profile: dict[str, Any]) -> str:
         profile.get("model_config", {}).get("directory")
         or os.environ.get("FRAMEFLOW_OPENCODE_DIRECTORY", "")
     ).strip()
-    directory = Path(configured).expanduser() if configured else Path(__file__).resolve().parents[1]
+    directory = Path(configured).expanduser() if configured else DEFAULT_OPENCODE_DIRECTORY
+    if not configured:
+        # A fresh FrameFlow install should not inherit a macOS-protected
+        # Documents/Desktop checkout as the OpenCode session root. The prompt
+        # payload already contains the project snapshot, so a dedicated empty
+        # context directory is sufficient for structured asset orchestration.
+        directory.mkdir(parents=True, exist_ok=True)
     return str(directory.resolve())
 
 
@@ -166,14 +175,17 @@ async def opencode_structured(
         # it only on the message request makes 1.18.x look for a model under
         # the wrong project context and return ProviderModelNotFoundError.
         session_model["variant"] = thinking_strength
-    session = await opencode_request_json(
-        profile,
-        "POST",
-        "/session",
-        password,
-        params={"directory": directory},
-        json={"title": title, "agent": str(profile.get("model_config", {}).get("agent") or "build"), "model": session_model},
-    )
+    try:
+        session = await opencode_request_json(
+            profile,
+            "POST",
+            "/session",
+            password,
+            params={"directory": directory},
+            json={"title": title, "agent": str(profile.get("model_config", {}).get("agent") or "build"), "model": session_model},
+        )
+    except ProviderError as exc:
+        raise ProviderError(f"OpenCode 创建会话失败（directory={directory}）：{exc}", exc.kind, exc.status_code) from exc
     if not isinstance(session, dict) or not session.get("id"):
         raise ProviderError("OpenCode 未能创建会话。", "validation", 502)
     body = {
@@ -181,14 +193,17 @@ async def opencode_structured(
         "parts": [{"type": "text", "text": input_text}],
         "format": {"type": "json_schema", "schema": schema, "retryCount": 2},
     }
-    payload = await opencode_request_json(
-        profile,
-        "POST",
-        f"/session/{session['id']}/message",
-        password,
-        params={"directory": directory},
-        json=body,
-    )
+    try:
+        payload = await opencode_request_json(
+            profile,
+            "POST",
+            f"/session/{session['id']}/message",
+            password,
+            params={"directory": directory},
+            json=body,
+        )
+    except ProviderError as exc:
+        raise ProviderError(f"OpenCode 结构化消息失败（directory={directory}）：{exc}", exc.kind, exc.status_code) from exc
     result = _structured_result(payload)
     result["response_id"] = (payload.get("info") or {}).get("id") if isinstance(payload, dict) else None
     result["model"] = model_ref

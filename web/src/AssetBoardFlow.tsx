@@ -38,10 +38,12 @@ export type AssetBoardNodeData = Omit<AssetBoardNode, 'node_type'> & {
   onGenerateImage?: (assetId: string) => void;
   onCopyPrompt?: (assetId: string) => void;
   onUploadAsset?: (assetId: string, file: File) => void;
+  onRemoveArtifact?: (assetId: string, artifactId: string) => void;
   onApproveAsset?: (assetId: string, artifactId: string) => void;
   onRejectAsset?: (assetId: string, artifactId: string) => void;
   onRegisterAsset?: (assetId: string, artifactId: string) => void;
   onGeneratePrompt?: (assetId: string) => void;
+  onGenerateFusionPrompt?: (assetId: string, sourceAssetIds: string[], shotId: string) => void;
   onColumnResize?: (key: keyof AssetBoardColumnWidths, delta: number) => void;
   onOpenAssetProduction?: (assetId: string, target: AssetProductionTarget, nodeId?: string) => void;
 };
@@ -135,11 +137,27 @@ function AssetBoardCard({ data, selected }: NodeProps<AssetFlowNode>) {
   const promptCard = data.node_type === 'handoff' && Boolean(data.config.prompt_card);
   if (promptCard) {
     const isFusionPrompt = assetClass === 'fusion';
+    const isFusionSlot = isFusionPrompt && Boolean(data.config.fusion_slot);
     const isCharacterPrompt = assetClass === 'character';
     const fusionPromptSource = String(data.config.fusion_prompt_source || '');
     const fusionPromptState = String(data.config.fusion_prompt_state || 'awaiting_connection');
     const fusionPromptReady = !isFusionPrompt || fusionPromptSource === 'fusion-connection-agent';
     const fusionPromptStale = Boolean(data.config.fusion_prompt_stale) || fusionPromptState === 'stale';
+    const fusionShotId = String(data.config.fusion_shot_id || (Array.isArray(data.config.relevant_shots) ? data.config.relevant_shots[0] : '') || '').toUpperCase();
+    const fusionSourceIds = Array.isArray(data.config.fusion_source_asset_ids) ? data.config.fusion_source_asset_ids.map((item) => String(item)).filter(Boolean) : [];
+    const fusionGateAllowed = data.config.fusion_gate_allowed === true;
+    const fusionGateReason = String(data.config.fusion_gate_reason || '等待前置基础资产完成 Prompt QA、图片 QA 与登记');
+    const fusionSourceStatuses = Array.isArray(data.config.fusion_source_statuses) ? data.config.fusion_source_statuses.filter((item): item is Record<string, any> => Boolean(item && typeof item === 'object')) : [];
+    // The board may contain an older persisted reason while the library has
+    // already recomputed each source's readiness. Derive a precise display
+    // message from those source statuses so a disabled button explains the
+    // actionable gate instead of showing only “not ready”.
+    const fusionBlockedSourceStatuses = fusionSourceStatuses.filter((item) => item.production_ready !== true);
+    const fusionGateDisplayReason = !fusionGateAllowed && fusionSourceIds.length >= 2 && fusionBlockedSourceStatuses.length
+      ? `前置资产尚未完成正式入镜门禁：${fusionBlockedSourceStatuses.map((item) => `${String(item.name || item.asset_id || '基础资产')}（${String(item.next_action || '完成正式入镜门禁')}）`).join('；')}`
+      : fusionGateReason;
+    const fusionNeedsPrompt = isFusionSlot && (!String(data.config.prompt || '').trim() || fusionPromptStale);
+    const fusionPromptUsable = fusionPromptReady && (!isFusionPrompt || !fusionPromptStale);
     const promptQa = String(data.config.prompt_qa_decision || 'Pending');
     const generationStatus = String(data.config.generation_status || 'planned');
     const eligible = data.config.image_generation_eligible !== false;
@@ -148,11 +166,15 @@ function AssetBoardCard({ data, selected }: NodeProps<AssetFlowNode>) {
     const artifactUrl = String(data.config.artifact_url || '');
     const artifactStatus = String(data.config.artifact_status || '');
     const artifactQa = String(data.config.artifact_qa_decision || 'Pending');
+    const artifactRemovable = Boolean(artifactId && !['ready', 'superseded'].includes(artifactStatus));
     const productionDraft = Boolean(data.config.production_draft);
+    const promptQuality = data.config.prompt_quality as Record<string, any> | undefined;
+    const promptCoverage = promptQuality?.coverage as Record<string, any> | undefined;
+    const promptCoverageLabel = promptCoverage && Number.isFinite(Number(promptCoverage.passed)) && Number.isFinite(Number(promptCoverage.total)) ? `细节 ${promptCoverage.passed}/${promptCoverage.total}` : '';
     const artifactApproved = artifactQa === 'Approved' || ['approved_pending_registration', 'ready', 'active'].includes(artifactStatus);
     const artifactState = artifactApproved ? (artifactStatus === 'approved_pending_registration' ? '图片已审核 · 待登记' : '图片已审核') : '图片待审核';
     const handlePromptFileDrop = (event: DragEvent<HTMLElement>) => {
-      if (artifactId) return;
+      if (artifactId || isFusionSlot) return;
       event.preventDefault();
       event.stopPropagation();
       event.dataTransfer.dropEffect = 'copy';
@@ -160,30 +182,31 @@ function AssetBoardCard({ data, selected }: NodeProps<AssetFlowNode>) {
       if (file) data.onUploadAsset?.(String(data.asset_id), file);
     };
     const handlePromptFileDragOver = (event: DragEvent<HTMLElement>) => {
-      if (artifactId) return;
+      if (artifactId || isFusionSlot) return;
       event.preventDefault();
       event.stopPropagation();
       event.dataTransfer.dropEffect = 'copy';
     };
-    return <article className={`asset-board-card asset-board-prompt-card ${selected ? 'selected' : ''}`} data-asset-card-type="handoff" data-asset-id={String(data.asset_id || '')} data-grid-row={rowKey} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); data.onContextMenu?.({ nodeId: data.id, assetId: String(data.asset_id), label: data.label, nodeType: data.node_type, rowKey, x: event.clientX, y: event.clientY }); }}>
+    return <article className={`asset-board-card asset-board-prompt-card ${isFusionSlot ? 'fusion-slot-card' : ''} ${selected ? 'selected' : ''}`} data-asset-card-type="handoff" data-asset-id={String(data.asset_id || '')} data-grid-row={rowKey} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); data.onContextMenu?.({ nodeId: data.id, assetId: String(data.asset_id), label: data.label, nodeType: data.node_type, rowKey, x: event.clientX, y: event.clientY }); }}>
       <Handle type="target" position={Position.Left} />
-      {artifactUrl ? <div className="asset-board-prompt-media"><img src={artifactUrl} alt={`${data.label} 已上传资产`} /><div><span>已上传资产</span><i>{artifactState}</i></div></div> : productionDraft && <div className="asset-board-prompt-media asset-board-prompt-media-empty"><strong>图片位置</strong><span>可从右侧上传候选图片</span></div>}
-      <div className={`asset-board-prompt-content${!artifactId ? ' asset-board-prompt-drop-target nodrag nopan' : ''}`} onDragOver={!artifactId ? handlePromptFileDragOver : undefined} onDrop={!artifactId ? handlePromptFileDrop : undefined}>
-        <div className="asset-board-card-meta"><span>{isFusionPrompt ? (fusionPromptReady ? '正式融合 Prompt' : '融合规划 / 历史 Prompt') : '资产 Prompt'}</span><i>{fusionPromptStale ? '输入已变化 · 待重新融合' : !fusionPromptReady ? '等待实际资产连线' : artifactId ? artifactState : promptQa === 'Approved' ? 'Prompt 已通过' : promptQa}</i></div>
+      {artifactUrl ? <div className="asset-board-prompt-media"><div className="asset-board-prompt-media-frame"><img src={artifactUrl} alt={`${data.label} 已上传资产`} />{artifactRemovable && <button type="button" className="asset-board-prompt-media-remove nodrag nopan" aria-label={`移除 ${data.label} 当前上传图片`} title="移除当前候选图片" onClick={(event) => { event.preventDefault(); event.stopPropagation(); data.onRemoveArtifact?.(String(data.asset_id), artifactId); }}>×</button>}</div><div className="asset-board-prompt-media-meta"><span>已上传资产</span><i>{artifactState}</i></div></div> : productionDraft && <div className="asset-board-prompt-media asset-board-prompt-media-empty"><strong>{isFusionSlot ? '融合图片位置' : '图片位置'}</strong><span>{isFusionSlot ? 'Fusion Prompt 通过后生成或上传' : '可从右侧上传候选图片'}</span></div>}
+      <div className={`asset-board-prompt-content${!artifactId && !isFusionSlot ? ' asset-board-prompt-drop-target nodrag nopan' : ''}`} onDragOver={!artifactId && !isFusionSlot ? handlePromptFileDragOver : undefined} onDrop={!artifactId && !isFusionSlot ? handlePromptFileDrop : undefined}>
+        <div className="asset-board-card-meta"><span>{isFusionPrompt ? (fusionPromptUsable ? '正式融合 Prompt' : isFusionSlot ? '镜头融合规划' : '融合规划 / 历史 Prompt') : '资产 Prompt'}</span><i>{fusionPromptStale ? '输入已变化 · 待重新融合' : isFusionSlot && !fusionGateAllowed ? fusionGateDisplayReason : !fusionPromptReady ? '等待基础资产就绪' : artifactId ? artifactState : promptQa === 'Approved' ? 'Prompt 已通过' : promptQa}</i></div>
         <strong>{data.label}</strong>
-        <small>{data.asset_id || '资产'} · {String(data.config.target_skill || 'video-asset-regulator')}{relevantShots ? ` · ${relevantShots}` : ''}</small>
-        <pre tabIndex={0} aria-label={`${data.label} Prompt`} className={`asset-board-prompt-text ${productionDraft && !String(data.config.prompt || '').trim() ? 'empty' : ''}`}>{String(data.config.prompt || '').trim() || '提示词为空，可点击“编辑 Prompt”手动填写，或使用 AI 编写 Prompt。'}</pre>
-        <div className="asset-board-prompt-state"><span>{!fusionPromptReady ? '正式 Prompt：尚未生成' : artifactId ? `图片：${artifactState}` : `图像执行：${generationStatus}`}</span>{fusionPromptStale && <span>请重新确认融合连线</span>}{!eligible && <span>非图像资产</span>}</div>
+        <small>{data.asset_id || '资产'} · {String(data.config.target_skill || 'video-asset-regulator')}{relevantShots ? ` · ${relevantShots}` : ''}{isFusionSlot && fusionSourceIds.length ? ` · 来源 ${fusionSourceIds.join('、')}` : ''}</small>
+        <pre tabIndex={0} aria-label={`${data.label} Prompt`} className={`asset-board-prompt-text ${productionDraft && !String(data.config.prompt || '').trim() ? 'empty' : ''}`}>{String(data.config.prompt || '').trim() || (isFusionSlot ? '等待前置基础资产完成 Prompt QA、图片 QA 与登记后生成 Fusion Prompt。' : '提示词为空，可点击“编辑 Prompt”手动填写，或使用 AI 编写 Prompt。')}</pre>
+        <div className="asset-board-prompt-state"><span>{isFusionSlot && fusionNeedsPrompt ? '融合 Prompt：等待前置资产' : !fusionPromptReady ? '正式 Prompt：尚未生成' : artifactId ? `图片：${artifactState}` : `图像执行：${generationStatus}`}</span>{promptCoverageLabel && <span title="Prompt Contract 细节覆盖度">{promptCoverageLabel}</span>}{isFusionSlot && !fusionGateAllowed && <span title={fusionGateDisplayReason}>{fusionGateDisplayReason}</span>}{fusionPromptStale && <span>请重新生成 Fusion Prompt</span>}{!eligible && <span>非图像资产</span>}</div>
         <div className="asset-board-prompt-actions">
-          {fusionPromptReady && !artifactId && <label className="asset-board-upload-button nodrag nopan">上传资产<input className="nodrag nopan" type="file" accept="image/png,image/jpeg,image/webp" onClick={(event) => event.stopPropagation()} onChange={(event) => { const file = event.target.files?.[0]; if (file) data.onUploadAsset?.(String(data.asset_id), file); event.currentTarget.value = ''; }} /></label>}
-          {productionDraft && !String(data.config.prompt || '').trim() && <button className="asset-board-prompt-primary" onClick={(event) => { event.stopPropagation(); data.onOpenAssetProduction?.(String(data.asset_id), 'prompt', data.id); }}>编辑 Prompt</button>}
-          {productionDraft && !String(data.config.prompt || '').trim() && <button onClick={(event) => { event.stopPropagation(); data.onGeneratePrompt?.(String(data.asset_id)); }}>AI 编写 Prompt</button>}
-          {fusionPromptReady && !artifactId && String(data.config.prompt || '').trim() && <button onClick={(event) => { event.stopPropagation(); data.onCopyPrompt?.(String(data.asset_id)); }}>复制并打开 ChatGPT</button>}
-          {fusionPromptReady && artifactId && !artifactApproved && <button className="asset-board-prompt-primary" onClick={(event) => { event.stopPropagation(); data.onApproveAsset?.(String(data.asset_id), artifactId); }}>审核通过</button>}
-          {fusionPromptReady && artifactId && !artifactApproved && <button onClick={(event) => { event.stopPropagation(); data.onRejectAsset?.(String(data.asset_id), artifactId); }}>审核不通过并重写提示词</button>}
-          {fusionPromptReady && artifactId && artifactStatus === 'approved_pending_registration' && <button className="asset-board-prompt-primary" onClick={(event) => { event.stopPropagation(); data.onRegisterAsset?.(String(data.asset_id), artifactId); }}>登记为资产</button>}
-          {fusionPromptReady && !artifactId && String(data.config.prompt || '').trim() && promptQa !== 'Approved' && <button className="asset-board-prompt-primary" onClick={(event) => { event.stopPropagation(); data.onApprovePrompt?.(String(data.asset_id)); }}>通过 Prompt QA</button>}
-          {fusionPromptReady && !artifactId && promptQa === 'Approved' && eligible && generationStatus !== 'generated-pending-qa' && <button className="asset-board-prompt-primary" onClick={(event) => { event.stopPropagation(); data.onGenerateImage?.(String(data.asset_id)); }}>{isCharacterPrompt ? '确认生成角色结构参考图' : '确认并生成'}</button>}
+          {fusionPromptUsable && !artifactId && (!isFusionSlot || String(data.config.prompt || '').trim()) && <label className="asset-board-upload-button nodrag nopan">上传资产<input className="nodrag nopan" type="file" accept="image/png,image/jpeg,image/webp" onClick={(event) => event.stopPropagation()} onChange={(event) => { const file = event.target.files?.[0]; if (file) data.onUploadAsset?.(String(data.asset_id), file); event.currentTarget.value = ''; }} /></label>}
+          {productionDraft && !isFusionSlot && !String(data.config.prompt || '').trim() && <button className="asset-board-prompt-primary" onClick={(event) => { event.stopPropagation(); data.onOpenAssetProduction?.(String(data.asset_id), 'prompt', data.id); }}>编辑 Prompt</button>}
+          {productionDraft && !isFusionSlot && !String(data.config.prompt || '').trim() && <button onClick={(event) => { event.stopPropagation(); data.onGeneratePrompt?.(String(data.asset_id)); }}>AI 编写 Prompt</button>}
+          {isFusionSlot && fusionNeedsPrompt && <button className="asset-board-prompt-primary" disabled={!fusionGateAllowed || !fusionShotId || !fusionSourceIds.length || !data.onGenerateFusionPrompt} title={fusionGateDisplayReason} onClick={(event) => { event.stopPropagation(); data.onGenerateFusionPrompt?.(String(data.asset_id), fusionSourceIds, fusionShotId); }}>{fusionPromptStale ? '重新生成 Fusion Prompt' : '生成 Fusion Prompt'}</button>}
+          {fusionPromptUsable && !artifactId && String(data.config.prompt || '').trim() && <button onClick={(event) => { event.stopPropagation(); data.onCopyPrompt?.(String(data.asset_id)); }}>复制并打开 ChatGPT</button>}
+          {fusionPromptUsable && artifactId && !artifactApproved && <button className="asset-board-prompt-primary" onClick={(event) => { event.stopPropagation(); data.onApproveAsset?.(String(data.asset_id), artifactId); }}>审核通过</button>}
+          {fusionPromptUsable && artifactId && !artifactApproved && <button onClick={(event) => { event.stopPropagation(); data.onRejectAsset?.(String(data.asset_id), artifactId); }}>审核不通过并重写提示词</button>}
+          {fusionPromptUsable && artifactId && artifactStatus === 'approved_pending_registration' && <button className="asset-board-prompt-primary" onClick={(event) => { event.stopPropagation(); data.onRegisterAsset?.(String(data.asset_id), artifactId); }}>登记为资产</button>}
+          {fusionPromptUsable && !artifactId && String(data.config.prompt || '').trim() && promptQa !== 'Approved' && <button className="asset-board-prompt-primary" onClick={(event) => { event.stopPropagation(); data.onApprovePrompt?.(String(data.asset_id)); }}>通过 Prompt QA</button>}
+          {fusionPromptUsable && !artifactId && String(data.config.prompt || '').trim() && promptQa === 'Approved' && eligible && generationStatus !== 'generated-pending-qa' && <button className="asset-board-prompt-primary" onClick={(event) => { event.stopPropagation(); data.onGenerateImage?.(String(data.asset_id)); }}>{isCharacterPrompt ? '确认生成角色结构参考图' : '确认并生成'}</button>}
         </div>
       </div>
       <Handle type="source" position={Position.Right} />
@@ -191,7 +214,10 @@ function AssetBoardCard({ data, selected }: NodeProps<AssetFlowNode>) {
   }
   const hasPrompt = Boolean(String(data.config.asset_prompt || '').trim());
   const hasMedia = Number(data.config.asset_artifact_count || 0) > 0 || Boolean(data.config.asset_file_url);
-  const showProductionShortcuts = data.node_type === 'asset' && Boolean(data.asset_id) && (!hasPrompt || !hasMedia);
+  // Fusion assets already expose their production surface as the dedicated
+  // Prompt/image card in the SHOT FUSION column. Do not add a second
+  // "打开制作操作台" shortcut to the logical fusion card.
+  const showProductionShortcuts = data.node_type === 'asset' && assetClass !== 'fusion' && Boolean(data.asset_id) && (!hasPrompt || !hasMedia);
   const productionTarget = resolveAssetProductionTarget({ hasPrompt, hasMedia });
   const productionShortcutLabel = !hasPrompt && !hasMedia ? '缺少 Prompt 与候选文件' : !hasPrompt ? '缺少 Prompt' : '待上传候选文件';
   return <article className={`asset-board-card asset-board-${data.node_type} ${selected ? 'selected' : ''} ${canCollapseAssetScope && data.collapsed ? 'collapsed' : ''} ${data.config.archived ? 'archived' : ''}`} data-asset-card-type={data.node_type} data-asset-id={String(data.asset_id || '')} data-grid-row={rowKey} onContextMenu={canOpenContextMenu ? (event) => { event.preventDefault(); event.stopPropagation(); data.onContextMenu?.({ nodeId: data.id, assetId: String(data.asset_id), label: data.label, nodeType: data.node_type, rowKey, x: event.clientX, y: event.clientY }); } : undefined} aria-expanded={canCollapseAssetScope && data.collapsed === true ? false : undefined}>
@@ -231,7 +257,7 @@ function AssetBoardFlowInner({ nodes, edges, onNodesChange, onEdgesChange, onCon
     const height = node.data.node_type === 'artifact' ? 190 : node.data.node_type === 'shot' ? 120 : 110;
     flow.setCenter(node.position.x + width / 2, node.position.y + height / 2, { zoom: .86, duration: 460 });
   }, [focusTarget, flow, nodes]);
-  return <ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect} onNodeClick={onNodeClick} onNodeDragStart={onNodeDragStart} onNodeDragStop={onNodeDragStop} onMoveEnd={(_, viewport) => onMoveEnd(viewport)} defaultViewport={defaultViewport} fitView minZoom={0.12} maxZoom={1.8} deleteKeyCode={null} selectionOnDrag selectionMode={SelectionMode.Partial} panOnDrag={[1, 2]}>
+  return <ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect} onNodeClick={onNodeClick} onNodeDragStart={onNodeDragStart} onNodeDragStop={onNodeDragStop} onMoveEnd={(_, viewport) => onMoveEnd(viewport)} defaultViewport={defaultViewport} fitView minZoom={0.12} maxZoom={1.8} deleteKeyCode={null} multiSelectionKeyCode={['Control', 'Meta']} selectionOnDrag selectionMode={SelectionMode.Partial} panOnDrag={[1, 2]}>
       <Background color="#343831" gap={22} size={1} />
       <Controls position="bottom-left" />
       <MiniMap position="bottom-right" pannable zoomable nodeColor="#d7ff4b" maskColor="rgba(6,7,6,.72)" />

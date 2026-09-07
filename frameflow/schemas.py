@@ -147,6 +147,8 @@ class AssetPromptRunCreate(StrictModel):
     provider_profile_id: str | None = None
     model: str | None = Field(default=None, max_length=120)
     target_asset_id: str | None = Field(default=None, max_length=120)
+    review_feedback: str = Field(default="", max_length=4000)
+    source_qa_run_id: str | None = Field(default=None, max_length=120)
 
 
 class FusionPromptRunCreate(StrictModel):
@@ -206,6 +208,7 @@ class SeedancePackageCreate(StrictModel):
     provider_profile_id: str
     provider_model_or_endpoint: str = Field(min_length=1)
     prompt: str = Field(min_length=1)
+    prompt_pack: dict[str, Any] = Field(default_factory=dict)
     prompt_version: str = "v01"
     reference_assets: list[str] = Field(default_factory=list)
     reference_roles: dict[str, str] = Field(default_factory=dict)
@@ -354,6 +357,7 @@ class AssetMetadataUpdate(StrictModel):
     asset_spec: dict[str, Any] | None = None
     references: list[AssetReferenceRole] | None = None
     prompt: str | None = Field(default=None, max_length=32000)
+    prompt_pack: dict[str, Any] | None = None
     prompt_version: str | None = Field(default=None, max_length=120)
     source: str | None = Field(default=None, max_length=200)
     license: str | None = Field(default=None, max_length=500)

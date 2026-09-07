@@ -11,6 +11,7 @@ from copy import deepcopy
 from typing import Any
 
 from .schemas import AgentPatchV3, WorkflowGraphV3
+from .prompt_design import canonicalize_prompt_output
 
 
 AUTOMATIC_ACTIONS = {
@@ -218,7 +219,16 @@ def normalize_agent_patch(
     )
     for field, kind, content in legacy:
         if content not in (None, ""):
-            patch["candidates"].append({"kind": kind, "title": f"Agent {field} 候选", "content": content})
+            if field == "imagePrompt":
+                compiled = canonicalize_prompt_output("unknown", {}, str(content))
+                patch["candidates"].append({
+                    "kind": kind,
+                    "title": f"Agent {field} 候选",
+                    "content": {"prompt": compiled["prompt"], "promptPack": compiled["promptPack"]},
+                    "metadata": {"promptContractVersion": compiled["promptContractVersion"], "promptWorkflow": compiled["promptWorkflow"], "promptFieldOrder": compiled["promptFieldOrder"]},
+                })
+            else:
+                patch["candidates"].append({"kind": kind, "title": f"Agent {field} 候选", "content": content})
     if raw_patch.get("assets") is not None or raw_patch.get("shots") is not None:
         patch["candidates"].append({
             "kind": "storyboard",

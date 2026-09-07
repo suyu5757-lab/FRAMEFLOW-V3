@@ -681,6 +681,8 @@ export type StoryEnvelope = {
   revision: number;
   story: StoryDocument;
   checks: StoryChecks;
+  library?: AssetLibraryEnvelope;
+  asset_board?: AssetBoardEnvelope;
 };
 
 export type AssetPromptCard = {
@@ -693,6 +695,17 @@ export type AssetPromptCard = {
   relevantShots?: string[];
   prompt: string;
   promptPack?: Record<string, unknown>;
+  promptContractVersion?: string;
+  promptWorkflow?: string;
+  promptFieldOrder?: string[];
+  promptQuality?: {
+    schema_version?: string;
+    status?: string;
+    coverage?: { passed?: number; total?: number; percent?: number };
+    missing?: string[];
+    checks?: Array<{ label?: string; present?: boolean }>;
+    [key: string]: unknown;
+  };
   mustPreserve?: string[];
   mustAvoid?: string[];
   promptVersion?: string;
@@ -706,6 +719,8 @@ export type AssetPromptRun = {
   id: string;
   status: string;
   promptCards: AssetPromptCard[];
+  /** One automatically-created planning slot per storyboard shot. */
+  fusionPlans?: Array<Record<string, unknown>>;
   missingA?: string[];
   regulatorOutput?: Record<string, unknown>;
   promptOutput?: Record<string, unknown>;
@@ -733,6 +748,9 @@ export type FusionPromptRunEnvelope = {
     source_prompt_versions?: Record<string, string>;
     input_fingerprint?: string;
     warnings?: string[];
+    prompt_contract_version?: string;
+    prompt_workflow?: string;
+    prompt_quality?: AssetPromptCard['promptQuality'];
   };
   prompt_version: Record<string, any>;
   fusion_asset: LibraryAsset | null;
@@ -839,6 +857,13 @@ export type LibraryAsset = Record<string, any> & {
   fusionPromptStale?: boolean;
   fusionPromptStaleReason?: string | null;
   fusionPlan?: Record<string, any>;
+  promptQuality?: AssetPromptCard['promptQuality'];
+  promptPack?: Record<string, unknown>;
+  promptContractVersion?: string;
+  promptWorkflow?: string;
+  promptFieldOrder?: string[];
+  active_artifact_count?: number;
+  archived_artifact_count?: number;
 };
 
 export type AssetLibraryEnvelope = {

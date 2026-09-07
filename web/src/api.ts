@@ -29,7 +29,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const body = await response.json().catch(() => ({ message: '服务返回无法解析的响应。' }));
   if (!response.ok) {
     const detail = typeof body.detail === 'object' ? body.detail?.message : body.detail;
-    throw new StudioApiError(body.message || detail || body.error || `请求失败（${response.status}）`, {
+    const issueText = Array.isArray(body.details?.issues) ? body.details.issues.map((issue: unknown) => String(issue)).join('；') : '';
+    const baseMessage = body.message || detail || body.error || `请求失败（${response.status}）`;
+    const message = issueText && !String(baseMessage).includes(issueText) ? `${baseMessage}：${issueText}` : baseMessage;
+    throw new StudioApiError(message, {
       status: response.status,
       code: body.code || 'http_error',
       category: body.category || 'request',
@@ -64,7 +67,7 @@ export const studioApi = {
   saveAssetBoard: (projectId: string, board: AssetBoard, expectedRevision: number) =>
     request<AssetBoardEnvelope>(`/api/v2/projects/${encodeURIComponent(projectId)}/asset-board`, json('PUT', { board, expected_revision: expectedRevision })),
   syncAssetBoard: (projectId: string, expectedRevision: number, preserveLayout = true) =>
-    request<AssetBoardEnvelope>(`/api/v2/projects/${encodeURIComponent(projectId)}/asset-board/sync`, json('POST', { expected_revision: expectedRevision, preserve_layout: preserveLayout })),
+    request<AssetBoardEnvelope & { project_revision?: number; story?: StoryDocument; library?: AssetLibraryEnvelope }>(`/api/v2/projects/${encodeURIComponent(projectId)}/asset-board/sync`, json('POST', { expected_revision: expectedRevision, preserve_layout: preserveLayout })),
   estimate: (projectId: string, nodeIds: string[] = []) =>
     request<{ project_id: string; graph_revision: number; estimate: RunEstimate }>('/api/v2/runs/estimate', json('POST', { project_id: projectId, node_ids: nodeIds })),
   run: (projectId: string, graphRevision: number, confirmed: boolean, nodeIds: string[] = []) =>
@@ -91,7 +94,7 @@ export const studioApi = {
   acceptRegulator: (runId: string) => request<{ run: StoryRun }>(`/api/v2/story-runs/${encodeURIComponent(runId)}/accept-regulator`, { method: 'POST' }),
   storyDiff: (projectId: string, fromVersionId: string, toVersionId: string) => request<StoryDiff>(`/api/v2/projects/${encodeURIComponent(projectId)}/story/diff?from_version_id=${encodeURIComponent(fromVersionId)}&to_version_id=${encodeURIComponent(toVersionId)}`),
   rollbackStory: (projectId: string, versionId: string, expectedRevision: number, scope: 'script' | 'shots' | 'all' = 'all') => request<StoryEnvelope>(`/api/v2/projects/${encodeURIComponent(projectId)}/story/rollback`, json('POST', { version_id: versionId, expected_revision: expectedRevision, scope })),
-  generateAssetPrompts: (projectId: string, body: { expected_revision?: number; target_asset_id?: string }) => request<AssetPromptRunEnvelope>(`/api/v2/projects/${encodeURIComponent(projectId)}/asset-prompt-runs`, json('POST', body)),
+  generateAssetPrompts: (projectId: string, body: { expected_revision?: number; target_asset_id?: string; review_feedback?: string; source_qa_run_id?: string }) => request<AssetPromptRunEnvelope>(`/api/v2/projects/${encodeURIComponent(projectId)}/asset-prompt-runs`, json('POST', body)),
   generateFusionPrompt: (projectId: string, body: { expected_project_revision: number; expected_board_revision: number; fusion_asset_id: string; shot_id: string; source_asset_ids: string[]; confirmed: boolean; provider_profile_id?: string; model?: string }) => request<FusionPromptRunEnvelope>(`/api/v2/projects/${encodeURIComponent(projectId)}/fusion-prompt-runs`, json('POST', body)),
   approveAssetPrompt: (projectId: string, promptVersionId: string) => request<Record<string, unknown>>(`/api/v2/projects/${encodeURIComponent(projectId)}/prompt-versions/${encodeURIComponent(promptVersionId)}/qa`, json('POST', { decision: 'Approved', report: { manual_review: true, review_source: 'asset-prompt-card', note: '用户在无限画布中确认 Prompt 卡内容。' } })),
   timeline: (projectId: string) => request<TimelineEnvelope>(`/api/v2/projects/${encodeURIComponent(projectId)}/timeline`),
@@ -144,6 +147,7 @@ export const studioApi = {
   assetQaRuns: (projectId: string, artifactId: string) => request<{ qa_runs: Array<Record<string, any>> }>(`/api/v2/projects/${encodeURIComponent(projectId)}/artifacts/${encodeURIComponent(artifactId)}/qa-runs`),
   submitAssetQa: (projectId: string, qaRunId: string, body: Record<string, unknown>) => request<Record<string, any>>(`/api/v2/projects/${encodeURIComponent(projectId)}/qa-runs/${encodeURIComponent(qaRunId)}/submit`, json('POST', body)),
   registerAssetArtifact: (projectId: string, artifactId: string, replaceActive = false) => request<Record<string, any>>(`/api/v2/projects/${encodeURIComponent(projectId)}/artifacts/${encodeURIComponent(artifactId)}/register`, json('POST', { replace_active: replaceActive })),
+  archiveAssetArtifact: (projectId: string, artifactId: string) => request<{ ok: boolean; project_id: string; artifact_id: string; status: string; file_preserved?: boolean; project_revision?: number; artifact?: Record<string, any>; library: AssetLibraryEnvelope; asset_board?: AssetBoardEnvelope }>(`/api/v2/projects/${encodeURIComponent(projectId)}/artifacts/${encodeURIComponent(artifactId)}`, { method: 'DELETE' }),
   updateAssetMetadata: (projectId: string, assetId: string, body: Record<string, unknown>) => request<{ project_id: string; revision: number; asset: Record<string, unknown> }>(`/api/v2/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(assetId)}`, json('PATCH', body)),
   manualProductionApproval: (projectId: string, assetId: string, body: { expected_revision: number; approved: boolean; reason?: string; artifact_id: string }) => request<{ project_id: string; revision: number; asset: Record<string, any>; summary: Record<string, any> }>(`/api/v2/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(assetId)}/manual-production-approval`, json('POST', body)),
   assignAsset: (projectId: string, body: { expected_project_revision: number; expected_board_revision: number; asset_id: string; shot_id: string; mode?: 'assign' | 'move' | 'remove'; role?: string; required?: boolean; required_readiness?: 'registered' | 'production' }) => request<{ project_revision: number; board_revision: number; story: StoryEnvelope['story']; asset_board: AssetBoardEnvelope; library: AssetLibraryEnvelope }>(`/api/v2/projects/${encodeURIComponent(projectId)}/asset-assignments`, json('POST', body)),

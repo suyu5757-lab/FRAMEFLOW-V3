@@ -87,14 +87,15 @@ QA_DECISIONS = {"Approved", "Needs revision", "Reject and rebuild prompt", "Reje
 TRANSITIONS: dict[str, set[str]] = {
     "uploading": {"technical_validation", "technical_rejected", "mapping_required"},
     "technical_validation": {"technical_rejected", "mapping_required", "generated_pending_qa", "reference_pending_review"},
+    "technical_rejected": {"mapping_required", "generated_pending_qa", "reference_pending_review", "archived"},
     "mapping_required": {"generated_pending_qa", "reference_pending_review", "archived"},
     "generated_pending_qa": {"qa_in_progress", "audit_blocked", "archived"},
     "reference_pending_review": {"qa_in_progress", "reference", "unqualified", "archived"},
-    "qa_in_progress": {"approved_pending_registration", "reference", "revision_required", "rejected", "audit_blocked", "awaiting_human_review"},
+    "qa_in_progress": {"approved_pending_registration", "reference", "revision_required", "rejected", "audit_blocked", "awaiting_human_review", "archived"},
     "approved_pending_registration": {"ready", "archived"},
     "revision_required": {"archived"},
     "rejected": {"archived"},
-    "audit_blocked": {"generated_pending_qa", "awaiting_human_review", "approved_pending_registration", "revision_required", "rejected", "archived"},
+    "audit_blocked": {"generated_pending_qa", "qa_in_progress", "awaiting_human_review", "approved_pending_registration", "revision_required", "rejected", "archived"},
     "awaiting_human_review": {"approved_pending_registration", "revision_required", "rejected", "generated_pending_qa", "archived"},
     "ready": {"superseded", "archived"},
     "reference": {"archived"},
@@ -111,6 +112,8 @@ def collection_for_status(status: str) -> str:
         return "qualified"
     if status in {"reference"}:
         return "reference"
+    if status == "archived":
+        return "archived"
     return "intake"
 
 
