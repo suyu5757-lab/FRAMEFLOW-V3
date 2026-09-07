@@ -11,6 +11,7 @@ from urllib.parse import unquote
 from zipfile import ZipFile
 
 import uvicorn
+import httpx
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.encoders import jsonable_encoder
@@ -56,6 +57,11 @@ if not os.environ.get("JIMENG_CLI_HOME", "").strip():
     os.environ["JIMENG_CLI_HOME"]=str(DATA_DIR/"dreamina-home")
 MAX_UPLOAD=1024**3; MAX_AUDIO_UPLOAD=25*1024**2
 DEFAULT_BIND_HOST="127.0.0.1"; DEFAULT_BIND_PORT=8787; LOOPBACK_BIND_HOSTS={"127.0.0.1","localhost","::1"}
+
+
+def browser_autostart_enabled() -> bool:
+    """Return whether a ready server should open the workbench in a browser."""
+    return os.environ.get("FRAMEFLOW_OPEN_BROWSER", "1").strip().lower() not in {"0", "false", "no", "off"}
 STATIC_FILES={"/":"web/dist/index.html","/index.html":"web/dist/index.html"}
 ALLOWED_TTS_MODELS={"gpt-4o-mini-tts","gpt-4o-mini-tts-2025-12-15"}; ALLOWED_TTS_VOICES={"alloy","ash","ballad","coral","echo","fable","onyx","nova","sage","shimmer","verse","marin","cedar"}
 ORCHESTRATOR_MODEL_OPTIONS=[
@@ -1759,6 +1765,34 @@ async def settings_provider_probe_v3(provider_id: str, request: Request):
             "server_version": None,
             "error": str(exc),
             "error_kind": exc.kind,
+            "checked_at": time.time(),
+        }
+    except httpx.TimeoutException:
+        result = {
+            "ok": False,
+            "latency_ms": round((time.perf_counter() - started) * 1000),
+            "models": [],
+            "model_catalog": [],
+            "connected_providers": [],
+            "capabilities": contract["capabilities"],
+            "model_readiness": {},
+            "server_version": None,
+            "error": "Provider 探测超时，请检查网络或稍后重试。",
+            "error_kind": "timeout",
+            "checked_at": time.time(),
+        }
+    except httpx.RequestError:
+        result = {
+            "ok": False,
+            "latency_ms": round((time.perf_counter() - started) * 1000),
+            "models": [],
+            "model_catalog": [],
+            "connected_providers": [],
+            "capabilities": contract["capabilities"],
+            "model_readiness": {},
+            "server_version": None,
+            "error": "无法连接 Provider，请检查网络或稍后重试。",
+            "error_kind": "connection",
             "checked_at": time.time(),
         }
     result.update({"adapter": contract["adapter"], "contract_version": contract["version"], "credential": credential_state(profile, credential), "capability_specs": contract["capability_specs"], "input_limits": contract["input_limits"], "output_types": contract["output_types"], "task_modes": contract["task_modes"], "retry_policy": contract["retry_policy"]})
@@ -7033,6 +7067,7 @@ def main()->None:
     bind_host=ensure_loopback_bind(requested_bind_host())
     url=f"http://{'['+bind_host+']' if ':' in bind_host else bind_host}:{DEFAULT_BIND_PORT}"
     print(f"FRAMEFLOW V3 工作台：{url}")
-    threading.Thread(target=open_browser_when_ready,args=(url,),daemon=True).start()
+    if browser_autostart_enabled():
+        threading.Thread(target=open_browser_when_ready,args=(url,),daemon=True).start()
     uvicorn.run("server:app",host=bind_host,port=DEFAULT_BIND_PORT,reload=False)
 if __name__=="__main__":main()

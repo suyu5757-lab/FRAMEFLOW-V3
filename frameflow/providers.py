@@ -159,7 +159,22 @@ async def minimax_speech(profile: dict[str, Any], api_key: str, request: dict[st
 
 async def minimax_probe(profile: dict[str, Any], api_key: str) -> dict[str, Any]:
     started = time.perf_counter()
-    payload = await request_json("POST", minimax_api_url(profile, "get_voice"), api_key, json={"voice_type": "all"})
+    endpoints = [minimax_api_url(profile, "get_voice")]
+    # The official documentation lists api-bj.minimaxi.com as a backup address.
+    # Retry it only for the bundled official endpoint and only for transport
+    # failures; authentication or API validation errors must be returned as-is.
+    if str(profile.get("base_url") or "").rstrip("/") == "https://api.minimax.cn/v1":
+        endpoints.append("https://api-bj.minimaxi.com/v1/get_voice")
+    payload: dict[str, Any] | None = None
+    last_transport_error: httpx.RequestError | None = None
+    for endpoint in endpoints:
+        try:
+            payload = await request_json("POST", endpoint, api_key, timeout_seconds=8, json={"voice_type": "all"})
+            break
+        except (httpx.TimeoutException, httpx.RequestError) as exc:
+            last_transport_error = exc
+    if payload is None:
+        raise ProviderError("无法连接 MiniMax 音色服务，请检查网络或稍后重试。", "connection", 502) from last_transport_error
     _minimax_base_response_error(payload)
     models = list(MINIMAX_TTS_MODELS)
     model_config = profile.get("model_config") if isinstance(profile.get("model_config"), dict) else {}
@@ -207,10 +222,15 @@ def error_from_response(response: httpx.Response) -> ProviderError:
 
 
 async def request_json(method: str, url: str, api_key: str, **kwargs: Any) -> dict[str, Any]:
+    timeout_seconds = kwargs.pop("timeout_seconds", None)
     headers = dict(kwargs.pop("headers", {}))
     headers["Authorization"] = f"Bearer {api_key}"
     headers.setdefault("Content-Type", "application/json")
-    async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=20.0), follow_redirects=False) as client:
+    timeout = httpx.Timeout(300.0, connect=20.0)
+    if timeout_seconds is not None:
+        bounded = max(0.5, float(timeout_seconds))
+        timeout = httpx.Timeout(bounded, connect=min(8.0, bounded))
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
         response = await client.request(method, url, headers=headers, **kwargs)
     if response.status_code >= 400:
         raise error_from_response(response)

@@ -214,11 +214,43 @@ export function assetBoardCardIsLocked(node: { node_type: string; config?: Recor
   return node.node_type === 'asset' || (node.node_type === 'handoff' && Boolean(node.config?.prompt_card));
 }
 
+// These are layout budgets, not guesses about the current DOM. Every core
+// card gets a fixed slot so an asset group can be laid out from the same
+// numbers that the card itself uses. Prompt text and review details scroll
+// inside the slot; they must not change the position of the next group.
+export const assetBoardCardHeights = {
+  asset: 160,
+  prompt: 500,
+  promptWithMedia: 650,
+  artifact: 260,
+  shot: 112,
+  default: 106,
+} as const;
+
+export function assetBoardStackHeight(heights: number[], gap: number): number {
+  if (!heights.length) return 0;
+  return heights.reduce((total, height) => total + height, 0) + Math.max(0, heights.length - 1) * gap;
+}
+
+export function assetBoardAssetGroupHeight(titleHeights: number[], outputHeights: number[], gap: number): number {
+  return Math.max(
+    assetBoardCardHeights.asset,
+    assetBoardStackHeight(titleHeights, gap),
+    assetBoardStackHeight(outputHeights, gap),
+  );
+}
+
 export function assetBoardCardHeight(node: { node_type: string; config: Record<string, any> }): number {
-  const hasPrompt = Boolean(String(node.config.asset_prompt || node.config.prompt || '').trim());
-  const hasMedia = Number(node.config.asset_artifact_count || 0) > 0 || Boolean(node.config.asset_file_url || node.config.artifact_url);
-  if (node.node_type === 'asset' && (!hasPrompt || !hasMedia)) return 150;
-  return node.node_type === 'artifact' ? 226 : node.node_type === 'handoff' && Boolean(node.config.prompt_card) ? (node.config.artifact_url || node.config.production_draft ? 570 : 350) : node.node_type === 'shot' ? 112 : 106;
+  const config = node.config || {};
+  const isPromptCard = node.node_type === 'handoff' && Boolean(config.prompt_card);
+  const hasPromptMedia = isPromptCard && Boolean(
+    String(config.artifact_url || config.asset_file_url || '').trim() || config.production_draft,
+  );
+  if (node.node_type === 'asset') return assetBoardCardHeights.asset;
+  if (node.node_type === 'artifact') return assetBoardCardHeights.artifact;
+  if (isPromptCard) return hasPromptMedia ? assetBoardCardHeights.promptWithMedia : assetBoardCardHeights.prompt;
+  if (node.node_type === 'shot') return assetBoardCardHeights.shot;
+  return assetBoardCardHeights.default;
 }
 
 export function resolveAssetProductionTarget(input: { hasPrompt: boolean; hasMedia: boolean }): AssetProductionTarget {
@@ -584,16 +616,17 @@ function AssetBoardToolbar({
     if (scope === true) return true;
     return String(scope) !== presentationIdFor(node, row, index);
   };
-  const stackCounts = new Map<string, number>();
-  const adaptiveFlowGroups = new Map<string, Array<{ key: string; column: string; titleCount: number; handoffCount: number; promptCount: number; promptMediaCount: number; artifactCount: number }>>();
+  const matrixStackHeights = new Map<string, number[]>();
+  const adaptiveFlowGroups = new Map<string, Array<{ key: string; column: string; titleHeights: number[]; outputHeights: number[] }>>();
   const cardHeightFor = (node: AssetBoardNode) => {
     const linkedAsset = node.asset_id ? assetMap.get(node.asset_id) : undefined;
+    const promptArtifact = promptArtifactFor(node, linkedAsset);
     return assetBoardCardHeight({
       node_type: node.node_type,
       config: {
         ...node.config,
         asset_prompt: linkedAsset?.prompt || '',
-        asset_artifact_count: linkedAsset?.active_artifact_count ?? linkedAsset?.artifact_count ?? linkedAsset?.artifacts?.length ?? 0,
+        artifact_url: node.config.artifact_url || promptArtifact?.url || '',
         asset_file_url: linkedAsset?.filePath || linkedAsset?.file_path || linkedAsset?.previewUrl || '',
       },
     });
@@ -619,18 +652,23 @@ function AssetBoardToolbar({
       if (isCollapsedPresentationNode(node, row, index)) return;
       const key = `${row}:${columnForNode(node)}`;
       const estimatedCardHeight = cardHeightFor(node);
-      stackCounts.set(key, (stackCounts.get(key) || 0) + estimatedCardHeight / 118);
+      const matrixHeights = matrixStackHeights.get(key) || [];
+      matrixHeights.push(estimatedCardHeight);
+      matrixStackHeights.set(key, matrixHeights);
       if (layoutMode === 'adaptive' && node.node_type !== 'shot') {
         const assetKey = String(node.asset_id || node.id);
         const groups = adaptiveFlowGroups.get(row) || [];
         const group = groups.find((item) => item.key === assetKey);
         if (group) {
-          if (node.node_type === 'artifact') group.artifactCount += 1;
-          else if (node.node_type === 'asset') group.titleCount += 1;
-          else if (node.node_type === 'handoff' && Boolean(node.config.prompt_card)) { group.promptCount += 1; if (node.config.artifact_url) group.promptMediaCount += 1; }
-          else group.handoffCount += 1;
+          if (node.node_type === 'asset') group.titleHeights.push(estimatedCardHeight);
+          else group.outputHeights.push(estimatedCardHeight);
         } else {
-          groups.push({ key: assetKey, column: columnForNode(node), titleCount: node.node_type === 'asset' ? 1 : 0, handoffCount: node.node_type === 'handoff' && !node.config.prompt_card ? 1 : 0, promptCount: node.node_type === 'handoff' && Boolean(node.config.prompt_card) ? 1 : 0, promptMediaCount: node.node_type === 'handoff' && Boolean(node.config.prompt_card) && Boolean(node.config.artifact_url) ? 1 : 0, artifactCount: node.node_type === 'artifact' ? 1 : 0 });
+          groups.push({
+            key: assetKey,
+            column: columnForNode(node),
+            titleHeights: node.node_type === 'asset' ? [estimatedCardHeight] : [],
+            outputHeights: node.node_type === 'asset' ? [] : [estimatedCardHeight],
+          });
         }
         adaptiveFlowGroups.set(row, groups);
       }
@@ -646,10 +684,9 @@ function AssetBoardToolbar({
     let height = preset.rowHeight;
     if (layoutMode === 'adaptive') {
       const metrics = (adaptiveFlowGroups.get(row) || []).map((group) => {
-        const titleHeight = group.titleCount ? group.titleCount * 150 + Math.max(0, group.titleCount - 1) * gap : 0;
-        const outputCount = group.handoffCount + group.promptCount + group.artifactCount;
-        const outputHeight = group.handoffCount * 106 + group.promptCount * 350 + group.promptMediaCount * 220 + group.artifactCount * 226 + Math.max(0, outputCount - 1) * gap;
-        const groupHeight = Math.max(106, titleHeight, outputHeight);
+        const titleHeight = assetBoardStackHeight(group.titleHeights, gap);
+        const outputHeight = assetBoardStackHeight(group.outputHeights, gap);
+        const groupHeight = assetBoardAssetGroupHeight(group.titleHeights, group.outputHeights, gap);
         return { group, titleHeight, outputHeight, groupHeight };
       });
       const flowMetrics = metrics.filter((item) => item.group.column !== 'fusion');
@@ -676,7 +713,10 @@ function AssetBoardToolbar({
         fusionCursor += item.groupHeight + gap;
       }
     } else {
-      for (const column of assetGridColumns) height = Math.max(height, 34 + gap + Math.ceil(stackCounts.get(`${row}:${column.key}`) || 0) * (118 + gap));
+      for (const column of assetGridColumns) {
+        const columnHeight = assetBoardStackHeight(matrixStackHeights.get(`${row}:${column.key}`) || [], gap);
+        if (columnHeight) height = Math.max(height, gap * 2 + columnHeight);
+      }
     }
     rowHeights.set(row, height);
   }

@@ -790,6 +790,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .asset-board-wrap .asset-board-card.asset-board-shot { min-height: 112px; border-color: rgba(157,214,198,.5); background: linear-gradient(145deg, rgba(28,48,43,.98), rgba(15,25,21,.98)); }
 .asset-board-wrap .asset-board-card.asset-board-handoff { border-color: rgba(255,202,102,.52); background: linear-gradient(145deg, rgba(57,45,25,.96), rgba(27,23,15,.96)); }
 .asset-board-wrap .asset-board-card.asset-board-artifact { min-height: 190px; border-color: rgba(125,182,255,.5); background: linear-gradient(145deg, rgba(30,45,64,.96), rgba(17,26,37,.96)); }
+.asset-board-wrap .asset-board-card.asset-board-asset { min-height: 160px; height: 160px; max-height: 160px; overflow: hidden; }
+.asset-board-wrap .asset-board-card.asset-board-artifact { min-height: 260px; height: 260px; max-height: 260px; overflow: hidden; }
 .asset-board-wrap .asset-board-card-meta { font-size: 8px; }
 .asset-board-assignment-corner { position: absolute; top: 8px; right: 8px; z-index: 4; max-width: 132px; overflow: hidden; padding: 4px 6px; border: 1px solid rgba(215,255,75,.28); border-radius: 5px; background: rgba(14,22,11,.9); color: var(--acid); font-size: 8px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
 .asset-board-wrap .asset-board-card strong { margin: 10px 0 5px; font-size: 12px; }
@@ -798,7 +800,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .asset-board-wrap .asset-board-shot strong { margin: 12px 0 7px; color: #f0f8ea; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 16px; letter-spacing: .02em; }
 .asset-board-shot-scene { display: block; overflow: hidden; color: #c5d8c5; font-size: 11px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
 .asset-board-wrap .asset-board-thumb { width: 100%; height: auto; min-height: 72px; max-height: 148px; margin: 7px 0 -1px; border: 1px solid rgba(158,190,226,.18); object-fit: contain; background: #0b0e0b; }
-.asset-board-wrap .asset-board-artifact { min-height: 0 !important; padding-bottom: 13px; }
+.asset-board-wrap .asset-board-artifact { min-height: 260px !important; height: 260px; max-height: 260px; padding-bottom: 13px; }
 .asset-board-wrap .react-flow__node.selected .asset-board-card { border-color: var(--acid); box-shadow: 0 0 0 1px var(--acid), 0 12px 34px rgba(0,0,0,.42); }
 .asset-board-wrap .react-flow__node[style*="z-index: -3"] { pointer-events: none; }
 
@@ -976,9 +978,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 @media (max-width: 760px) { .assistant-drawer { width: 100vw; }.assistant-drawer-header { padding: 17px 15px 14px; }.assistant-drawer-scroll, .assistant-composer { padding-left: 14px; padding-right: 14px; }.assistant-launcher { display: inline-flex !important; padding: 7px 9px !important; }.assistant-launcher i { display: none; } }
 .asset-prompt-button { border-color: rgba(215,255,75,.58) !important; background: rgba(215,255,75,.1) !important; color: var(--acid) !important; }
 .asset-prompt-button:hover:not(:disabled) { background: rgba(215,255,75,.18) !important; }
-.asset-board-prompt-card { min-height: 350px; border-color: rgba(215,255,75,.48); background: linear-gradient(150deg, rgba(32,49,25,.96), rgba(18,25,17,.98)); }
+.asset-board-prompt-card { display: flex; min-height: 500px; height: 500px; max-height: 500px; flex-direction: column; box-sizing: border-box; border-color: rgba(215,255,75,.48); background: linear-gradient(150deg, rgba(32,49,25,.96), rgba(18,25,17,.98)); }
 .asset-board-prompt-card > strong { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.asset-board-prompt-text { max-height: 172px; margin: 9px 0 6px; overflow: auto; border: 1px solid rgba(215,255,75,.16); border-radius: 6px; background: rgba(2,7,3,.48); color: #d9e8cf; padding: 8px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 8px; line-height: 1.45; white-space: pre-wrap; }
+.asset-board-prompt-text { min-height: 96px; max-height: 172px; margin: 9px 0 6px; overflow: auto; border: 1px solid rgba(215,255,75,.16); border-radius: 6px; background: rgba(2,7,3,.48); color: #d9e8cf; padding: 8px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 8px; line-height: 1.45; white-space: pre-wrap; }
 .asset-board-prompt-text.empty { color: #92a58b; font-style: italic; }
 .asset-board-prompt-drop-target { position: relative; }
 .asset-board-prompt-drop-target::after { content: '拖入图片上传'; position: absolute; top: 7px; right: 9px; padding: 3px 5px; border: 1px dashed rgba(215,255,75,.28); border-radius: 4px; color: rgba(215,255,75,.58); font-size: 7px; pointer-events: none; opacity: .75; }
@@ -1105,7 +1107,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .asset-import-row { display: grid; grid-template-columns: minmax(0, 1fr) 180px 140px auto; gap: 8px; align-items: center; padding: 9px; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.025); }
 .asset-import-row div { min-width: 0; }.asset-import-row strong, .asset-import-row small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.asset-import-row small { margin-top: 4px; color: var(--muted); font-size: 9px; }
 .asset-import-row button { border: 1px solid #69433e; border-radius: 5px; background: transparent; color: #ff9b8a; padding: 6px 8px; font-size: 9px; cursor: pointer; }
-.asset-board-prompt-card { width: 100%; max-width: 100%; box-sizing: border-box; min-height: 350px; overflow: hidden; }
+.asset-board-prompt-card { width: 100%; max-width: 100%; overflow: hidden; }
 .asset-board-prompt-media { display: grid; gap: 7px; margin: -2px -2px 10px; padding: 2px; }
 .asset-board-prompt-media-frame { position: relative; min-width: 0; }
 .asset-board-prompt-media-frame img { display: block; width: 100%; max-width: 100%; height: 178px; box-sizing: border-box; border: 1px solid rgba(215,255,75,.18); border-radius: 7px; background: #090d09; object-fit: contain; }
@@ -1116,12 +1118,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .asset-board-prompt-media-meta { display: flex; justify-content: space-between; gap: 8px; color: #a9c79c; font-size: 8px; }
 .asset-board-prompt-media span { color: #d7ff4b; font-weight: 750; }
 .asset-board-prompt-media i { color: #ffcf7a; font-style: normal; }
-.asset-board-prompt-content { min-width: 0; }
+.asset-board-prompt-content { display: flex; min-width: 0; min-height: 0; flex: 1 1 auto; flex-direction: column; overflow: hidden; }
 .asset-board-prompt-content strong { margin-top: 8px; }
 .asset-board-upload-button { display: inline-flex; align-items: center; border: 1px solid rgba(215,255,75,.6); border-radius: 5px; background: rgba(215,255,75,.14); color: var(--acid); padding: 5px 7px; font-size: 8px; cursor: pointer; }
 .asset-board-upload-button input { display: none; }
 .asset-board-prompt-actions button:disabled, .asset-board-upload-button:has(input:disabled) { opacity: .45; cursor: default; }
-.asset-board-prompt-card:has(.asset-board-prompt-media) { min-height: 570px; }
+.asset-board-wrap .asset-board-card.asset-board-prompt-card { min-height: 500px; height: 500px; max-height: 500px; }
+.asset-board-wrap .asset-board-card.asset-board-prompt-card:has(.asset-board-prompt-media) { min-height: 650px; height: 650px; max-height: 650px; }
 @media (max-width: 900px) {
   .asset-library-layout-v3 { grid-template-columns: 1fr; grid-template-rows: minmax(0, 260px) minmax(0, 1fr); }
   .asset-list { max-height: none; overflow-x: hidden; border-right: 0; border-bottom: 1px solid var(--line); padding: 0 0 12px; }

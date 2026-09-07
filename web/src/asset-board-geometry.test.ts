@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assetBoardCardHeight, assetBoardCardIsLocked, assetBoardFixedColumnBounds, assetBoardMinimumColumnWidth, assetBoardSafeColumnWidths, assetBoardToFlowEdges, assetBoardToFlowNodes, resolveAssetProductionTarget } from './App';
+import { assetBoardAssetGroupHeight, assetBoardCardHeight, assetBoardCardHeights, assetBoardCardIsLocked, assetBoardFixedColumnBounds, assetBoardMinimumColumnWidth, assetBoardSafeColumnWidths, assetBoardToFlowEdges, assetBoardToFlowNodes, resolveAssetProductionTarget } from './App';
 import type { AssetBoard, LibraryAsset, StoryShot } from './types';
 
 describe('asset board geometry', () => {
@@ -38,7 +38,15 @@ describe('asset board geometry', () => {
     expect(assetBoardCardIsLocked({ node_type: 'asset', config: {} })).toBe(true);
     expect(assetBoardCardIsLocked({ node_type: 'handoff', config: { prompt_card: true } })).toBe(true);
     expect(assetBoardCardIsLocked({ node_type: 'artifact', config: {} })).toBe(false);
-    expect(assetBoardCardHeight({ node_type: 'asset', config: { asset_prompt: '', asset_artifact_count: 0 } })).toBe(150);
+    expect(assetBoardCardHeight({ node_type: 'asset', config: { asset_prompt: '', asset_artifact_count: 0 } })).toBe(assetBoardCardHeights.asset);
+  });
+
+  it('uses one fixed budget for each card variant and the tallest member of an asset group', () => {
+    expect(assetBoardCardHeight({ node_type: 'handoff', config: { prompt_card: true } })).toBe(assetBoardCardHeights.prompt);
+    expect(assetBoardCardHeight({ node_type: 'handoff', config: { prompt_card: true, artifact_url: '/candidate.png' } })).toBe(assetBoardCardHeights.promptWithMedia);
+    expect(assetBoardCardHeight({ node_type: 'artifact', config: {} })).toBe(assetBoardCardHeights.artifact);
+    expect(assetBoardAssetGroupHeight([assetBoardCardHeights.asset], [assetBoardCardHeights.prompt], 16)).toBe(assetBoardCardHeights.prompt);
+    expect(assetBoardAssetGroupHeight([assetBoardCardHeights.asset], [assetBoardCardHeights.promptWithMedia, assetBoardCardHeights.artifact], 16)).toBe(926);
   });
 
   it('assigns both generated card types to the shot row from the shot dependency', () => {
@@ -178,10 +186,43 @@ describe('asset board geometry', () => {
     expect(row).toBeDefined();
     expect(fusionPrompt!.data.config.grid_column_key).toBe('fusion');
     expect(fusionPrompt!.position.x).toBeGreaterThanOrEqual(fusionBound!.x);
-    const promptHeight = 350;
+    const promptHeight = assetBoardCardHeights.prompt;
     const fusionCenter = fusionPrompt!.position.y + promptHeight / 2;
     const rowCenter = row!.y + row!.height / 2;
     expect(Math.abs(fusionCenter - rowCenter)).toBeLessThanOrEqual(80);
+  });
+
+  it('keeps adjacent P12 and P08 asset groups in non-overlapping vertical slots', () => {
+    const board = {
+      metadata: { layout_mode: 'shot_asset_table_v8', layout_view: 'adaptive', layout_preset: 'standard' },
+      nodes: [
+        { id: 'shot:S07', node_type: 'shot', shot_id: 'S07', label: 'S07', status: 'ready', config: {} },
+        { id: 'asset:P12', node_type: 'asset', asset_id: 'P12', label: 'P12', status: 'partial', config: { asset_class: 'prop' } },
+        { id: 'handoff:P12', node_type: 'handoff', asset_id: 'P12', label: '资产 Prompt · P12', status: 'prompt_draft_ready', config: { prompt_card: true, asset_class: 'prop', prompt: 'P12 长 Prompt 与前置资产清单' } },
+        { id: 'asset:P08', node_type: 'asset', asset_id: 'P08', label: 'P08', status: 'partial', config: { asset_class: 'prop' } },
+        { id: 'handoff:P08', node_type: 'handoff', asset_id: 'P08', label: '资产 Prompt · P08', status: 'prompt_draft_ready', config: { prompt_card: true, asset_class: 'prop', prompt: 'P08 长 Prompt 与前置资产清单', artifact_url: '/candidate-p08.png' } },
+      ],
+      edges: [
+        { id: 'shot:S07:P12', source: 'shot:S07', target: 'asset:P12', relation: 'shot_dependency' },
+        { id: 'shot:S07:P08', source: 'shot:S07', target: 'asset:P08', relation: 'shot_dependency' },
+      ],
+    } as unknown as AssetBoard;
+    const assets = [
+      { id: 'P12', name: 'P12', assetClass: 'prop', prompt: 'P12 长 Prompt', readiness: {} },
+      { id: 'P08', name: 'P08', assetClass: 'prop', prompt: 'P08 长 Prompt', readiness: {} },
+    ] as unknown as LibraryAsset[];
+    const nodes = assetBoardToFlowNodes(board, assets, 'all', true, [{ id: 'S07', scene: '平台' }] as unknown as StoryShot[], { layoutMode: 'adaptive', gap: 16 });
+    const intervals = [...new Set(['P12', 'P08'])].map((assetId) => {
+      const groupNodes = nodes.filter((node) => node.data.asset_id === assetId && node.data.config.grid_row_key === 'S07' && ['asset', 'handoff'].includes(node.data.node_type));
+      const start = Math.min(...groupNodes.map((node) => node.position.y));
+      const end = Math.max(...groupNodes.map((node) => node.position.y + assetBoardCardHeight(node.data)));
+      return { assetId, start, end };
+    }).sort((left, right) => left.start - right.start);
+
+    expect(intervals).toHaveLength(2);
+    expect(intervals[0].assetId).toBe('P12');
+    expect(intervals[1].assetId).toBe('P08');
+    expect(intervals[1].start).toBeGreaterThanOrEqual(intervals[0].end + 16);
   });
 
   it('resolves the production workspace target from prompt and media readiness', () => {

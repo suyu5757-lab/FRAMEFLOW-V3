@@ -6,6 +6,7 @@ import uuid
 from pathlib import Path
 from unittest import mock
 
+import httpx
 from fastapi.testclient import TestClient
 
 import server
@@ -82,6 +83,15 @@ class MiniMaxProviderUnitTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["voices"][0]["voice_id"], "male-qn-qingse")
         self.assertNotIn("token", repr(result["voices"]))
 
+    async def test_minimax_probe_uses_documented_backup_on_transport_failure(self) -> None:
+        success = {"system_voice": [], "voice_cloning": [], "voice_generation": [], "base_resp": {"status_code": 0}}
+        request = mock.AsyncMock(side_effect=[httpx.ConnectError("offline"), success])
+        with mock.patch("frameflow.providers.request_json", new=request):
+            result = await minimax_probe(self.profile, "secret-not-returned")
+        self.assertTrue(result["ok"])
+        self.assertEqual(request.await_count, 2)
+        self.assertEqual(request.await_args_list[1].args[1], "https://api-bj.minimaxi.com/v1/get_voice")
+
     async def test_minimax_adapter_submits_audio_as_normalized_output(self) -> None:
         adapter = adapter_for_profile(self.profile)
         with mock.patch("frameflow.provider_adapters.minimax_speech", new=mock.AsyncMock(return_value=(b"RIFF", {"trace_id": "trace"}))) as speech:
@@ -149,6 +159,15 @@ class MiniMaxTtsRouteTests(unittest.TestCase):
         self.assertEqual(payload["model"], MINIMAX_DEFAULT_TTS_MODEL)
         self.assertEqual(payload["voice"], MINIMAX_DEFAULT_VOICE_ID)
         speech.assert_awaited_once()
+
+    def test_probe_transport_failure_returns_failed_probe_instead_of_500(self) -> None:
+        with mock.patch.object(server, "get_profile_secret", return_value="provider-secret"), mock.patch.object(server, "probe_profile", new=mock.AsyncMock(side_effect=httpx.ConnectError("offline"))):
+            response = self.client.post("/api/v2/settings/providers/minimax-default/probe")
+        self.assertEqual(response.status_code, 200, response.text)
+        probe = response.json()["probe"]
+        self.assertFalse(probe["ok"])
+        self.assertEqual(probe["error_kind"], "connection")
+        self.assertNotIn("provider-secret", response.text)
 
 
 if __name__ == "__main__":
