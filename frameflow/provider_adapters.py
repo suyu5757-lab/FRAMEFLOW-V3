@@ -20,8 +20,16 @@ import httpx
 from .opencode_client import opencode_request_json, opencode_structured
 from .jimeng_cli import jimeng_create_task, jimeng_get_task, jimeng_cancel_task, probe_jimeng_cli, validate_video_package
 from .providers import (
+    MINIMAX_DEFAULT_TTS_MODEL,
+    MINIMAX_TTS_SPEED_MAX,
+    MINIMAX_TTS_SPEED_MIN,
+    MINIMAX_TTS_FORMATS,
+    MINIMAX_TTS_MODELS,
     ProviderError,
     error_from_response,
+    minimax_probe,
+    minimax_speech,
+    minimax_tts_payload,
     openai_image,
     openai_image_edit,
     openai_speech,
@@ -119,11 +127,12 @@ CAPABILITY_SPECS: dict[str, dict[str, Any]] = {
 
 
 DEFAULT_CAPABILITIES = {
-    "openai": ["orchestrator", "vision", "image", "image_edit", "tts"],
+    "openai": ["orchestrator", "vision", "image", "image_edit"],
     "openai_compatible": ["orchestrator"],
     "opencode": ["orchestrator"],
     "jimeng_cli": ["video"],
     "comfyui": ["image", "image_edit", "video", "music", "sfx", "upscale", "lip_sync", "upload"],
+    "minimax": ["tts"],
 }
 
 
@@ -156,6 +165,10 @@ def _capabilities(profile: Any, defaults: list[str]) -> list[str]:
     values = declared if isinstance(declared, list) and declared else configured
     if not isinstance(values, list) or not values:
         values = defaults
+    if _provider_type(profile) == "openai":
+        # FRAMEFLOW reserves the TTS route for MiniMax. OpenAI remains
+        # available for orchestration and image capabilities.
+        values = [item for item in values if str(item) != "tts"]
     return sorted({str(item) for item in values if str(item) in CAPABILITY_SPECS})
 
 
@@ -426,6 +439,37 @@ class OpenAICompatibleAdapter(OpenAIAdapter):
     default_capabilities = ["orchestrator"]
 
 
+class MiniMaxAdapter(ProviderAdapter):
+    adapter_id = "minimax"
+    default_capabilities = ["tts"]
+
+    async def probe(self, credential: str = "") -> dict[str, Any]:
+        result = await minimax_probe(self.profile, credential)
+        return _merge_probe_contract(self, result, credential)
+
+    async def submit(self, capability: str, request: dict[str, Any], credential: str = "") -> dict[str, Any]:
+        if capability != "tts":
+            raise ProviderError("MiniMax 适配器当前只支持 TTS。", "validation", 422)
+        issues = self.validate_request(capability, request)
+        if issues:
+            raise ProviderError("；".join(issues), "validation", 422)
+        payload = minimax_tts_payload(self.profile, request)
+        model = str(payload.get("model") or MINIMAX_DEFAULT_TTS_MODEL)
+        audio_setting = payload.get("audio_setting") if isinstance(payload.get("audio_setting"), dict) else {}
+        output_format = str(audio_setting.get("format") or "wav").lower()
+        if model not in MINIMAX_TTS_MODELS:
+            raise ProviderError(f"MiniMax TTS 模型不受支持：{model}", "validation", 422)
+        if output_format not in MINIMAX_TTS_FORMATS:
+            raise ProviderError("MiniMax TTS 只支持 mp3、wav、flac 输出。", "validation", 422)
+        speed = float(payload.get("voice_setting", {}).get("speed", 1.0))
+        if not MINIMAX_TTS_SPEED_MIN <= speed <= MINIMAX_TTS_SPEED_MAX:
+            raise ProviderError("MiniMax TTS 语速必须在 0.5 到 2.0 之间。", "validation", 422)
+        audio, provider_metadata = await minimax_speech(self.profile, credential, payload)
+        result = self.normalize({"data_base64": base64.b64encode(audio).decode("ascii")}, capability, model, None, "succeeded")
+        result["provider_metadata"] = provider_metadata
+        return result
+
+
 class OpenCodeAdapter(ProviderAdapter):
     adapter_id = "opencode"
     default_capabilities = ["orchestrator"]
@@ -582,6 +626,7 @@ class ComfyUIAdapter(ProviderAdapter):
 ADAPTER_TYPES: dict[str, type[ProviderAdapter]] = {
     "openai": OpenAIAdapter,
     "openai_compatible": OpenAICompatibleAdapter,
+    "minimax": MiniMaxAdapter,
     "opencode": OpenCodeAdapter,
     "jimeng_cli": JimengCLIAdapter,
     "comfyui": ComfyUIAdapter,

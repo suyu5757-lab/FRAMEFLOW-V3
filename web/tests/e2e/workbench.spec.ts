@@ -57,31 +57,6 @@ async function seedAssetBoardProject(page: Page, name = '资产选中验收项�
   return { id: project.document.id, name };
 }
 
-async function seedAssetLibraryFilterProject(page: Page, name: string) {
-  const projectResponse = await page.request.post('/api/v2/projects', {
-    data: { name, ratio: '16:9', duration: 12, generator: 'seedance2.0', brief: 'Asset library scope filter fixture' },
-  });
-  expect(projectResponse.ok()).toBeTruthy();
-  const project = await projectResponse.json() as { document: { id: string }; revision: number };
-  let revision = project.revision;
-  const assetIds: Record<string, string> = {};
-  for (const item of [
-    { key: 'character', name: '测试角色', asset_class: 'character', asset_role: 'character' },
-    { key: 'scene', name: '测试场景', asset_class: 'scene', asset_role: 'environment' },
-    { key: 'prop', name: '测试道具', asset_class: 'prop', asset_role: 'prop' },
-    { key: 'fusion', name: '测试融合', asset_class: 'fusion', asset_role: 'fusion' },
-  ]) {
-    const assetResponse = await page.request.post(`/api/v2/projects/${project.document.id}/assets`, {
-      data: { expected_revision: revision, name: item.name, asset_class: item.asset_class, asset_role: item.asset_role, grade: 'B', required: true },
-    });
-    expect(assetResponse.ok()).toBeTruthy();
-    const assetResult = await assetResponse.json() as { revision: number; asset: { id: string } };
-    revision = assetResult.revision;
-    assetIds[item.key] = assetResult.asset.id;
-  }
-  return { id: project.document.id, name, assetIds };
-}
-
 test.describe('FrameFlow V3 workbench', () => {
   test('API readiness and legacy boundary are explicit', async ({ request }) => {
     const health = await request.get('/api/health');
@@ -109,10 +84,14 @@ test.describe('FrameFlow V3 workbench', () => {
     await openWorkbench(page);
 
     const workspaceNavigation = page.getByRole('navigation');
-    for (const label of ['故事与分镜', '资产生产工作区', '后期时间线', '统一资产库', '设置与 Provider']) {
+    for (const label of ['故事与分镜', '资产生产工作区', '声音资产工坊', '后期时间线', '设置与 Provider']) {
       await workspaceNavigation.getByRole('button', { name: new RegExp(label) }).click();
       await expect(page.locator('.studio-content')).toBeVisible();
     }
+    await expect(workspaceNavigation.getByRole('button', { name: /统一资产库/ })).toHaveCount(0);
+    await expect(workspaceNavigation.getByRole('button', { name: /人物与角色/ })).toHaveCount(0);
+    await expect(workspaceNavigation.getByRole('button', { name: /场景与道具/ })).toHaveCount(0);
+    await expect(workspaceNavigation.getByRole('button', { name: /融合与候选/ })).toHaveCount(0);
 
     await page.getByRole('button', { name: '项目管理' }).click();
     await expect(page.getByRole('dialog', { name: /项目管理/ })).toBeVisible();
@@ -171,51 +150,20 @@ test.describe('FrameFlow V3 workbench', () => {
     expect(runCreated).toBeFalsy();
   });
 
-  test('asset library scope filters keep categories isolated', async ({ page }, testInfo) => {
-    const fixture = await seedAssetLibraryFilterProject(page, `资产范围筛选验收项目-${testInfo.workerIndex}-${Date.now()}`);
+  test('asset production workspace replaces the standalone asset section', async ({ page }) => {
+    const fixture = await seedAssetBoardProject(page, `资产生产唯一入口验收项目-${Date.now()}`);
     await page.goto('/');
     await switchToProject(page, fixture.name);
-    await page.getByRole('button', { name: /统一资产库/ }).click();
+    const navigation = page.locator('.studio-sidebar nav');
+    await expect(navigation.getByRole('button', { name: /统一资产库/ })).toHaveCount(0);
+    await expect(navigation.getByRole('button', { name: /人物与角色/ })).toHaveCount(0);
+    await expect(navigation.getByRole('button', { name: /场景与道具/ })).toHaveCount(0);
+    await expect(navigation.getByRole('button', { name: /融合与候选/ })).toHaveCount(0);
 
-    const list = page.locator('.asset-list-item');
-    const resultCount = page.locator('.asset-filter-result b').first();
-    const scope = page.getByLabel('资产分类范围');
-    const status = page.locator('.asset-library-toolbar select[aria-label="资产状态筛选"]');
-    const characterId = fixture.assetIds.character;
-    const sceneId = fixture.assetIds.scene;
-    const propId = fixture.assetIds.prop;
-    const fusionId = fixture.assetIds.fusion;
-
-    await scope.selectOption('character');
-    await expect(resultCount).toHaveText('1');
-    await expect(list).toHaveCount(1);
-    await expect(page.locator(`[data-asset-list-id="${characterId}"]`)).toHaveCount(1);
-    await expect(page.locator(`[data-asset-list-id="${sceneId}"]`)).toHaveCount(0);
-    await expect(page.locator(`[data-asset-list-id="${propId}"]`)).toHaveCount(0);
-    await expect(page.locator(`[data-asset-list-id="${fusionId}"]`)).toHaveCount(0);
-
-    await scope.selectOption('scene-prop');
-    await expect(resultCount).toHaveText('2');
-    await expect(list).toHaveCount(2);
-    await expect(page.locator(`[data-asset-list-id="${sceneId}"]`)).toHaveCount(1);
-    await expect(page.locator(`[data-asset-list-id="${propId}"]`)).toHaveCount(1);
-    await expect(page.locator(`[data-asset-list-id="${characterId}"]`)).toHaveCount(0);
-    await expect(page.locator(`[data-asset-list-id="${fusionId}"]`)).toHaveCount(0);
-
-    await status.selectOption('pending');
-    await expect(resultCount).toHaveText('2');
-    await expect(list).toHaveCount(2);
-    await scope.selectOption('fusion');
-    await expect(resultCount).toHaveText('1');
-    await expect(list).toHaveCount(1);
-    await expect(page.locator(`[data-asset-list-id="${fusionId}"]`)).toHaveCount(1);
-    await expect(page.locator(`[data-asset-list-id="${sceneId}"]`)).toHaveCount(0);
-
-    await page.getByRole('button', { name: '清除筛选' }).click();
-    await expect(scope).toHaveValue('all');
-    await expect(status).toHaveValue('all');
-    await expect(resultCount).toHaveText('4');
-    await expect(list).toHaveCount(4);
+    await navigation.getByRole('button', { name: /资产生产工作区/ }).click();
+    await expect(page.locator('.asset-board-toolbar')).toBeVisible();
+    await expect(page.locator('.asset-library-v3')).toHaveCount(0);
+    await expect(page.locator('.asset-board-card.asset-board-asset').filter({ hasText: '于村祠堂雨夜' }).first()).toBeVisible();
   });
 
   test('asset board selects the exact card and keeps collapse separate', async ({ page }) => {
@@ -228,7 +176,6 @@ test.describe('FrameFlow V3 workbench', () => {
     const sceneCard = page.locator('.asset-board-card.asset-board-asset').filter({ hasText: assetName }).first();
     const promptCard = page.locator('.asset-board-card.asset-board-prompt-card').filter({ hasText: `资产 Prompt · ${assetName}` }).first();
     await expect(sceneCard).toBeVisible();
-    await expect(promptCard).toBeVisible();
 
     const productionShortcut = sceneCard.locator('.asset-board-production-shortcuts button');
     await expect(productionShortcut).toHaveCount(1);
@@ -236,6 +183,7 @@ test.describe('FrameFlow V3 workbench', () => {
     await productionShortcut.click();
     await expect(page.locator('.asset-production-panel')).toBeVisible();
     await expect(page.locator('[data-asset-production-upload]')).toBeVisible();
+    await expect(promptCard).toBeVisible();
 
     const assetFlowHeader = page.locator('.asset-board-table-header-cell').filter({ hasText: '镜头资产流' }).first();
     const fusionHeader = page.locator('.asset-board-table-header-cell').filter({ hasText: '镜头融合' }).first();
@@ -398,9 +346,9 @@ test.describe('FrameFlow V3 workbench', () => {
     expect(new Set(story.story.shots.map((shot) => shot.id)).size).toBe(4);
 
     const classes = ['character', 'scene', 'prop', 'fusion', 'audio'];
+    await page.locator('.studio-sidebar').getByRole('button', { name: /资产生产工作区/ }).click();
     for (const assetClass of classes) {
-      await page.locator('.studio-sidebar').getByRole('button', { name: /统一资产库/ }).click();
-      await page.getByRole('button', { name: '＋ 新建逻辑资产' }).click();
+      await page.getByRole('button', { name: '＋ 新增资产' }).click();
       const dialog = page.getByRole('dialog', { name: '新增逻辑资产' });
       await dialog.getByPlaceholder(/例如：陈继业/).fill(`Manual ${assetClass}`);
       await dialog.getByLabel('资产类型').selectOption(assetClass);

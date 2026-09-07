@@ -5,6 +5,7 @@ export const PROMPT_FIELD_ORDER = [
   'materialEvidence', 'lightingCausality', 'cameraExecution', 'atmosphereBehavior',
   'continuityChecklist', 'mustPreserve', 'mustAvoid', 'generationNotes',
 ] as const;
+const PROMPT_SUPPLEMENT_MARKER = '同时满足以下补充制作要求：';
 
 export type PromptRecord = Record<string, unknown>;
 export type PromptContext = {
@@ -314,7 +315,21 @@ export function buildNaturalLanguagePrompt(assetClass: string | undefined, rawPa
   const notes = [text(pack.generationNotes), pack.suggestedSize ? `建议尺寸为${text(pack.suggestedSize)}` : ''].filter(Boolean).join('；');
   if (notes) paragraphs.push(sentence(notes, '生成说明：'));
   let compiled = paragraphs.filter(Boolean).join('\n\n');
-  if (fallback && !compiled.includes(fallback)) compiled = compiled ? `${compiled}\n\n同时满足以下补充制作要求：${fallback}` : fallback;
+  if (fallback) {
+    // The persisted prompt is fed back through the compiler when the asset
+    // library is read. Remove exact compiler layers so the result is
+    // idempotent while keeping the user-authored supplement at the tail.
+    let supplement = fallback;
+    while (compiled && supplement.startsWith(compiled)) {
+      supplement = supplement.slice(compiled.length).trim();
+      if (supplement.startsWith(PROMPT_SUPPLEMENT_MARKER)) {
+        supplement = supplement.slice(PROMPT_SUPPLEMENT_MARKER.length).trim();
+        continue;
+      }
+      break;
+    }
+    if (supplement && supplement !== compiled) compiled = compiled ? `${compiled}\n\n${PROMPT_SUPPLEMENT_MARKER}${supplement}` : supplement;
+  }
   return compiled.trim();
 }
 

@@ -43,4 +43,12 @@ describe('shared prompt workflow compiler', () => {
     expect(prompt).toContain('镜头 S001');
     expect(prompt).toContain('连续性检查');
   });
+
+  it('keeps a persisted compiled prompt idempotent while preserving its supplement', () => {
+    const pack = { promptIntent: '建立可复用的声音身份参考', identityAnchor: 'P01 的成年女性低沉中文声音' };
+    const first = buildNaturalLanguagePrompt('audio', pack, '等待用户确认台词和录音方式。');
+    const second = buildNaturalLanguagePrompt('audio', pack, first);
+    expect(second).toBe(first);
+    expect(second.match(/同时满足以下补充制作要求：/g)).toHaveLength(1);
+  });
 });

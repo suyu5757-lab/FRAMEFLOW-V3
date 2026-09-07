@@ -35,6 +35,8 @@ PROMPT_FIELD_ORDER = [
     "generationNotes",
 ]
 
+PROMPT_SUPPLEMENT_MARKER = "同时满足以下补充制作要求："
+
 PROMPT_CLASS_ALIASES = {
     "environment": "scene",
     "environment_prop": "scene",
@@ -702,8 +704,21 @@ def build_natural_language_prompt(
         paragraphs.append(_sentence(tail, "生成说明："))
 
     compiled = "\n\n".join(item for item in paragraphs if item)
-    if fallback and fallback not in compiled:
-        compiled = f"{compiled}\n\n同时满足以下补充制作要求：{fallback}" if compiled else fallback
+    if fallback:
+        # ``prompt`` is persisted as the final natural-language output.  The
+        # asset-library read path also canonicalizes that value, so treating
+        # the whole persisted prompt as a fresh fallback makes every read
+        # append another copy of the already compiled prompt.  Strip only
+        # exact leading compiler layers and retain the user-authored tail.
+        supplement = fallback
+        while compiled and supplement.startswith(compiled):
+            supplement = supplement[len(compiled):].strip()
+            if supplement.startswith(PROMPT_SUPPLEMENT_MARKER):
+                supplement = supplement[len(PROMPT_SUPPLEMENT_MARKER):].strip()
+                continue
+            break
+        if supplement and supplement != compiled:
+            compiled = f"{compiled}\n\n{PROMPT_SUPPLEMENT_MARKER}{supplement}" if compiled else supplement
     return compiled.strip()
 
 

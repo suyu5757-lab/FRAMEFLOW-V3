@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from frameflow.prompt_design import PROMPT_CONTRACT_VERSION, assess_prompt_pack, prompt_contract, prompt_contract_instructions
+from frameflow.prompt_design import PROMPT_CONTRACT_VERSION, assess_prompt_pack, build_natural_language_prompt, prompt_contract, prompt_contract_instructions
 
 
 class PromptDesignTests(unittest.TestCase):
@@ -59,6 +59,13 @@ class PromptDesignTests(unittest.TestCase):
         )
         self.assertEqual(quality["status"], "ready")
         self.assertEqual(quality["coverage"]["percent"], 100)
+
+    def test_compiled_prompt_is_idempotent_when_persisted_as_fallback(self) -> None:
+        pack = {"promptIntent": "建立可复用的声音身份参考", "identityAnchor": "P01 的成年女性低沉中文声音"}
+        first = build_natural_language_prompt("audio", pack, "等待用户确认台词和录音方式。")
+        second = build_natural_language_prompt("audio", pack, first)
+        self.assertEqual(second, first)
+        self.assertEqual(second.count("同时满足以下补充制作要求："), 1)
 
 
 if __name__ == "__main__":

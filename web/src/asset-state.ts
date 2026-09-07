@@ -12,7 +12,7 @@ export const assetStatusLabels: Record<string, string> = {
 
 export const productionStatusLabels: Record<string, string> = {
   registered: '已登记', production: '可入镜', prompt: '待补 Prompt', prompt_qa: '待 Prompt QA',
-  image_qa: '待图片 QA', video_qa: '待视频 QA', reference_review: '待参考审核', asset_registration: '待登记', authorization: '待授权', fusion_gate: '融合门阻塞', reference_only: '仅参考，不可入镜',
+  image_qa: '待图片 QA', video_qa: '待视频 QA', audio_qa: '待声音 QA', reference_review: '待参考审核', asset_registration: '待登记', authorization: '待授权', fusion_gate: '融合门阻塞', reference_only: '仅参考，不可入镜',
   blocked: '已阻塞', pending: '待制作', audit: '审计队列', candidate: '候选', unknown: '待检查',
 };
 

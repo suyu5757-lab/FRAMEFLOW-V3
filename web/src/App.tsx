@@ -3,29 +3,32 @@ import type { Connection, Edge, EdgeChange, Node, NodeChange, Viewport } from '@
 import { StudioApiError, studioApi } from './api';
 import { AudioStudioView } from './AudioStudioView';
 import { EDGE_RELATIONS, autoLayoutNodes, edgeRelationPresentation, wouldCreateExecutionCycle, type EdgeRelation } from './graph-editor';
-import type { AgentPlan, AudioStudioDocument, AudioStudioEnvelope, AssetAuditEnvelope, AssetBoard, AssetBoardEdgeRelation, AssetBoardEnvelope, AssetBoardNode, AssetLibraryEnvelope, DashboardEnvelope, DashboardTask, GraphEnvelope, GraphNodeData, HomeStatus, LibraryAsset, ProjectCreateInput, ProjectDashboard, ProjectRecord, ProjectHomeSummary, RenderJob, RunEstimate, SettingsEnvelope, SettingsProvider, SettingsPreset, StoryChecks, StoryDiff, StoryDocument, StoryEnvelope, StoryRun, StoryShot, TimelineClip, TimelineDocument, TimelineEnvelope, TimelinePreflight, TimelinePreflightShot, WorkflowGraph, WorkflowManifest, WorkflowRun, WorkflowRunDetail } from './types';
+import type { AgentPlan, AudioStudioDocument, AudioStudioEnvelope, AssetBoard, AssetBoardEdgeRelation, AssetBoardEnvelope, AssetBoardNode, AssetLibraryEnvelope, DashboardEnvelope, DashboardTask, GraphEnvelope, GraphNodeData, HomeStatus, LibraryAsset, ProjectCreateInput, ProjectDashboard, ProjectRecord, ProjectHomeSummary, RenderJob, RunEstimate, SettingsEnvelope, SettingsProvider, SettingsPreset, StoryChecks, StoryDiff, StoryDocument, StoryEnvelope, StoryRun, StoryShot, TimelineClip, TimelineDocument, TimelineEnvelope, TimelinePreflight, TimelinePreflightShot, WorkflowGraph, WorkflowManifest, WorkflowRun, WorkflowRunDetail } from './types';
 import { dashboardHasActiveWork, progressLabel, stageProgress, statusClass, statusIcon, statusLabel, taskPriorityLabel } from './dashboard-state';
-import { assetClassLabels as sharedAssetClassLabels, assetMatchesFilter, assetMatchesScope, assetNextAction, assetProductionStatus, assetStatusBucket, assetStatusFilterLabels, assetStatusLabels as sharedAssetStatusLabels, assetStatusPresentationOrder, filterAssets, parseJsonObject, productionStatusLabels, type AssetLibraryFilter, type AssetLibraryScope, type AssetLibraryStatusFilter, type AssetSort } from './asset-state';
+import { assetClassLabels as sharedAssetClassLabels, assetStatusLabels as sharedAssetStatusLabels } from './asset-state';
 import { applyAssetBoardSelection, assetBoardSelectionKey, selectedAssetBoardCards as getSelectedAssetBoardCards, singleSelectedAssetBoardCard, type AssetBoardSelectionKey } from './asset-board-selection';
 import { VirtualAssetList } from './components/VirtualAssetList';
 import { PROMPT_CONTRACT_VERSION, PROMPT_WORKFLOW_ID, buildNaturalLanguagePrompt, normalizePromptPack, renderPromptValue } from './prompt-design';
 
-type StudioMode = 'home' | 'story' | 'canvas' | 'timeline' | 'audio' | 'assets' | 'settings';
+type StudioMode = 'home' | 'story' | 'canvas' | 'timeline' | 'audio' | 'settings';
 type AssetPromptRunState = {
   status: 'idle' | 'preparing' | 'running' | 'success' | 'error';
   message: string;
   startedAt: number | null;
 };
+type AutoSaveState = 'idle' | 'scheduled' | 'saving' | 'saved' | 'error';
+const AUTO_SAVE_DELAY_MS = 900;
+const AUTO_SAVE_RETRY_DELAY_MS = 5000;
 const LazyAssetBoardFlow = lazy(() => import('./AssetBoardFlow').then(({ AssetBoardFlow }) => ({ default: AssetBoardFlow })));
 type FlowNode = Node<GraphNodeData, 'workflow'>;
 type AssetBoardCollapseTarget = { type: 'shot' | 'asset'; id: string; keepNodeId?: string; scopeKey?: string };
 type AssetBoardContextTarget = { nodeId: string; assetId: string; label: string; nodeType: AssetBoardNodeData['node_type']; rowKey: string; x: number; y: number };
 type AssetPlacement = { assetId: string; name: string; mode: 'assign' | 'move' };
 type AssetBoardColumnWidths = { shots: number; 'asset-flow': number; fusion: number };
+type AssetEditorDraft = { prompt: string; assetSpec: string; anchors: string; mustPreserve: string; mustAvoid: string };
 type AssetBoardSyncEnvelope = AssetBoardEnvelope & { project_revision?: number; story?: StoryDocument; library?: AssetLibraryEnvelope };
 type AssetProductionFocus = { assetId: string; target: AssetProductionTarget } | null;
 type AssetAssignmentOverrides = { pending?: AssetPlacement; projectRevision?: number; boardEnvelope?: AssetBoardEnvelope; library?: AssetLibraryEnvelope; storyEnvelope?: StoryEnvelope; nodes?: AssetFlowNode[]; edges?: Edge[] };
-type AssetInspectorTab = 'overview' | 'media' | 'prompt' | 'dependencies' | 'audit' | 'history';
 type AssetQaType = 'prompt' | 'image' | 'video' | 'audio' | 'reference';
 type AssetQaDecision = 'Approved' | 'Needs revision' | 'Rejected' | 'Blocked';
 type AssetBoardNodeData = Omit<AssetBoardNode, 'node_type'> & {
@@ -138,7 +141,7 @@ const shortcutGroups = [
       ['Alt + 2', '故事与分镜'],
       ['Alt + 3', '资产生产工作区'],
       ['Alt + 4', '后期时间线'],
-      ['Alt + 5', '统一资产库'],
+      ['Alt + 5', '声音资产工坊'],
       ['Alt + 6', '设置与 Provider'],
     ],
   },
@@ -163,6 +166,7 @@ const assetGridColumns = [
 ] as const;
 type AssetGridPreset = 'compact' | 'standard' | 'spacious';
 type AssetBoardLayoutMode = 'adaptive' | 'matrix';
+type AssetBoardLayoutState = { preset: AssetGridPreset; mode: AssetBoardLayoutMode; columnWidth: number; columnWidths: AssetBoardColumnWidths; directoryPosition: { x: number; y: number }; gap: number };
 export type AssetProductionTarget = 'prompt' | 'upload';
 const assetGridPresets: Record<AssetGridPreset, { columnWidth: number; rowHeight: number; label: string }> = {
   compact: { columnWidth: 260, rowHeight: 152, label: '紧凑' },
@@ -486,7 +490,7 @@ function AssetBoardToolbar({
     {assetPlacement && <div className="asset-placement-banner"><strong>正在分配：{assetPlacement.name}</strong><span>请点击目标镜头行，例如 SH006；分配完成后资产会从 SHARED 移入该镜头。</span><button type="button" onClick={onCancelPlacement}>取消</button></div>}
     <div className="asset-board-toolbar-heading"><span>SHOT–ASSET GRID</span><strong>{assetCount} 个资产 · {shotCount} 个镜头 · {relationCount} 条关系</strong><small className="canvas-subline">按镜头组织资产关系、Prompt、候选文件与质量审核</small><small className="canvas-shortcut-hint">Ctrl / ⌘ + Z 撤销 · Ctrl / ⌘ + Shift + Z 或 Y 重做</small></div>
     <div className="canvas-tools">
-      <button type="button" onClick={onSync} disabled={busy || !boardReady || dirty} title={dirty ? '请先保存当前画布修改，再同步故事与分镜' : '同步故事与分镜'}>同步故事与分镜</button>
+      <button type="button" onClick={onSync} disabled={busy || !boardReady || dirty} title={dirty ? '工作区会自动保存，请稍候再同步故事与分镜' : '同步故事与分镜'}>同步故事与分镜</button>
       <div className="asset-board-toolbar-popover">
         <button type="button" className={menu === 'filters' ? 'active' : ''} aria-expanded={menu === 'filters'} onClick={() => onMenuChange(menu === 'filters' ? null : 'filters')}>筛选</button>
         {menu === 'filters' && <div className="asset-board-toolbar-menu" role="dialog" aria-label="资产工作区筛选">
@@ -519,6 +523,16 @@ function AssetBoardToolbar({
   const collapsedScopes = options.collapsedScopes || {};
   const useStoredPositions = !options.forceGrid && board.metadata.layout_mode === 'shot_asset_table_v8' && board.metadata.layout_view === layoutMode;
   const assetMap = new Map(assets.map((asset) => [asset.id, asset]));
+  const promptArtifactFor = (node: AssetBoardNode, asset?: LibraryAsset) => {
+    if (node.node_type !== 'handoff' || !node.config.prompt_card || !asset) return undefined;
+    const artifacts = Array.isArray(asset.artifacts) ? asset.artifacts as Record<string, any>[] : [];
+    const liveImages = artifacts.filter((item) => String(item.status || '') !== 'archived' && String(item.mime_type || '').toLowerCase().startsWith('image/'));
+    const configuredId = String(node.config.artifact_id || '');
+    const currentId = String(asset.artifactId || asset.artifact_id || '');
+    return liveImages.find((item) => String(item.id || item.artifact_id || '') === configuredId)
+      || liveImages.find((item) => String(item.id || item.artifact_id || '') === currentId)
+      || liveImages[0];
+  };
   const shotRows = assetShotRows(board, assets, storyShots);
   const shotNodes = board.nodes.filter((node) => node.node_type === 'shot' && node.shot_id);
   const shotOrder = storyShots.map((shot) => shot.id).filter((id) => shotNodes.some((node) => node.shot_id === id));
@@ -743,7 +757,21 @@ function AssetBoardToolbar({
       const hiddenByShot = shotCollapsed && node.node_type !== 'shot';
       const hiddenByAsset = Boolean(assetScope) && node.node_type !== 'asset' && (assetScope === true || keepNodeId !== id);
       const linkedAsset = node.asset_id ? assetMap.get(node.asset_id) : undefined;
-        const data: AssetBoardNodeData = { ...node, id, position, presentationOnly, sourceNodeId: presentationOnly ? node.id : undefined, collapsed: Boolean(assetScope), onToggleScope: options.onToggleScope, onContextMenu: options.onContextMenu, onApprovePrompt: options.onApprovePrompt, onGenerateImage: options.onGenerateImage, onGeneratePrompt: options.onGeneratePrompt, onGenerateFusionPrompt: options.onGenerateFusionPrompt, onCopyPrompt: options.onCopyPrompt, onUploadAsset: options.onUploadAsset, onRemoveArtifact: options.onRemoveArtifact, onApproveAsset: options.onApproveAsset, onRejectAsset: options.onRejectAsset, onRegisterAsset: options.onRegisterAsset, onColumnResize: options.onColumnResize, onOpenAssetProduction: options.onOpenAssetProduction, config: { ...node.config, prompt: linkedAsset?.prompt || node.config.prompt || '', prompt_pack: linkedAsset?.promptPack || node.config.prompt_pack || {}, prompt_contract_version: linkedAsset?.promptContractVersion || node.config.prompt_contract_version || '', prompt_workflow: linkedAsset?.promptWorkflow || node.config.prompt_workflow || '', prompt_field_order: linkedAsset?.promptFieldOrder || node.config.prompt_field_order || [], asset_prompt: linkedAsset?.prompt || '', asset_artifact_count: linkedAsset?.active_artifact_count ?? linkedAsset?.artifact_count ?? linkedAsset?.artifacts?.length ?? 0, asset_file_url: linkedAsset?.filePath || linkedAsset?.file_path || linkedAsset?.previewUrl || '', prompt_quality: linkedAsset?.promptQuality || node.config.prompt_quality || {}, production_draft: Boolean((linkedAsset?.assetMetadata as Record<string, any> | undefined)?.production_draft?.active || (linkedAsset?.assetMetadata as Record<string, any> | undefined)?.metadata?.production_draft?.active || node.config.production_draft), fusion_prompt_source: linkedAsset?.fusionPromptSource, fusion_prompt_state: linkedAsset?.fusionPromptState, fusion_prompt_stale: Boolean(linkedAsset?.fusionPromptStale), fusion_prompt_stale_reason: linkedAsset?.fusionPromptStaleReason || null, fusion_plan: linkedAsset?.fusionPlan || node.config.fusion_plan || {}, fusion_slot: linkedAsset?.fusionSlot ?? node.config.fusion_slot, fusion_slot_id: (linkedAsset?.fusionPlan as Record<string, any> | undefined)?.fusion_slot_id || node.config.fusion_slot_id, fusion_shot_id: (linkedAsset?.fusionPlan as Record<string, any> | undefined)?.shot_id || node.config.fusion_shot_id, fusion_source_asset_ids: linkedAsset?.fusionSourceAssetIds || node.config.fusion_source_asset_ids || [], fusion_source_statuses: linkedAsset?.fusionSourceStatuses || node.config.fusion_source_statuses || [], fusion_gate_allowed: linkedAsset?.fusionPromptGenerationAllowed ?? node.config.fusion_gate_allowed, fusion_gate_reason: linkedAsset?.fusionPromptBlockedReason || node.config.fusion_gate_reason, grid_row_key: row, grid_column_key: columnForNode(node), shot_scope: rows } };
+      const promptArtifact = promptArtifactFor(node, linkedAsset);
+      const promptArtifactId = promptArtifact ? String(promptArtifact.id || promptArtifact.artifact_id || '') : '';
+      const promptArtifactActive = Boolean(promptArtifactId && linkedAsset?.versions?.some((version: Record<string, any>) => Boolean(version.is_active) && String(version.artifact_id || '') === promptArtifactId));
+      const promptArtifactConfig = node.node_type === 'handoff' && node.config.prompt_card && linkedAsset && Array.isArray(linkedAsset.artifacts) ? {
+        artifact_id: promptArtifactId || null,
+        artifact_url: promptArtifact?.url || null,
+        artifact_status: promptArtifact?.status || null,
+        artifact_qa_decision: promptArtifact?.qa_decision || promptArtifact?.qaDecision || null,
+        artifact_source_type: promptArtifact?.source_type || promptArtifact?.source || null,
+        artifact_active: promptArtifactActive,
+        artifact_version_id: promptArtifactActive ? linkedAsset?.versions?.find((version: Record<string, any>) => Boolean(version.is_active) && String(version.artifact_id || '') === promptArtifactId)?.id || null : null,
+      } : {};
+        const prerequisiteGate = linkedAsset?.prerequisiteGate;
+        const prerequisiteBlockedDependencies = Array.isArray(prerequisiteGate?.items) ? prerequisiteGate.items.filter((item: Record<string, any>) => item.production_ready !== true) : [];
+        const data: AssetBoardNodeData = { ...node, id, position, presentationOnly, sourceNodeId: presentationOnly ? node.id : undefined, collapsed: Boolean(assetScope), onToggleScope: options.onToggleScope, onContextMenu: options.onContextMenu, onApprovePrompt: options.onApprovePrompt, onGenerateImage: options.onGenerateImage, onGeneratePrompt: options.onGeneratePrompt, onGenerateFusionPrompt: options.onGenerateFusionPrompt, onCopyPrompt: options.onCopyPrompt, onUploadAsset: options.onUploadAsset, onRemoveArtifact: options.onRemoveArtifact, onApproveAsset: options.onApproveAsset, onRejectAsset: options.onRejectAsset, onRegisterAsset: options.onRegisterAsset, onColumnResize: options.onColumnResize, onOpenAssetProduction: options.onOpenAssetProduction, config: { ...node.config, ...promptArtifactConfig, prompt: linkedAsset?.prompt || node.config.prompt || '', prompt_pack: linkedAsset?.promptPack || node.config.prompt_pack || {}, prompt_contract_version: linkedAsset?.promptContractVersion || node.config.prompt_contract_version || '', prompt_workflow: linkedAsset?.promptWorkflow || node.config.prompt_workflow || '', prompt_field_order: linkedAsset?.promptFieldOrder || node.config.prompt_field_order || [], asset_prompt: linkedAsset?.prompt || node.config.prompt || '', asset_artifact_count: linkedAsset?.active_artifact_count ?? linkedAsset?.artifact_count ?? linkedAsset?.artifacts?.length ?? 0, asset_file_url: linkedAsset?.filePath || linkedAsset?.file_path || linkedAsset?.previewUrl || '', prompt_quality: linkedAsset?.promptQuality || node.config.prompt_quality || {}, production_draft: Boolean((linkedAsset?.assetMetadata as Record<string, any> | undefined)?.production_draft?.active || (linkedAsset?.assetMetadata as Record<string, any> | undefined)?.metadata?.production_draft?.active || node.config.production_draft), prerequisite_dependencies: linkedAsset?.prerequisiteDependencies || node.config.prerequisite_dependencies || [], prerequisite_gate: prerequisiteGate || node.config.prerequisite_gate || { allowed: true, items: [], reason: '当前资产没有未完成的前置资产' }, prerequisite_items: Array.isArray(prerequisiteGate?.items) ? prerequisiteGate.items : node.config.prerequisite_items || [], prerequisite_gate_allowed: prerequisiteGate?.allowed ?? node.config.prerequisite_gate_allowed ?? true, prerequisite_blocked_reason: prerequisiteGate?.reason || node.config.prerequisite_blocked_reason || '', prerequisite_blocked_dependencies: prerequisiteBlockedDependencies.length ? prerequisiteBlockedDependencies : node.config.prerequisite_blocked_dependencies || [], fusion_prompt_source: linkedAsset?.fusionPromptSource, fusion_prompt_state: linkedAsset?.fusionPromptState, fusion_prompt_stale: Boolean(linkedAsset?.fusionPromptStale), fusion_prompt_stale_reason: linkedAsset?.fusionPromptStaleReason || null, fusion_plan: linkedAsset?.fusionPlan || node.config.fusion_plan || {}, fusion_slot: linkedAsset?.fusionSlot ?? node.config.fusion_slot, fusion_slot_id: (linkedAsset?.fusionPlan as Record<string, any> | undefined)?.fusion_slot_id || node.config.fusion_slot_id, fusion_shot_id: (linkedAsset?.fusionPlan as Record<string, any> | undefined)?.shot_id || node.config.fusion_shot_id, fusion_source_asset_ids: linkedAsset?.fusionSourceAssetIds || node.config.fusion_source_asset_ids || [], fusion_source_statuses: linkedAsset?.fusionSourceStatuses || node.config.fusion_source_statuses || [], fusion_gate_allowed: linkedAsset?.fusionPromptGenerationAllowed ?? node.config.fusion_gate_allowed, fusion_gate_reason: linkedAsset?.fusionPromptBlockedReason || node.config.fusion_gate_reason, grid_row_key: row, grid_column_key: columnForNode(node), shot_scope: rows } };
       presentation.push({ id, type: 'asset-board', position, selected: Boolean(options.selectedSelectionKey && assetBoardSelectionKey(data) === options.selectedSelectionKey), hidden: !visibleByNode(node) || hiddenByShot || hiddenByAsset, draggable: !assetBoardCardIsLocked(node) && node.node_type !== 'shot', selectable: node.node_type !== 'shot', style: { width: nodeWidthFor(node), zIndex: node.node_type === 'artifact' ? 2 : 3, opacity: node.node_type === 'shot' ? 0 : 1, pointerEvents: node.node_type === 'shot' ? 'none' : 'auto' }, data });
     });
   }
@@ -816,28 +844,51 @@ export function assetBoardToFlowEdges(board: AssetBoard, nodes: AssetFlowNode[])
 
 function assetBoardFromFlow(board: AssetBoard, nodes: AssetFlowNode[], edges: Edge[]): AssetBoard {
   const flowEdgeFor = (edgeId: string) => edges.some((edge) => edge.id === edgeId || edge.id.startsWith(`${edgeId}:`));
+  const persistedNodeMap = new Map<string, AssetBoardNode>();
+  for (const node of nodes.filter((candidate) => !candidate.data.presentationOnly && candidate.data.node_type !== 'row' && candidate.data.node_type !== 'table')) {
+    const { onToggleScope, onContextMenu, onApprovePrompt, onGenerateImage, onGeneratePrompt, onGenerateFusionPrompt, onCopyPrompt, onColumnResize, onOpenAssetProduction, collapsed, presentationOnly, sourceNodeId, ...persistedData } = node.data;
+    void onToggleScope; void onContextMenu; void onApprovePrompt; void onGenerateImage; void onGeneratePrompt; void onGenerateFusionPrompt; void onCopyPrompt; void onColumnResize; void onOpenAssetProduction; void collapsed; void presentationOnly; void sourceNodeId;
+    const config = assetBoardCardIsLocked(node.data)
+      ? Object.fromEntries(Object.entries(persistedData.config || {}).filter(([key]) => key !== 'position_source'))
+      : persistedData.config;
+    const persistedNode = { ...persistedData, config, node_type: node.data.node_type as AssetBoardNode['node_type'], position: { x: node.position.x, y: node.position.y } };
+    persistedNodeMap.set(String(persistedNode.id), persistedNode);
+  }
   // shot_dependency is a semantic relation, not a visual edge. Keep it even
   // when its presentation edge is intentionally omitted from React Flow.
   // The asset -> own Prompt-card candidate relation is intentionally hidden
   // in the UI, but keep it in the persisted board for backward compatibility.
-  const persistedEdges = board.edges.filter((edge) => edge.relation === 'shot_dependency' || edge.relation === 'candidate' || flowEdgeFor(edge.id));
+  const candidatePersistedEdges = board.edges.filter((edge) => edge.relation === 'shot_dependency' || edge.relation === 'candidate' || flowEdgeFor(edge.id));
+  // A server response can replace the board envelope while React is still
+  // committing the corresponding flow nodes/edges. Keep the last known
+  // non-artifact node as a short-lived fallback for semantic edges, then
+  // discard any edge that still has no valid endpoint. This turns a transient
+  // mixed snapshot into a valid save payload instead of a 422 response.
+  const fallbackNodes = new Map(board.nodes.filter((node) => !['row', 'table', 'artifact'].includes(String(node.node_type))).map((node) => [String(node.id), node]));
+  for (const edge of candidatePersistedEdges) {
+    for (const endpoint of [edge.source, edge.target]) {
+      const endpointId = String(endpoint);
+      if (!persistedNodeMap.has(endpointId)) {
+        const fallback = fallbackNodes.get(endpointId);
+        if (fallback) persistedNodeMap.set(endpointId, fallback);
+      }
+    }
+  }
+  const persistedNodeIds = new Set([...persistedNodeMap.keys()]);
+  const persistedEdges = candidatePersistedEdges.filter((edge) => persistedNodeIds.has(String(edge.source)) && persistedNodeIds.has(String(edge.target)) && String(edge.source) !== String(edge.target));
   const newEdges = edges.filter((edge) => !board.edges.some((candidate) => edge.id === candidate.id || edge.id.startsWith(`${candidate.id}:`))).map((edge) => {
     const sourceNode = nodes.find((node) => node.id === edge.source);
     const targetNode = nodes.find((node) => node.id === edge.target);
     if (!sourceNode || !targetNode || sourceNode.data.node_type === 'row' || targetNode.data.node_type === 'row' || sourceNode.data.node_type === 'table' || targetNode.data.node_type === 'table') return null;
-    return { id: edge.id, source: sourceNode.data.sourceNodeId || sourceNode.id, target: targetNode.data.sourceNodeId || targetNode.id, relation: (edge.data?.relation as AssetBoardEdgeRelation) || 'reference' };
+    const source = String(sourceNode.data.sourceNodeId || sourceNode.id);
+    const target = String(targetNode.data.sourceNodeId || targetNode.id);
+    if (!persistedNodeIds.has(source) || !persistedNodeIds.has(target) || source === target) return null;
+    return { id: edge.id, source, target, relation: (edge.data?.relation as AssetBoardEdgeRelation) || 'reference' };
   }).filter((edge): edge is { id: string; source: string; target: string; relation: AssetBoardEdgeRelation } => Boolean(edge));
   return {
     ...board,
     metadata: { ...board.metadata, layout_mode: 'shot_asset_table_v8', layout_preset: board.metadata.layout_preset || 'standard' },
-    nodes: nodes.filter((node) => !node.data.presentationOnly && node.data.node_type !== 'row').map((node) => {
-      const { onToggleScope, onContextMenu, onApprovePrompt, onGenerateImage, onGeneratePrompt, onGenerateFusionPrompt, onCopyPrompt, onColumnResize, onOpenAssetProduction, collapsed, presentationOnly, sourceNodeId, ...persistedData } = node.data;
-      void onToggleScope; void onContextMenu; void onApprovePrompt; void onGenerateImage; void onGeneratePrompt; void onGenerateFusionPrompt; void onCopyPrompt; void onColumnResize; void onOpenAssetProduction; void collapsed; void presentationOnly; void sourceNodeId;
-      const config = assetBoardCardIsLocked(node.data)
-        ? Object.fromEntries(Object.entries(persistedData.config || {}).filter(([key]) => key !== 'position_source'))
-        : persistedData.config;
-      return { ...persistedData, config, node_type: node.data.node_type as AssetBoardNode['node_type'], position: { x: node.position.x, y: node.position.y } };
-    }),
+    nodes: [...persistedNodeMap.values()],
     edges: [...persistedEdges, ...newEdges].filter((edge, index, all) => all.findIndex((candidate) => candidate.source === edge.source && candidate.target === edge.target && candidate.relation === edge.relation) === index),
   };
 }
@@ -1053,7 +1104,7 @@ function PromptDetailsPanel({ asset, promptPack, promptQuality }: { asset: Libra
   </details>;
 }
 
-function AssetProductionPanel({ asset, story, fusionSources, busy, projectRevision, assetBoardDirty, promptDraft, promptPackDraft, promptQualityDraft, selectedCardType, onSave, onHandoff, onImport, onStartQa, onApprove, onRegister, onApprovePromptCard, onGenerateImageCard, onGeneratePrompt, onGenerateFusionPrompt, onManualProductionApproval }: { asset?: LibraryAsset; story: StoryEnvelope | null; fusionSources: LibraryAsset[]; busy: boolean; projectRevision?: number; assetBoardDirty: boolean; promptDraft?: string; promptPackDraft?: Record<string, unknown>; promptQualityDraft?: LibraryAsset['promptQuality']; selectedCardType?: 'asset' | 'handoff' | 'artifact'; onSave: (assetId: string, body: Record<string, unknown>) => void; onHandoff: (asset: LibraryAsset, prompt: string) => void; onImport: (asset: LibraryAsset, file: File) => void; onStartQa: (artifactId: string, qaType?: AssetQaType) => void; onApprove: (artifactId: string) => void; onRegister: (artifactId: string) => void; onApprovePromptCard: (assetId: string) => void; onGenerateImageCard: (assetId: string) => void; onGeneratePrompt?: (assetId: string) => void; onGenerateFusionPrompt: (assetId: string, sourceAssetIds: string[], shotId: string) => void; onManualProductionApproval?: (assetId: string, approved: boolean, reason: string, artifactId: string) => void }) {
+function AssetProductionPanel({ asset, story, fusionSources, busy, projectRevision, assetBoardDirty, promptDraft, promptPackDraft, promptQualityDraft, selectedCardType, onSave, onHandoff, onImport, onStartQa, onApprove, onRegister, onApprovePromptCard, onGenerateImageCard, onGeneratePrompt, onGenerateFusionPrompt, onManualProductionApproval, onDraftChange }: { asset?: LibraryAsset; story: StoryEnvelope | null; fusionSources: LibraryAsset[]; busy: boolean; projectRevision?: number; assetBoardDirty: boolean; promptDraft?: string; promptPackDraft?: Record<string, unknown>; promptQualityDraft?: LibraryAsset['promptQuality']; selectedCardType?: 'asset' | 'handoff' | 'artifact'; onSave: (assetId: string, body: Record<string, unknown>) => void; onHandoff: (asset: LibraryAsset, prompt: string) => void; onImport: (asset: LibraryAsset, file: File) => void; onStartQa: (artifactId: string, qaType?: AssetQaType) => void; onApprove: (artifactId: string) => void; onRegister: (artifactId: string) => void; onApprovePromptCard: (assetId: string) => void; onGenerateImageCard: (assetId: string) => void; onGeneratePrompt?: (assetId: string) => void; onGenerateFusionPrompt: (assetId: string, sourceAssetIds: string[], shotId: string) => void; onManualProductionApproval?: (assetId: string, approved: boolean, reason: string, artifactId: string) => void; onDraftChange?: (assetId: string, draft: AssetEditorDraft) => void }) {
   const [prompt, setPrompt] = useState('');
   const [assetSpec, setAssetSpec] = useState('{}');
   const [anchors, setAnchors] = useState('{}');
@@ -1061,14 +1112,36 @@ function AssetProductionPanel({ asset, story, fusionSources, busy, projectRevisi
   const [mustAvoid, setMustAvoid] = useState('');
   const [jsonError, setJsonError] = useState('');
   const [manualApprovalReason, setManualApprovalReason] = useState('');
+  const pendingHydrationDraftRef = useRef<string | null>(null);
   useEffect(() => {
     if (!asset) return;
-     setPrompt(promptDraft !== undefined ? promptDraft : String(asset.prompt || ''));
-    setAssetSpec(JSON.stringify(asset.assetSpec || asset.assetMetadata?.asset_spec || {}, null, 2));
-    setAnchors(JSON.stringify(asset.identityAnchors || asset.assetMetadata?.identity_anchors || {}, null, 2));
-    setMustPreserve((asset.mustPreserve || asset.assetMetadata?.must_preserve || []).join('\n'));
-    setMustAvoid((asset.mustAvoid || asset.assetMetadata?.must_avoid || []).join('\n'));
+    const metadata = asset.assetMetadata || {};
+    const nestedMetadata = metadata.metadata && typeof metadata.metadata === 'object' ? metadata.metadata as Record<string, unknown> : {};
+    const stored = metadata.asset_editor_draft && typeof metadata.asset_editor_draft === 'object' ? metadata.asset_editor_draft as Record<string, unknown> : nestedMetadata.asset_editor_draft && typeof nestedMetadata.asset_editor_draft === 'object' ? nestedMetadata.asset_editor_draft as Record<string, unknown> : {};
+    const nextDraft: AssetEditorDraft = {
+      prompt: promptDraft !== undefined ? promptDraft : typeof stored.prompt === 'string' ? stored.prompt : String(asset.prompt || ''),
+      assetSpec: typeof stored.assetSpec === 'string' ? stored.assetSpec : JSON.stringify(asset.assetSpec || metadata.asset_spec || {}, null, 2),
+      anchors: typeof stored.anchors === 'string' ? stored.anchors : JSON.stringify(asset.identityAnchors || metadata.identity_anchors || {}, null, 2),
+      mustPreserve: typeof stored.mustPreserve === 'string' ? stored.mustPreserve : (asset.mustPreserve || metadata.must_preserve || []).join('\n'),
+      mustAvoid: typeof stored.mustAvoid === 'string' ? stored.mustAvoid : (asset.mustAvoid || metadata.must_avoid || []).join('\n'),
+    };
+    pendingHydrationDraftRef.current = JSON.stringify(nextDraft);
+    setPrompt(nextDraft.prompt);
+    setAssetSpec(nextDraft.assetSpec);
+    setAnchors(nextDraft.anchors);
+    setMustPreserve(nextDraft.mustPreserve);
+    setMustAvoid(nextDraft.mustAvoid);
   }, [asset?.id, promptDraft]);
+  useEffect(() => {
+    if (!asset || !onDraftChange) return;
+    const draft: AssetEditorDraft = { prompt, assetSpec, anchors, mustPreserve, mustAvoid };
+    const serialized = JSON.stringify(draft);
+    if (pendingHydrationDraftRef.current !== null) {
+      if (pendingHydrationDraftRef.current === serialized) pendingHydrationDraftRef.current = null;
+      return;
+    }
+    onDraftChange(asset.id, draft);
+  }, [anchors, asset?.id, assetSpec, mustAvoid, mustPreserve, onDraftChange, prompt]);
   if (!asset) return <section className="asset-production-empty"><span>ASSET PRODUCTION</span><h2>选择一个资产开始制作</h2><p>从画布中选择角色、场景、道具或融合节点。这里会生成 Prompt、管理参考图和候选版本。</p></section>;
   const shotLabels = (asset.dependencies || []).map((item) => item.shot_id).filter(Boolean).join('、');
   const artifacts = Array.isArray(asset.artifacts) ? asset.artifacts as any[] : [];
@@ -1085,7 +1158,13 @@ function AssetProductionPanel({ asset, story, fusionSources, busy, projectRevisi
   const fusionBlockedSources = fusionSources.filter((source) => source.readiness?.production_ready !== true && source.production_ready !== true);
   const fusionSlot = Boolean(asset.fusionSlot || asset.assetMetadata?.fusion_slot || asset.assetMetadata?.fusionSlot);
   const fusionGateAllowed = typeof asset.fusionPromptGenerationAllowed === 'boolean' ? asset.fusionPromptGenerationAllowed : fusionSources.length >= 2 && fusionBlockedSources.length === 0;
-  const fusionCanGenerate = isFusion && fusionSources.length >= 2 && fusionBlockedSources.length === 0 && fusionGateAllowed && Boolean(fusionShotId);
+  const prerequisiteGateAllowed = asset.prerequisiteGate?.allowed !== false;
+  const prerequisiteBlockedReason = String(asset.prerequisiteGate?.reason || '前置资产尚未完成审核');
+  const prerequisiteItems = Array.isArray(asset.prerequisiteGate?.items) ? asset.prerequisiteGate.items : [];
+  const prerequisiteAssetSummary = prerequisiteItems.map((item: Record<string, any>) => String(item.name || item.asset_id || '前置资产')).join('、');
+  const prerequisiteBlockedDependencies = prerequisiteItems.filter((item: Record<string, any>) => item.production_ready !== true);
+  const prerequisiteIncompleteSummary = prerequisiteBlockedDependencies.map((item: Record<string, any>) => `${String(item.name || item.asset_id || '前置资产')}（${String(item.next_action || '完成审核')}）`).join('；');
+  const fusionCanGenerate = isFusion && prerequisiteGateAllowed && fusionSources.length >= 2 && fusionBlockedSources.length === 0 && fusionGateAllowed && Boolean(fusionShotId);
   const save = () => {
     try {
       const parsedSpec = parseObjectText(assetSpec);
@@ -1096,8 +1175,8 @@ function AssetProductionPanel({ asset, story, fusionSources, busy, projectRevisi
   };
   const selectionContextLabel = selectedCardType === 'handoff' ? 'Prompt / 图片卡' : selectedCardType === 'artifact' ? '候选版本卡' : '资产卡';
   return <section className="asset-production-panel">
-    <header><span>{selectionContextLabel} · {assetClassLabels[asset.assetClass] || asset.assetClass} · {asset.id}</span><h2>{asset.name || asset.id}</h2><p>{assetBoardStatusLabel(asset.readiness.status)} · 等级 {asset.grade || 'B'}{shotLabels ? ` · 镜头 ${shotLabels}` : ''}{isFusion && asset.fusionPromptStale ? ' · 融合输入已变化' : ''}</p>{asset.assetClass === 'character' && <div className="character-reference-plan-note"><strong>首轮角色参考图 · 1 张</strong><span>一张合成图包含面部 / 上半身特写 + 正面、侧面、背面全身结构视图。融合效果不理想时，再按需追加镜头化图片。</span></div>}{asset.prompt && (!isFusion || fusionPromptReady) && <div className="asset-prompt-gate"><span>Prompt QA：{String(asset.promptQaDecision || 'Pending')} · 图像：{String(asset.generationStatus || 'planned')}</span><div>{asset.promptQaDecision !== 'Approved' && <button onClick={() => onApprovePromptCard(asset.id)} disabled={busy}>通过 Prompt QA</button>}{asset.promptQaDecision === 'Approved' && asset.imageGenerationEligible !== false && asset.generationStatus !== 'generated-pending-qa' && <button className="asset-prompt-gate-primary" onClick={() => onGenerateImageCard(asset.id)} disabled={busy}>{asset.assetClass === 'character' ? '确认并生成角色结构参考图' : '确认并生成图像'}</button>}</div></div>}{asset.readiness.registered_ready && !asset.readiness.production_ready && <div className="manual-production-gate"><strong>已登记资产可人工确认</strong><small>仅豁免 Prompt / Prompt QA，当前登记文件、图片 QA、授权与融合门仍然有效。</small><textarea value={manualApprovalReason} onChange={(event) => setManualApprovalReason(event.target.value)} placeholder="填写人工审核原因" rows={2} /><button onClick={() => onManualProductionApproval?.(asset.id, true, manualApprovalReason.trim(), currentFileId)} disabled={busy || !manualApprovalReason.trim() || !currentArtifactId || !onManualProductionApproval}>人工通过可入镜</button></div>}{manualApprovalActive && <div className="manual-production-active"><span>当前登记文件已人工通过可入镜</span><button onClick={() => onManualProductionApproval?.(asset.id, false, '撤销人工通过', currentFileId)} disabled={busy || !onManualProductionApproval}>撤销人工通过</button></div>}</header>
-     <div className="asset-production-actions"><button onClick={save} disabled={busy}>保存 Prompt / 规格</button>{!isFusion && <button className="asset-ai-prompt-button" onClick={() => onGeneratePrompt?.(asset.id)} disabled={busy || !onGeneratePrompt}>AI 编写 Prompt</button>}<button className="asset-chatgpt-button" onClick={() => onHandoff({ ...asset, promptPack: promptPackDraft || asset.promptPack }, prompt)} disabled={busy || !prompt.trim() || (isFusion && !fusionPromptReady)}>{isFusion && !fusionPromptReady ? '历史融合 Prompt 不可执行' : '复制 Prompt 并打开 ChatGPT'}</button></div>
+    <header><span>{selectionContextLabel} · {assetClassLabels[asset.assetClass] || asset.assetClass} · {asset.id}</span><h2>{asset.name || asset.id}</h2><p>{assetBoardStatusLabel(asset.readiness.status)} · 等级 {asset.grade || 'B'}{shotLabels ? ` · 镜头 ${shotLabels}` : ''}{isFusion && asset.fusionPromptStale ? ' · 融合输入已变化' : ''}</p>{asset.assetClass === 'character' && <div className="character-reference-plan-note"><strong>首轮角色参考图 · 1 张</strong><span>一张合成图包含面部 / 上半身特写 + 正面、侧面、背面全身视图。融合效果不理想时，再按需追加镜头化图片。</span></div>}{prerequisiteItems.length > 0 && <div className={`asset-prerequisite-panel-summary ${prerequisiteGateAllowed ? 'ready' : 'blocked'}`} role="status"><strong>生成所需前置资产</strong><span>前置资产：{prerequisiteAssetSummary}</span><small>{prerequisiteIncompleteSummary ? `当前未完成：${prerequisiteIncompleteSummary}` : '当前：全部完成，可进入生产'}</small>{!prerequisiteGateAllowed && <small>Prompt 仍可查看、编辑和复制；上传候选、图片生成、媒体 QA 与登记会在前置资产完成后开放。</small>}</div>}{!prerequisiteGateAllowed && prerequisiteItems.length === 0 && <div className="asset-prerequisite-panel-warning" role="status"><strong>前置资产未完成</strong><span>{prerequisiteBlockedReason}</span></div>}{asset.prompt && (!isFusion || fusionPromptReady) && <div className="asset-prompt-gate"><span>Prompt QA：{String(asset.promptQaDecision || 'Pending')} · 图像：{String(asset.generationStatus || 'planned')}</span><div>{asset.promptQaDecision !== 'Approved' && <button onClick={() => onApprovePromptCard(asset.id)} disabled={busy}>通过 Prompt QA</button>}{asset.promptQaDecision === 'Approved' && asset.imageGenerationEligible !== false && asset.generationStatus !== 'generated-pending-qa' && <button className="asset-prompt-gate-primary" onClick={() => onGenerateImageCard(asset.id)} disabled={busy || !prerequisiteGateAllowed}>{asset.assetClass === 'character' ? '确认并生成角色结构参考图' : '确认并生成图像'}</button>}</div></div>}{asset.readiness.registered_ready && !asset.readiness.production_ready && <div className="manual-production-gate"><strong>已登记资产可人工确认</strong><small>仅豁免 Prompt / Prompt QA，当前登记文件、图片 QA、授权与融合门仍然有效。</small><textarea value={manualApprovalReason} onChange={(event) => setManualApprovalReason(event.target.value)} placeholder="填写人工审核原因" rows={2} /><button onClick={() => onManualProductionApproval?.(asset.id, true, manualApprovalReason.trim(), currentFileId)} disabled={busy || !manualApprovalReason.trim() || !currentArtifactId || !onManualProductionApproval}>人工通过可入镜</button></div>}{manualApprovalActive && <div className="manual-production-active"><span>当前登记文件已人工通过可入镜</span><button onClick={() => onManualProductionApproval?.(asset.id, false, '撤销人工通过', currentFileId)} disabled={busy || !onManualProductionApproval}>撤销人工通过</button></div>}</header>
+     <div className="asset-production-actions"><button onClick={save} disabled={busy}>保存 Prompt / 规格</button>{!isFusion && <button className="asset-ai-prompt-button" onClick={() => onGeneratePrompt?.(asset.id)} disabled={busy || !onGeneratePrompt}>AI 编写 Prompt</button>}<button className="asset-chatgpt-button" onClick={() => onHandoff({ ...asset, promptPack: promptPackDraft || asset.promptPack }, prompt)} disabled={busy || !prompt.trim() || (isFusion && !fusionPromptReady)}>{isFusion && !fusionPromptReady ? '历史融合 Prompt 不可执行' : '复制 Prompt'}</button></div>
     {isFusion && <section className="fusion-inputs-panel"><div><span>FUSION WORKFLOW</span><h3>{fusionPromptReady ? '正式融合 Prompt' : '等待基础资产就绪'}</h3><p>{String(asset.fusionPromptBlockedReason || asset.fusionPlan?.shot_intent || '系统已根据当前分镜自动关联角色、场景和道具；前置资产全部成为正式资产后才能生成融合 Prompt。')}</p></div><div className="fusion-plan-summary"><span>目标镜头：{fusionShotId || '未绑定'}</span><span>规划状态：{fusionPromptReady ? (asset.fusionPromptStale ? '输入已变化 · 待重新融合' : '已生成正式 Prompt') : fusionSlot ? '自动关联 · 等待前置资产' : '等待基础资产就绪'}</span></div><div className="fusion-input-list">{fusionSources.length ? fusionSources.map((source) => <span key={source.id} className={source.readiness?.production_ready === true || source.production_ready === true ? 'ready' : 'blocked'}>{assetClassLabels[source.assetClass] || source.assetClass} · {source.name || source.id}{source.readiness?.production_ready === true || source.production_ready === true ? ' · 已就绪' : ` · ${source.readiness?.next_action || '未就绪'}`}</span>) : <small>系统尚未从当前分镜解析到可融合的基础资产，请先完成对应分镜资产需求。</small>}</div>{assetBoardDirty && <p className="fusion-connection-warning">当前工作区布局尚未保存；点击生成时会先保存最新工作区状态。</p>}{fusionBlockedSources.length > 0 && <p className="fusion-connection-warning">存在未达到 production_ready 的输入资产：{fusionBlockedSources.map((source) => source.name || source.id).join('、')}</p>}{!fusionGateAllowed && asset.fusionPromptBlockedReason && <p className="fusion-connection-warning">{asset.fusionPromptBlockedReason}</p>}{!fusionShotId && <p className="fusion-connection-warning">该融合资产尚未绑定有效镜头。</p>}<div className="fusion-input-actions"><button className="fusion-compose-button" onClick={() => setPrompt(composeFusionPrompt(asset, fusionSources, story))} disabled={busy || fusionSources.length < 2}>预览融合输入</button><button className="fusion-compose-button fusion-ai-button" onClick={() => onGenerateFusionPrompt(asset.id, fusionSourceIds, fusionShotId)} disabled={busy || !fusionCanGenerate}>生成融合 Prompt（AI）</button></div></section>}
     <label>Prompt<textarea data-asset-production-prompt value={prompt} readOnly={isFusion} onChange={(event) => setPrompt(event.target.value)} placeholder="描述这个资产的身份、结构、材质、镜头用途和视觉要求…" /></label>
     <PromptDetailsPanel asset={asset} promptPack={promptPackDraft} promptQuality={promptQualityDraft} />
@@ -1105,8 +1184,8 @@ function AssetProductionPanel({ asset, story, fusionSources, busy, projectRevisi
     <label>资产生产规格 JSON<textarea className={jsonError ? 'invalid' : ''} value={assetSpec} onChange={(event) => { setAssetSpec(event.target.value); setJsonError(''); }} spellCheck={false} /></label>
     <label>身份/结构锚点 JSON<textarea className={jsonError ? 'invalid' : ''} value={anchors} onChange={(event) => { setAnchors(event.target.value); setJsonError(''); }} spellCheck={false} /></label>
     <div className="asset-production-two-col"><label>必须保留<textarea value={mustPreserve} onChange={(event) => setMustPreserve(event.target.value)} placeholder="每行一条" /></label><label>必须避免<textarea value={mustAvoid} onChange={(event) => setMustAvoid(event.target.value)} placeholder="每行一条" /></label></div>
-    <div className="asset-drop-zone" data-asset-production-upload onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); const file = event.dataTransfer.files[0]; if (file) onImport(asset, file); }}><strong>拖入候选图片、视频或声音</strong><span>服务端会按媒体类型进入图片 QA、视频 QA、声音 QA 或参考审核，不会覆盖当前版本。</span><label className="asset-file-button">选择候选媒体<input type="file" accept="image/png,image/jpeg,image/webp,video/mp4,video/webm,video/quicktime,audio/wav,audio/mpeg,audio/mp4,audio/x-m4a" onChange={(event) => { const file = event.target.files?.[0]; if (file) onImport(asset, file); event.currentTarget.value = ''; }} /></label></div>
-    <section className="asset-current-file"><h3>当前选中文件</h3>{currentFileUrl ? <div className="asset-current-file-card"><div><strong>{currentFileId}</strong><span>{currentArtifact?.source_type || currentArtifact?.source || '当前登记文件'} · {assetBoardStatusLabel(String(currentArtifact?.status || asset.readiness.status || 'ready'))}</span></div><a href={currentFileUrl} target="_blank" rel="noreferrer">预览文件</a></div> : <p>当前资产尚无登记文件。候选文件不会在这里批量展开。</p>}{currentArtifact && <div className="asset-current-file-actions">{['generated_pending_qa', 'reference_pending_review', 'audit_blocked'].includes(String(currentArtifact.status)) && <button onClick={() => onStartQa(String(currentArtifact.id), String(currentArtifact.metadata?.qa_type || (String(currentArtifact.mime_type || '').startsWith('video/') ? 'video' : asset.workflow?.kind === 'reference' ? 'reference' : 'image')) as AssetQaType)} disabled={busy}>开始媒体 QA</button>}{currentArtifact.status === 'qa_in_progress' && <button onClick={() => onApprove(String(currentArtifact.id))} disabled={busy}>打开 QA / 审核</button>}{currentArtifact.status === 'approved_pending_registration' && <button onClick={() => onRegister(String(currentArtifact.id))} disabled={busy}>登记当前文件</button>}{currentArtifact.status === 'reference' && <span className="asset-reference-chip">已通过参考审核 · 不可入镜</span>}</div>}</section>
+    {prerequisiteGateAllowed ? <div className="asset-drop-zone" data-asset-production-upload onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); const file = event.dataTransfer.files[0]; if (file) onImport(asset, file); }}><strong>拖入候选图片、视频或声音</strong><span>服务端会按媒体类型进入图片 QA、视频 QA、声音 QA 或参考审核，不会覆盖当前版本。</span><label className="asset-file-button">选择候选媒体<input type="file" accept="image/png,image/jpeg,image/webp,video/mp4,video/webm,video/quicktime,audio/wav,audio/mpeg,audio/mp4,audio/x-m4a" onChange={(event) => { const file = event.target.files?.[0]; if (file) onImport(asset, file); event.currentTarget.value = ''; }} /></label></div> : <div className="asset-prerequisite-upload-locked"><strong>等待前置资产完成后上传候选</strong><span>{prerequisiteBlockedReason}</span></div>}
+    <section className="asset-current-file"><h3>当前选中文件</h3>{currentFileUrl ? <div className="asset-current-file-card"><div><strong>{currentFileId}</strong><span>{currentArtifact?.source_type || currentArtifact?.source || '当前登记文件'} · {assetBoardStatusLabel(String(currentArtifact?.status || asset.readiness.status || 'ready'))}</span></div><a href={currentFileUrl} target="_blank" rel="noreferrer">预览文件</a></div> : <p>当前资产尚无登记文件。候选文件不会在这里批量展开。</p>}{currentArtifact && <div className="asset-current-file-actions">{['generated_pending_qa', 'reference_pending_review', 'audit_blocked'].includes(String(currentArtifact.status)) && <button onClick={() => onStartQa(String(currentArtifact.id), String(currentArtifact.metadata?.qa_type || (String(currentArtifact.mime_type || '').startsWith('video/') ? 'video' : asset.workflow?.kind === 'reference' ? 'reference' : 'image')) as AssetQaType)} disabled={busy || !prerequisiteGateAllowed}>开始媒体 QA</button>}{currentArtifact.status === 'qa_in_progress' && <button onClick={() => onApprove(String(currentArtifact.id))} disabled={busy || !prerequisiteGateAllowed}>打开 QA / 审核</button>}{currentArtifact.status === 'approved_pending_registration' && <button onClick={() => onRegister(String(currentArtifact.id))} disabled={busy || !prerequisiteGateAllowed}>登记当前文件</button>}{currentArtifact.status === 'reference' && <span className="asset-reference-chip">已通过参考审核 · 不可入镜</span>}</div>}</section>
   </section>;
 }
 
@@ -1134,7 +1213,7 @@ function AgentPanel({ project, graph, selectedNodeIds, plan, busy, onCreate, onA
 type AssistantChatMessage = { id: string; role: 'user' | 'assistant' | 'system'; content: string };
 
 function assistantModeLabel(mode: StudioMode): string {
-  return ({ home: '项目总览', story: '故事与分镜', canvas: '资产生产工作区', timeline: '后期时间线', audio: '声音工作区', assets: '统一资产库', settings: '设置与 Provider' })[mode];
+  return ({ home: '项目总览', story: '故事与分镜', canvas: '资产生产工作区', timeline: '后期时间线', audio: '声音工作区', settings: '设置与 Provider' })[mode];
 }
 
 function assistantPolicyLabel(policy?: string): string {
@@ -1242,7 +1321,7 @@ function AssistantDrawer({ open, project, mode, graph, story, assetLibrary, audi
           <div className="assistant-card-label"><span>已读取工作上下文</span><button onClick={() => setContextOpen((value) => !value)}>{contextOpen ? '收起' : '查看范围'}</button></div>
           <div className="assistant-context-project"><span className="assistant-project-dot" /><div><strong>{project?.document.name || '尚未选择项目'}</strong><small>{assistantModeLabel(mode)} · 项目 v{project?.revision || 0}</small></div><b>{project ? 'LIVE' : '—'}</b></div>
           <div className="assistant-context-chips"><span>流程图 v{graph?.revision || 0}</span><span>故事 v{story?.revision || 0}</span><span>资产 {assetLibrary?.summary.total || 0}</span><span>声音 v{audioStudio?.revision || 0}</span><span>时间线 v{timeline?.revision || 0}</span>{selectedNodeIds.length > 0 && <span>选中 {selectedNodeIds.length} 节点</span>}</div>
-          {contextOpen && <div className="assistant-context-detail"><p>读取：项目规格、故事与分镜、统一资产库、声音资产工坊、资产画布、后期时间线、工作流图和版本号。</p><p>当前选区：{selectedNodeIds.length ? `${selectedNodeIds.length} 个工作流节点` : '未选择工作流节点'}{selectedEdgeIds.length ? ` · ${selectedEdgeIds.length} 条连接` : ''}。</p><p>未保存状态：{[dirty && '流程图', storyDirty && '故事', assetBoardDirty && '资产画布', audioDirty && '声音', timelineDirty && '时间线'].filter(Boolean).join('、') || '无'}。</p></div>}
+          {contextOpen && <div className="assistant-context-detail"><p>读取：项目规格、故事与分镜、资产数据、声音资产工坊、资产生产画布、后期时间线、工作流图和版本号。</p><p>当前选区：{selectedNodeIds.length ? `${selectedNodeIds.length} 个工作流节点` : '未选择工作流节点'}{selectedEdgeIds.length ? ` · ${selectedEdgeIds.length} 条连接` : ''}。</p><p>未保存状态：{[dirty && '流程图', storyDirty && '故事', assetBoardDirty && '资产画布', audioDirty && '声音', timelineDirty && '时间线'].filter(Boolean).join('、') || '无'}。</p></div>}
         </section>
 
         <section className="assistant-quick-prompts"><div className="assistant-card-label"><span>快速开始</span><small>点击即可发送</small></div><div>{quickPrompts.map((item) => <button key={item.label} onClick={() => { void submit(item.value); }} disabled={busy || !project}>{item.label}<span>→</span></button>)}</div></section>
@@ -1466,7 +1545,7 @@ function HomeView({ dashboard, error, currentProjectId, busy, onSelectProject, o
     <section className="home-project-strip"><div className="home-section-heading"><div><small>ALL PROJECTS</small><h2>我的项目</h2></div><span>{dashboard.projects.length} 个项目</span></div><div className="home-project-grid">{dashboard.projects.map((item) => <ProjectHomeCard key={item.project_id} item={item} current={item.project_id === currentProjectId} onSelect={() => onSelectProject(item.project_id)} />)}</div></section>
     {selected ? <>
       <section className="home-hero"><div className="home-hero-copy"><div className="home-project-title-line"><HomeStatusBadge status={selected.project.status} /><span>当前项目</span></div><h2>{selected.project.name}</h2><p>{selected.project.next_task?.reason || '当前项目的制作状态已同步。'}</p><div className="home-hero-specs"><span>{selected.project.ratio || '画幅未定'}</span><span>{selected.project.duration ? `${selected.project.duration}s` : '时长未定'}</span><span>{selected.project.generator || '模型未定'}</span><span>{selected.project.current_stage_label || '未开始'}</span></div></div><div className="home-hero-progress"><strong>{selected.project.progress.percent}<small>%</small></strong><span>生产进度</span><div><b style={{ width: `${selected.project.progress.percent}%` }} /></div></div></section>
-      <section className="home-primary-grid"><div className="home-primary-action"><div className="home-section-heading"><div><small>PRIMARY NEXT STEP</small><h2>现在该做什么</h2></div><span>系统按阻塞和审批优先级排序</span></div>{selected.primary_next_task ? <HomeTaskRow task={selected.primary_next_task} primary onOpen={() => onOpenTask(selected.primary_next_task as DashboardTask)} /> : <div className="home-all-done"><strong>项目已完成</strong><span>所有阶段都已通过，可以进入交付复盘。</span></div>}</div><div className="home-activity"><div className="home-section-heading"><div><small>RECENT ACTIVITY</small><h2>最近活动</h2></div></div><div className="home-activity-list">{selected.recent_activity.length ? selected.recent_activity.slice(0, 4).map((activity) => <div className="home-activity-row" key={activity.id}><HomeStatusBadge status={activity.status} /><span>{activity.label}</span><small>{activity.created_at ? new Date(activity.created_at).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '刚刚'}</small></div>) : <p className="home-empty-inline">暂无运行记录。</p>}</div></div></section>
+      <section className="home-primary-grid"><div className="home-primary-action"><div className="home-section-heading"><div><small>PRIMARY NEXT STEP</small><h2>现在该做什么</h2></div><span>系统按阻塞和审批优先级排序</span></div>{selected.primary_next_task ? <HomeTaskRow task={selected.primary_next_task} primary onOpen={() => onOpenTask(selected.primary_next_task as DashboardTask)} /> : selected.project.status === 'completed' && selected.project.progress.percent >= 100 ? <div className="home-all-done"><strong>项目已完成</strong><span>所有阶段都已通过，可以进入交付复盘。</span></div> : <div className="home-no-task"><strong>当前阶段尚未完成</strong><span>{selected.project.current_stage_label || '请打开流程详情'} · {selected.project.progress.percent}% · 系统暂未生成可执行任务，请刷新或进入对应阶段检查。</span><button type="button" onClick={onRefresh} disabled={busy}>刷新任务状态</button></div>}</div><div className="home-activity"><div className="home-section-heading"><div><small>RECENT ACTIVITY</small><h2>最近活动</h2></div></div><div className="home-activity-list">{selected.recent_activity.length ? selected.recent_activity.slice(0, 4).map((activity) => <div className="home-activity-row" key={activity.id}><HomeStatusBadge status={activity.status} /><span>{activity.label}</span><small>{activity.created_at ? new Date(activity.created_at).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '刚刚'}</small></div>) : <p className="home-empty-inline">暂无运行记录。</p>}</div></div></section>
       <section className="home-metrics-grid"><MetricCard label="内容状态" value={`${metrics?.content.shot_count || 0} 镜头`} detail={`脚本 ${metrics?.content.script_length || 0} 字 · 完整 ${metrics?.content.complete_shots || 0}/${metrics?.content.shot_count || 0}`} tone="content" /><MetricCard label="流程状态" value={progressLabel(selected.project.progress)} detail={`${selected.project.current_stage_label || '没有进行中的阶段'} · 阻塞 ${selected.project.blocker_count}`} tone="process" /><MetricCard label="资产状态" value={`${metrics?.assets.ready || 0}/${metrics?.assets.total || 0} 就绪`} detail={`待审核 ${metrics?.assets.awaiting_review || 0} · 必需缺口 ${metrics?.assets.missing_required || 0}`} tone="asset" /><MetricCard label="执行状态" value={String(metrics?.execution.run_status || '暂无运行')} detail={`排队 ${metrics?.execution.queued || 0} · 运行 ${metrics?.execution.running || 0} · 待确认 ${metrics?.execution.awaiting_confirmation || 0}`} tone="execution" /></section>
       <section className="home-task-panel"><div className="home-section-heading"><div><small>UP NEXT</small><h2>后续任务</h2></div><span>按优先级排列 · 最多显示 6 项</span></div><div className="home-task-list">{selected.task_queue.length ? selected.task_queue.map((task) => <HomeTaskRow key={task.id} task={task} onOpen={() => onOpenTask(task)} />) : <p className="home-empty-inline">暂无其他任务。</p>}</div></section>
       <ProcessDetail stages={selected.stages} onOpen={onOpenStage} />
@@ -1567,319 +1646,6 @@ function TimelineView({ envelope, preflight, story, assetLibrary, renderJob, bus
       {deliveryOpen && <section className="timeline-delivery-panel"><div><small>DELIVERY PREFLIGHT</small><h2>交付检查</h2><p>{renderBlocked ? '当前仍有阻塞，解决后才能创建正式交付包。' : '时间线已通过交付预检，可以创建多版本交付包。'}</p></div><div className="timeline-delivery-checks"><span className={preflight?.deliverables.master_burn_in === 'ready' ? 'ready' : 'blocked'}>主片烧录字幕 · {preflight?.deliverables.master_burn_in || '检查中'}</span><span className={preflight?.deliverables.clean === 'ready' ? 'ready' : 'blocked'}>Clean 无字幕 · {preflight?.deliverables.clean || '检查中'}</span><span className="ready">SRT 字幕文件 · {preflight?.deliverables.srt || 'ready'}</span></div><div className="timeline-delivery-actions"><button onClick={onPreview} disabled={busy}>生成 540p 代理预览</button><button className="run-button" onClick={onRender} disabled={busy || renderBlocked}>创建交付作业</button></div></section>}
     </section>
   );
-}
-
-function AssetLibraryView({ library, focusAssetId, busy, onRefresh, onSave, onFusionGate, onReview }: {
-  library: AssetLibraryEnvelope | null;
-  focusAssetId?: string;
-  busy: boolean;
-  onRefresh: () => void;
-  onSave: (assetId: string, body: Record<string, unknown>) => void;
-  onFusionGate: (assetId: string) => void;
-  onReview: (assetId: string, comparisonId: string, candidateArtifactId: string) => void;
-}) {
-  const assets = library?.assets || [];
-  const [selectedId, setSelectedId] = useState('');
-  const selected = assets.find((asset) => asset.id === selectedId) || assets[0];
-  const [draft, setDraft] = useState({
-    assetClass: '', grade: 'B', usageRoles: '', identityAnchors: '{}', assetSpec: '{}', source: '', license: '', authorizationStatus: '', prompt: '', references: '', dependencies: '', fusionSources: '', protectedRegions: '',
-  });
-  useEffect(() => {
-    if (!selected) return;
-    const metadata = selected.assetMetadata || {};
-    setSelectedId(selected.id);
-    setDraft({
-      assetClass: selected.assetClass || '', grade: selected.grade || 'B', usageRoles: Array.isArray(metadata.usage_roles || selected.usageRoles) ? (metadata.usage_roles || selected.usageRoles).join(', ') : '',
-      identityAnchors: JSON.stringify(metadata.identity_anchors || selected.identityAnchors || {}, null, 2), assetSpec: JSON.stringify(metadata.asset_spec || selected.assetSpec || {}, null, 2), source: String(metadata.source || selected.source || ''), license: String(metadata.license || selected.license || ''), authorizationStatus: String(metadata.authorization_status || selected.authorizationStatus || ''), prompt: String(selected.prompt || ''),
-      references: (selected.references || []).map((item) => `${item.reference_id}|${item.role}|${item.source || 'project'}|${item.notes || ''}`).join('\n'), dependencies: (selected.dependencies || []).map((item) => `${item.dependency_asset_id}|${item.shot_id || ''}|${item.role || ''}`).join('\n'), fusionSources: Array.isArray(selected.fusionSourceAssetIds) ? selected.fusionSourceAssetIds.join(', ') : '', protectedRegions: Array.isArray(selected.protectedRegions) ? selected.protectedRegions.join(', ') : '',
-    });
-  }, [selected?.id]);
-  useEffect(() => {
-    if (focusAssetId && assets.some((asset) => asset.id === focusAssetId)) setSelectedId(focusAssetId);
-  }, [focusAssetId, library?.project_id]);
-  if (!library) return <div className="empty-state">正在读取统一资产库…</div>;
-  if (!assets.length) return <section className="asset-library"><header className="section-heading"><div><span>UNIFIED ASSET LIBRARY</span><h2>统一资产库</h2></div><button onClick={onRefresh}>刷新</button></header><div className="empty-state">当前项目还没有逻辑资产。</div></section>;
-  const parseJson = (value: string) => { try { const parsed = JSON.parse(value); return parsed && typeof parsed === 'object' ? parsed : {}; } catch { return {}; } };
-  const save = () => onSave(selected.id, {
-    asset_class: draft.assetClass, grade: draft.grade, usage_roles: draft.usageRoles.split(',').map((item) => item.trim()).filter(Boolean), identity_anchors: parseJson(draft.identityAnchors), asset_spec: parseJson(draft.assetSpec), prompt: draft.prompt, source: draft.source, license: draft.license, authorization_status: draft.authorizationStatus, protected_regions: draft.protectedRegions.split(',').map((item) => item.trim()).filter(Boolean), fusion_source_asset_ids: draft.fusionSources.split(',').map((item) => item.trim()).filter(Boolean), references: draft.references.split('\n').map((line) => line.trim()).filter(Boolean).map((line) => { const [reference_id, role, source = 'project', notes = ''] = line.split('|'); return { reference_id, role, source, notes }; }), shot_dependencies: draft.dependencies.split('\n').map((line) => line.trim()).filter(Boolean).map((line) => { const [dependency_asset_id, shot_id = '', role = ''] = line.split('|'); return { dependency_asset_id, shot_id: shot_id || null, role, relation: 'requires', required: true }; }), });
-  return (
-    <section className="asset-library">
-      <header className="section-heading"><div><span>UNIFIED ASSET LIBRARY</span><h2>统一资产与素材融合</h2></div><div className="story-heading-actions"><p>{library.summary.ready}/{library.summary.total} 已登记 · {library.summary.missing_required_a} 个 A 级待处理</p><button onClick={onRefresh} disabled={busy}>刷新</button><button onClick={save} disabled={busy}>保存资产规格</button></div></header>
-      <div className="asset-summary"><span>资产 {library.summary.total}</span><span className="ready">就绪 {library.summary.ready}</span><span className="blocked">阻塞 {library.summary.blocked}</span><span>融合节点 {assets.filter((asset) => asset.assetClass === 'fusion').length}</span></div>
-      <div className="asset-library-layout">
-        <aside className="asset-list">{assets.map((asset) => <button key={asset.id} className={asset.id === selected.id ? 'asset-list-item active' : 'asset-list-item'} onClick={() => setSelectedId(asset.id)}><b>{asset.id}</b><span>{asset.name || asset.id}</span><i className={asset.readiness.status}>{asset.readiness.status}</i><small>{asset.assetClass} · {asset.grade || 'B'}</small></button>)}</aside>
-        <div className="asset-detail">
-          <div className="asset-detail-heading"><div><span>{selected.assetClass.toUpperCase()}</span><h3>{selected.id} · {selected.name || '未命名资产'}</h3></div><b className={`readiness-badge ${selected.readiness.status}`}>{selected.readiness.status}</b></div>
-          <div className="asset-form-grid"><label>资产类别<input value={draft.assetClass} onChange={(event) => setDraft({ ...draft, assetClass: event.target.value })} /></label><label>等级<select value={draft.grade} onChange={(event) => setDraft({ ...draft, grade: event.target.value })}><option>A+</option><option>A</option><option>B</option><option>C</option><option>optional</option><option>Reject</option></select></label><label>用途角色<input value={draft.usageRoles} onChange={(event) => setDraft({ ...draft, usageRoles: event.target.value })} placeholder="identity, continuity" /></label><label>来源<input value={draft.source} onChange={(event) => setDraft({ ...draft, source: event.target.value })} /></label><label>许可证/授权<input value={draft.license} onChange={(event) => setDraft({ ...draft, license: event.target.value })} /></label><label>授权状态<input value={draft.authorizationStatus} onChange={(event) => setDraft({ ...draft, authorizationStatus: event.target.value })} placeholder="cleared / pending" /></label></div>
-          <label className="asset-wide-field">身份锚点 JSON<textarea value={draft.identityAnchors} onChange={(event) => setDraft({ ...draft, identityAnchors: event.target.value })} /></label><label className="asset-wide-field">资产生产规格 JSON（场景空间/时间/天气/机位，道具形状/材质/比例/文字，产品保护区域等）<textarea value={draft.assetSpec} onChange={(event) => setDraft({ ...draft, assetSpec: event.target.value })} /></label><label className="asset-wide-field">Prompt<textarea value={draft.prompt} onChange={(event) => setDraft({ ...draft, prompt: event.target.value })} /></label>
-          <label className="asset-wide-field">引用角色（每行：引用 ID | identity/outfit/action/composition/scene_structure/style/lighting/product_structure | 来源 | 备注）<textarea value={draft.references} onChange={(event) => setDraft({ ...draft, references: event.target.value })} /></label><label className="asset-wide-field">镜头依赖（每行：资产 ID | 镜头 ID | 依赖角色）<textarea value={draft.dependencies} onChange={(event) => setDraft({ ...draft, dependencies: event.target.value })} /></label>
-          {selected.assetClass === 'fusion' && <div className="fusion-gate-card"><div><strong>Fusion Production Gate</strong><p>{selected.fusionGate?.message || '尚未检查融合基础资产。'}</p>{selected.fusionGate?.missing_sources?.length ? <small>缺失基础资产：{selected.fusionGate.missing_sources.map((item) => String(item.asset_id)).join(', ')}</small> : null}</div><button onClick={() => onFusionGate(selected.id)} disabled={busy}>检查融合门</button></div>}
-          <div className="asset-history"><h4>版本与候选对比</h4>{selected.versions?.length ? <div className="version-row"><span>当前版本 AV · {selected.versions.find((item: Record<string, unknown>) => item.is_active)?.version || '—'}</span><small>{selected.versions.length} 个历史版本保留</small></div> : <p className="muted">尚无登记版本；计划状态不会解锁融合。</p>}{selected.comparisons?.map((comparison) => <details key={comparison.id}><summary>{comparison.comparison_group} · {comparison.strategy} · {comparison.candidates.length} 候选</summary>{comparison.candidates.map((candidate) => <div className="candidate-line" key={candidate.artifact_id}><span>{candidate.artifact_id} · {candidate.score ?? '未评分'} · {candidate.comment || '无批注'}</span><button onClick={() => onReview(selected.id, comparison.id, candidate.artifact_id)} disabled={busy || candidate.decision === 'Approved'}>{candidate.decision === 'Approved' ? '已批准' : '批准候选'}</button></div>)}</details>)}</div>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function AssetLibraryViewV3({ library, focusAssetId, busy, scope = 'all', filter = 'all', search = '', sort = 'priority', audit, onScopeChange, onFilterChange, onSearchChange, onSortChange, onRefresh, onSave, onFusionGate, onReview, onCreateAsset, onOpenImport, onRefreshAudit, onManualProductionApproval, onDeleteAsset, onStartQa, onSubmitQa, onRegisterArtifact }: {
-  library: AssetLibraryEnvelope | null;
-  focusAssetId?: string;
-  busy: boolean;
-  scope?: AssetLibraryScope;
-  filter?: AssetLibraryFilter;
-  search?: string;
-  sort?: AssetSort;
-  audit?: { counts: Record<string, number>; total: number } | null;
-  onScopeChange?: (value: AssetLibraryScope) => void;
-  onFilterChange?: (value: AssetLibraryFilter) => void;
-  onSearchChange?: (value: string) => void;
-  onSortChange?: (value: AssetSort) => void;
-  onRefresh: () => void;
-  onSave: (assetId: string, body: Record<string, unknown>) => void;
-  onFusionGate: (assetId: string) => void;
-  onReview: (assetId: string, comparisonId: string, candidateArtifactId: string) => void;
-  onCreateAsset?: () => void;
-  onOpenImport?: () => void;
-  onRefreshAudit?: () => void;
-  onManualProductionApproval?: (assetId: string, approved: boolean, reason: string, artifactId: string) => void;
-  onDeleteAsset?: (assetId: string, label: string) => void;
-  onStartQa?: (artifactId: string, qaType: AssetQaType) => void | Promise<void>;
-  onSubmitQa?: (artifactId: string, qaType: AssetQaType, decision: AssetQaDecision, report: string, checklist?: Record<string, boolean>) => void | Promise<void>;
-  onRegisterArtifact?: (artifactId: string, replaceActive: boolean) => void | Promise<void>;
-}) {
-  const assets = library?.assets || [];
-  const auditAssetIds = new Set((audit as AssetAuditEnvelope | null)?.items?.map((item) => String(item.asset?.id || '')) || []);
-  const scopedAssets = assets.filter((asset) => assetMatchesScope(asset, scope));
-  const visibleAssets = library ? filterAssets(library, filter, search, sort, scope, auditAssetIds) : [];
-  const bucketCounts = scopedAssets.reduce<Record<string, number>>((counts, asset) => { const bucket = assetStatusBucket(asset, auditAssetIds); counts[bucket] = (counts[bucket] || 0) + 1; return counts; }, {});
-  const [selectedId, setSelectedId] = useState('');
-  const [formError, setFormError] = useState('');
-  const [inspectorTab, setInspectorTab] = useState<AssetInspectorTab>('overview');
-  const [manualReviewOpen, setManualReviewOpen] = useState(false);
-  const [manualReviewReason, setManualReviewReason] = useState('');
-  const [qaArtifact, setQaArtifact] = useState<Record<string, any> | null>(null);
-  const [qaDecision, setQaDecision] = useState<AssetQaDecision>('Approved');
-  const [qaReport, setQaReport] = useState('');
-  const [qaChecks, setQaChecks] = useState<Record<string, boolean>>({});
-  const [registerArtifact, setRegisterArtifact] = useState<Record<string, any> | null>(null);
-  const [replaceActive, setReplaceActive] = useState(false);
-  const selected = visibleAssets.find((asset) => asset.id === selectedId) || visibleAssets[0] || assets.find((asset) => asset.id === selectedId) || assets[0];
-  const [draft, setDraft] = useState({ assetClass: '', grade: 'B', usageRoles: '', identityAnchors: '{}', assetSpec: '{}', source: '', license: '', authorizationStatus: '', prompt: '', references: '', dependencies: '', fusionSources: '', protectedRegions: '' });
-  useEffect(() => { if (focusAssetId && assets.some((asset) => asset.id === focusAssetId)) setSelectedId(focusAssetId); }, [focusAssetId, library?.project_id]);
-  useEffect(() => {
-    if (!selectedId || !visibleAssets.length || visibleAssets.some((asset) => asset.id === selectedId)) return;
-    setSelectedId(visibleAssets[0].id);
-  }, [scope, filter, search, sort, library?.project_id, visibleAssets.length]);
-  useEffect(() => {
-    setInspectorTab('overview');
-    setManualReviewOpen(false);
-    setManualReviewReason('');
-    setQaArtifact(null);
-    setRegisterArtifact(null);
-    setReplaceActive(false);
-  }, [selected?.id]);
-  useEffect(() => {
-    const tablist = document.querySelector<HTMLElement>('.asset-inspector-tabs');
-    if (!tablist) return undefined;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (!['ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
-      const tabs = Array.from(tablist.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
-      const currentIndex = tabs.indexOf(document.activeElement as HTMLButtonElement);
-      if (currentIndex < 0 || !tabs.length) return;
-      const nextIndex = event.key === 'Home'
-        ? 0
-        : event.key === 'End'
-          ? tabs.length - 1
-          : (currentIndex + (event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1 : 1) + tabs.length) % tabs.length;
-      event.preventDefault();
-      tabs[nextIndex].focus();
-      tabs[nextIndex].click();
-    };
-    tablist.addEventListener('keydown', onKeyDown);
-    return () => tablist.removeEventListener('keydown', onKeyDown);
-  }, [selected?.id, inspectorTab]);
-  useEffect(() => {
-    if (!selected) return;
-    const metadata = selected.assetMetadata || {};
-    setSelectedId((current) => current || selected.id);
-    setDraft({
-      assetClass: selected.assetClass || '', grade: selected.grade || 'B',
-      usageRoles: Array.isArray(metadata.usage_roles || selected.usageRoles) ? (metadata.usage_roles || selected.usageRoles).join(', ') : '',
-      identityAnchors: JSON.stringify(metadata.identity_anchors || selected.identityAnchors || {}, null, 2),
-      assetSpec: JSON.stringify(metadata.asset_spec || selected.assetSpec || {}, null, 2),
-      source: String(metadata.source || selected.source || ''), license: String(metadata.license || selected.license || ''),
-      authorizationStatus: String(metadata.authorization_status || selected.authorizationStatus || ''), prompt: String(selected.prompt || ''),
-      references: (selected.references || []).map((item) => `${item.reference_id}|${item.role}|${item.source || 'project'}|${item.notes || ''}`).join('\n'),
-      dependencies: (selected.dependencies || []).map((item) => `${item.dependency_asset_id}|${item.shot_id || ''}|${item.role || ''}`).join('\n'),
-      fusionSources: Array.isArray(selected.fusionSourceAssetIds) ? selected.fusionSourceAssetIds.join(', ') : '',
-      protectedRegions: Array.isArray(selected.protectedRegions) ? selected.protectedRegions.join(', ') : '',
-    });
-    setFormError('');
-  }, [selected?.id]);
-  useEffect(() => {
-    if (!focusAssetId || selected?.id !== focusAssetId) return;
-    const frame = window.requestAnimationFrame(() => {
-      document.querySelector<HTMLElement>('.studio-content')?.scrollTo({ top: 0, behavior: 'auto' });
-      document.querySelector<HTMLElement>(`[data-asset-list-id="${CSS.escape(focusAssetId)}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'auto' });
-      const detail = document.querySelector<HTMLElement>('.asset-detail-v3');
-      detail?.scrollTo({ top: 0, behavior: 'auto' });
-      document.querySelector<HTMLElement>('.asset-detail-heading')?.scrollIntoView({ block: 'start', behavior: 'auto' });
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [focusAssetId, selected?.id]);
-  if (!library) return <div className="empty-state">正在读取统一资产库…</div>;
-  const update = (patch: Partial<typeof draft>) => setDraft((current) => ({ ...current, ...patch }));
-  const save = () => {
-    const anchors = parseJsonObject(draft.identityAnchors, '身份锚点');
-    if (anchors.error) { setFormError(anchors.error); return; }
-    const spec = parseJsonObject(draft.assetSpec, '资产生产规格');
-    if (spec.error) { setFormError(spec.error); return; }
-    setFormError('');
-    onSave(selected.id, {
-      asset_class: draft.assetClass, grade: draft.grade,
-      usage_roles: draft.usageRoles.split(',').map((item) => item.trim()).filter(Boolean), identity_anchors: anchors.value, asset_spec: spec.value,
-      prompt: draft.prompt, source: draft.source, license: draft.license, authorization_status: draft.authorizationStatus,
-      protected_regions: draft.protectedRegions.split(',').map((item) => item.trim()).filter(Boolean), fusion_source_asset_ids: draft.fusionSources.split(',').map((item) => item.trim()).filter(Boolean),
-      references: draft.references.split('\n').map((line) => line.trim()).filter(Boolean).map((line) => { const [reference_id, role, source = 'project', notes = ''] = line.split('|'); return { reference_id, role, source, notes }; }),
-      shot_dependencies: draft.dependencies.split('\n').map((line) => line.trim()).filter(Boolean).map((line) => { const [dependency_asset_id, shot_id = '', role = ''] = line.split('|'); return { dependency_asset_id, shot_id: shot_id || null, role, relation: 'requires', required: true }; }),
-    });
-  };
-  const readiness = selected?.readiness;
-  const liveSelectedArtifacts = (selected?.artifacts || []).filter((artifact: Record<string, any>) => String(artifact.status || '') !== 'archived');
-  const currentArtifact = liveSelectedArtifacts.find((artifact: Record<string, any>) => artifact.id === selected.artifactId) || liveSelectedArtifacts.find((artifact: Record<string, any>) => artifact.collection === 'qualified') || liveSelectedArtifacts[0];
-  const promptVersions = Array.isArray(selected?.promptVersions) ? selected.promptVersions : [];
-  const productionReadyCount = visibleAssets.filter((asset) => asset.readiness.production_ready).length;
-   const hasActiveFilters = scope !== 'all' || Boolean(search.trim()) || filter !== 'all' || sort !== 'priority';
-  const clearAssetFilters = () => {
-    onScopeChange?.('all');
-    onSearchChange?.('');
-    onFilterChange?.('all');
-    onSortChange?.('priority');
-  };
-  const selectedWorkflow = selected?.workflow;
-  const formatProductionBlocker = (item: string) => {
-    const normalized = item.replace(/^registered:/, '');
-    if (productionStatusLabels[normalized]) return productionStatusLabels[normalized];
-    if (normalized === 'project_file') return '缺少项目文件';
-    if (normalized === 'generated_image_qa') return '待图片 QA';
-    if (normalized === 'asset_registration') return '待登记资产版本';
-    return normalized;
-  };
-  const readinessReason = !readiness?.production_ready
-    ? selectedWorkflow?.kind === 'reference'
-      ? '仅参考素材，不可进入正式时间线'
-      : (readiness?.production_missing || []).map(formatProductionBlocker).filter(Boolean).slice(0, 3).join(' · ')
-        || (readiness?.status === 'blocked' ? 'QA 或文件门禁已阻塞' : readiness?.registered_ready ? '已登记，仍需完成入镜门禁' : '尚未登记资产版本')
-    : '';
-  const openQa = (artifact: Record<string, any>) => {
-    const qaType = String(artifact.metadata?.qa_type || selectedWorkflow?.qa_type || (String(artifact.mime_type || '').startsWith('video/') ? 'video' : 'image')) as AssetQaType;
-    setQaArtifact({ ...artifact, __qaType: qaType });
-    setQaDecision('Approved');
-    setQaReport('');
-    setQaChecks({});
-  };
-  const artifactActionLabel = (artifact: Record<string, any>) => {
-    const state = String(artifact.status || '');
-    const qaType = String(artifact.metadata?.qa_type || (String(artifact.mime_type || '').startsWith('video/') ? 'video' : selectedWorkflow?.qa_type || 'image'));
-    if (state === 'approved_pending_registration') return '登记为资产版本';
-    if (state === 'qa_in_progress') return '打开 QA 审核';
-    if (state === 'reference') return '仅参考 · 不可入镜';
-    if (['generated_pending_qa', 'reference_pending_review', 'audit_blocked', 'revision_required'].includes(state)) return qaType === 'reference' ? '开始参考审核' : `开始${qaType === 'video' ? '视频' : qaType === 'audio' ? '声音' : '图片'} QA`;
-    return '查看状态';
-  };
-  const qaChecklist = [
-    ['file_playable', '文件可播放'], ['duration_target', '时长符合镜头目标'], ['technical_format', '分辨率 / FPS / 编码正确'],
-    ['first_last_frame', '首帧与尾帧完整'], ['content_match', '内容符合镜头描述'], ['continuity', '角色 / 场景 / 融合连续'],
-    ['visual_artifacts', '无闪烁、变形、跳帧或水印'], ['av_sync', '有声音时声画同步'], ['lineage_complete', '来源、生成 ID、项目归属完整'],
-  ] as const;
-  const qaChecklistReady = qaChecklist.every(([key]) => qaChecks[key] === true);
-  return <section className="asset-library asset-library-v3">
-    <header className="section-heading"><div><span>UNIFIED ASSET LIBRARY · V3</span><h2>统一资产与素材融合</h2><p className="asset-subtitle">库视图与资产生产工作区共享登记、候选、QA、版本和镜头依赖。</p></div><div className="story-heading-actions"><p>{scopedAssets.length} 项资产 · {bucketCounts.registered || 0} 已登记 · {bucketCounts.production || 0} 可入镜</p><button onClick={onCreateAsset} disabled={busy}>＋ 新建逻辑资产</button><button onClick={onRefresh} disabled={busy}>刷新</button><button onClick={onOpenImport} disabled={busy}>导入候选</button><button onClick={save} disabled={busy || !selected}>保存规格</button></div></header>
-    {library.storage_integrity?.ok === false && <div className="asset-integrity-warning" role="status"><strong>项目文件一致性需要处理</strong><span>{library.storage_integrity.orphan_directories?.length ? `发现孤立目录：${library.storage_integrity.orphan_directories.join('、')}。` : ''}{library.storage_integrity.missing_project_records?.length ? `缺少项目目录：${library.storage_integrity.missing_project_records.join('、')}。` : ''}孤立目录不会自动作为有效生产素材，请通过项目导入重新绑定并重新计算哈希。</span></div>}
-    <div className="asset-summary" aria-label="资产状态筛选">
-      {assetStatusPresentationOrder.map((status) => {
-        const count = status === 'all' ? scopedAssets.length : bucketCounts[status] || 0;
-        const className = status === 'registered' ? 'ready' : status === 'production' ? 'production-ready' : status === 'blocked' ? 'blocked' : '';
-        return <button key={status} type="button" className={`${className} ${filter === status ? 'active' : ''}`.trim()} aria-pressed={filter === status} onClick={() => onFilterChange?.(status)}>{assetStatusFilterLabels[status]} {count}</button>;
-      })}
-    </div>
-    <div className="asset-library-toolbar" role="search" aria-label="资产库筛选工具">
-      <div className="asset-library-toolbar-top">
-        <div className="asset-toolbar-intro"><span className="asset-toolbar-eyebrow">FILTER &amp; SORT</span><strong>快速定位资产</strong><small>按资产、镜头或生产状态缩小当前工作集</small></div>
-        <div className="asset-filter-result" aria-live="polite"><b>{visibleAssets.length}</b><span>当前结果</span><i>·</i><b className="production">{productionReadyCount}</b><span>可入镜</span></div>
-      </div>
-      <div className="asset-library-controls">
-        <label className="asset-search"><span>搜索资产 / 镜头</span><div className="asset-search-control"><span className="asset-search-icon" aria-hidden="true">⌕</span><input id="asset-search" name="asset-search" value={search} onChange={(event) => onSearchChange?.(event.target.value)} placeholder="ID、名称、用途、SH006…" aria-label="搜索资产或镜头" />{search && <button type="button" className="asset-search-clear" onClick={() => onSearchChange?.('')} aria-label="清除搜索">×</button>}</div></label>
-        <label><span>资产范围</span><span className="asset-select-control"><select id="asset-scope" name="asset-scope" value={scope} onChange={(event) => onScopeChange?.(event.target.value as AssetLibraryScope)} aria-label="资产分类范围"><option value="all">统一资产库</option><option value="character">人物与角色</option><option value="scene-prop">场景与道具</option><option value="fusion">融合与候选</option></select></span></label>
-        <label><span>状态筛选</span><span className="asset-select-control"><select id="asset-status-filter" name="asset-status-filter" value={filter} onChange={(event) => onFilterChange?.(event.target.value as AssetLibraryStatusFilter)} aria-label="资产状态筛选">{assetStatusPresentationOrder.map((status) => <option key={status} value={status}>{status === 'all' ? '全部状态' : assetStatusFilterLabels[status]}</option>)}</select></span></label>
-        <label><span>排序</span><span className="asset-select-control"><select id="asset-sort" name="asset-sort" value={sort} onChange={(event) => onSortChange?.(event.target.value as AssetSort)} aria-label="资产排序"><option value="priority">阻塞优先</option><option value="grade">等级</option><option value="updated">更新时间</option><option value="id">资产 ID</option></select></span></label>
-        <div className="asset-library-toolbar-actions">{hasActiveFilters && <button type="button" className="asset-filter-clear" onClick={clearAssetFilters}>清除筛选</button>}</div>
-      </div>
-    </div>
-    <div className="asset-library-layout asset-library-layout-v3">
-      <VirtualAssetList assets={visibleAssets} selectedId={selected?.id} auditAssetIds={auditAssetIds} onSelect={setSelectedId} />
-       {selected ? <div className="asset-detail asset-detail-v3">
-          <div className={`asset-detail-heading ${focusAssetId && selected.id === focusAssetId ? 'asset-detail-heading-focus' : ''}`}>
-            <div>
-              <span>{assetClassLabels[selected.assetClass] || selected.assetClass}</span>
-              <h3>{selected.id} · {selected.name || '未命名资产'}</h3>
-              <p>{selected.assetRole || '未定义用途'} · {selected.required ? '项目必需' : '可选资产'}</p>
-            </div>
-            <div className="asset-detail-actions">
-              <div className="asset-status-stack">
-                <b className={`readiness-badge ${readiness?.registered_ready ? 'ready' : 'pending'}`}>{readiness?.registered_ready ? '已登记' : '待登记'}</b>
-                <b className={`readiness-badge ${readiness?.production_ready ? 'production' : readiness?.status === 'blocked' ? 'blocked' : 'pending'}`}>{readiness?.production_ready ? '可入镜' : readiness?.status === 'blocked' ? '已阻塞' : '不可入镜'}</b>
-                {!readiness?.production_ready && <small className="asset-status-reason" title={readinessReason}>原因：{readinessReason}</small>}
-                {readiness?.manual_approval_active ? <button type="button" className="manual-review-button active" onClick={() => setManualReviewOpen(true)}>撤销人工通过</button> : readiness?.registered_ready && !readiness?.production_ready && <button type="button" className="manual-review-button" disabled={!(currentArtifact?.id || selected.artifactId) || busy} onClick={() => setManualReviewOpen(true)}>人工审核可入镜</button>}
-              </div>
-              <button type="button" className="asset-delete-button" onClick={() => onDeleteAsset?.(selected.id, selected.name || selected.id)} disabled={busy || !onDeleteAsset} title="删除逻辑资产、画布节点和关联关系；已上传文件保留">删除资产</button>
-              {manualReviewOpen && <div className="manual-review-panel" role="dialog" aria-modal="false" aria-label="人工审核可入镜">
-                <div>
-                  <span className="asset-toolbar-eyebrow">HUMAN REVIEW GATE</span>
-                  <h4>{readiness?.manual_approval_active ? '撤销人工通过' : '人工审核可入镜'}</h4>
-                  <p>{readiness?.manual_approval_active ? '撤销后资产会恢复到 Prompt / Prompt QA 门禁。' : '该资产已完成文件、图片 QA 和登记；本操作只豁免 Prompt / Prompt QA，不会绕过授权、融合门或基础登记。确认后若其他门禁已满足，状态会自动刷新为“可入镜”。'}</p>
-                  {!readiness?.manual_approval_active && <>
-                    <ul>{(readiness?.production_missing || []).map((item) => <li key={item}>{formatProductionBlocker(item)}</li>)}</ul>
-                    <label>人工审核原因<textarea value={manualReviewReason} onChange={(event) => setManualReviewReason(event.target.value)} placeholder="例如：当前登记图像已由导演人工确认，可直接用于该镜头。" rows={3} /></label>
-                  </>}
-                  <small>当前绑定文件：{String(currentArtifact?.id || selected.artifactId || '未找到登记文件')}</small>
-                </div>
-                <div className="manual-review-actions">
-                  <button type="button" className="ghost" onClick={() => { setManualReviewOpen(false); setInspectorTab('audit'); }}>查看 QA / 审计</button>
-                  {readiness?.manual_approval_active ? <button type="button" className="danger-button" onClick={() => { onManualProductionApproval?.(selected.id, false, '撤销人工通过', String(currentArtifact?.id || selected.artifactId || '')); setManualReviewOpen(false); }} disabled={busy || !onManualProductionApproval}>撤销人工通过</button> : <button type="button" className="primary" onClick={() => { onManualProductionApproval?.(selected.id, true, manualReviewReason.trim(), String(currentArtifact?.id || selected.artifactId || '')); setManualReviewOpen(false); }} disabled={busy || !manualReviewReason.trim() || !(currentArtifact?.id || selected.artifactId) || !onManualProductionApproval}>确认人工通过</button>}
-                </div>
-              </div>}
-            </div>
-          </div>
-        <div className="asset-next-action"><div><strong>下一步：{selectedWorkflow?.next_action?.label || assetNextAction(selected)}</strong><span>{readiness?.production_missing?.map((item) => productionStatusLabels[item] || item).join(' · ') || '当前资产满足入镜门禁。'}</span></div>{selectedWorkflow?.next_action?.code === 'register_artifact' && selectedWorkflow.artifact_id && <button type="button" className="asset-primary-action" onClick={() => { const artifact = (selected.artifacts || []).find((item: Record<string, any>) => item.id === selectedWorkflow.artifact_id); if (artifact) { setRegisterArtifact(artifact); setReplaceActive(false); } }} disabled={busy}>登记为资产版本</button>}{selectedWorkflow?.next_action?.code?.startsWith('start_') && selectedWorkflow.artifact_id && <button type="button" className="asset-primary-action" onClick={() => { const artifact = (selected.artifacts || []).find((item: Record<string, any>) => item.id === selectedWorkflow.artifact_id); if (artifact) openQa(artifact); }} disabled={busy}>开始审核</button>}{selectedWorkflow?.kind === 'reference' && <span className="asset-reference-notice">仅供参考，不可进入正式时间线</span>}</div>
-          <div className="asset-inspector-tabs" role="tablist" aria-label="资产详情标签"><button type="button" role="tab" id="asset-tab-overview" tabIndex={inspectorTab === 'overview' ? 0 : -1} className={inspectorTab === 'overview' ? 'active' : ''} aria-selected={inspectorTab === 'overview'} onClick={() => setInspectorTab('overview')}>概览</button><button type="button" role="tab" id="asset-tab-media" tabIndex={inspectorTab === 'media' ? 0 : -1} className={inspectorTab === 'media' ? 'active' : ''} aria-selected={inspectorTab === 'media'} onClick={() => setInspectorTab('media')}>媒体与候选</button><button type="button" role="tab" id="asset-tab-prompt" tabIndex={inspectorTab === 'prompt' ? 0 : -1} className={inspectorTab === 'prompt' ? 'active' : ''} aria-selected={inspectorTab === 'prompt'} onClick={() => setInspectorTab('prompt')}>Prompt / 规格</button><button type="button" role="tab" id="asset-tab-dependencies" tabIndex={inspectorTab === 'dependencies' ? 0 : -1} className={inspectorTab === 'dependencies' ? 'active' : ''} aria-selected={inspectorTab === 'dependencies'} onClick={() => setInspectorTab('dependencies')}>依赖与镜头</button><button type="button" role="tab" id="asset-tab-audit" tabIndex={inspectorTab === 'audit' ? 0 : -1} className={inspectorTab === 'audit' ? 'active' : ''} aria-selected={inspectorTab === 'audit'} onClick={() => setInspectorTab('audit')}>QA / 审计</button><button type="button" role="tab" id="asset-tab-history" tabIndex={inspectorTab === 'history' ? 0 : -1} className={inspectorTab === 'history' ? 'active' : ''} aria-selected={inspectorTab === 'history'} onClick={() => setInspectorTab('history')}>版本历史</button></div>
-         {(inspectorTab === 'overview' || inspectorTab === 'media') && <section className="asset-media-section"><div className="asset-section-heading"><h4>媒体与候选</h4><small>{selected.active_artifact_count ?? selected.artifact_count ?? selected.artifacts?.length ?? 0} 个活动文件{selected.archived_artifact_count ? ` · 历史归档 ${selected.archived_artifact_count}` : ''} · 当前登记 {currentArtifact?.id || '—'}</small></div><div className="asset-media-grid">{currentArtifact?.url && String(currentArtifact.mime_type || '').startsWith('image/') ? <img src={currentArtifact.url} alt={`${selected.name || selected.id} 当前登记素材`} /> : currentArtifact?.url && String(currentArtifact.mime_type || '').startsWith('video/') ? <video src={currentArtifact.url} controls preload="metadata" /> : <div className="asset-media-fallback">{currentArtifact ? `${currentArtifact.mime_type || '媒体'} · ${currentArtifact.id}` : '尚无当前登记媒体'}</div>}<div className="asset-candidate-list">{liveSelectedArtifacts.slice(0, 8).map((artifact: Record<string, any>) => <div className="asset-candidate-row" key={artifact.id}><div><span>{artifact.id} · {artifact.role || '候选'} · {artifact.qa_decision || 'Pending'}</span><small>{artifact.mime_type || '未知媒体'} · {artifact.collection || artifact.status || 'intake'}</small></div><div className="asset-candidate-row-actions">{artifact.status === 'approved_pending_registration' && <button type="button" onClick={() => { setRegisterArtifact(artifact); setReplaceActive(false); }} disabled={busy}>登记</button>}{['generated_pending_qa', 'reference_pending_review', 'audit_blocked', 'revision_required'].includes(String(artifact.status || '')) && <button type="button" onClick={() => openQa(artifact)} disabled={busy}>{artifactActionLabel(artifact)}</button>}{artifact.status === 'qa_in_progress' && <button type="button" onClick={() => openQa(artifact)} disabled={busy}>打开 QA</button>}{artifact.status === 'reference' && <span className="asset-reference-chip">仅参考</span>}<button type="button" className="ghost" onClick={() => artifact.url && window.open(String(artifact.url), '_blank', 'noopener,noreferrer')} disabled={!artifact.url}>查看文件</button></div></div>)}</div></div></section>}
-         {(inspectorTab === 'overview' || inspectorTab === 'prompt') && <div className="asset-prompt-panel"><div className="asset-form-grid"><label>资产类别<select id="asset-edit-class" name="asset-edit-class" value={draft.assetClass} onChange={(event) => update({ assetClass: event.target.value })}>{Object.entries(assetClassLabels).filter(([key]) => key !== 'unknown').map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><label>等级<select id="asset-edit-grade" name="asset-edit-grade" value={draft.grade} onChange={(event) => update({ grade: event.target.value })}><option>A+</option><option>A</option><option>B</option><option>C</option><option>optional</option><option>Reject</option></select></label><label>用途角色<input id="asset-edit-usage" name="asset-edit-usage" value={draft.usageRoles} onChange={(event) => update({ usageRoles: event.target.value })} placeholder="identity, continuity" /></label><label>来源<input id="asset-edit-source" name="asset-edit-source" value={draft.source} onChange={(event) => update({ source: event.target.value })} /></label><label>许可证/授权<input id="asset-edit-license" name="asset-edit-license" value={draft.license} onChange={(event) => update({ license: event.target.value })} /></label><label>授权状态<input id="asset-edit-authorization" name="asset-edit-authorization" value={draft.authorizationStatus} onChange={(event) => update({ authorizationStatus: event.target.value })} placeholder="cleared / pending" /></label></div>
-         <label className="asset-wide-field"><span>{selected.assetClass === 'character' ? '身份锚点 / 脸部 / 发型 / 服装 JSON' : selected.assetClass === 'scene' ? '空间布局 / 时间 / 天气 / 光线 / 机位 JSON' : selected.assetClass === 'prop' ? '结构 / 材质 / 尺度 / 文字 / 保护区 JSON' : selected.assetClass === 'fusion' ? '输入资产 / 空间关系 / 遮挡 / 连续性 JSON' : '身份锚点 JSON'}</span><textarea id="asset-edit-identity-anchors" name="asset-edit-identity-anchors" className={formError?.startsWith('身份锚点') ? 'invalid' : ''} value={draft.identityAnchors} onChange={(event) => update({ identityAnchors: event.target.value })} /></label><label className="asset-wide-field">资产生产规格 JSON<textarea id="asset-edit-spec" name="asset-edit-spec" className={formError?.startsWith('资产生产规格') ? 'invalid' : ''} value={draft.assetSpec} onChange={(event) => update({ assetSpec: event.target.value })} /></label><label className="asset-wide-field">Prompt <small>编辑已批准 Prompt 会创建新版本并重置 Prompt QA。</small><textarea id="asset-edit-prompt" name="asset-edit-prompt" value={draft.prompt} onChange={(event) => update({ prompt: event.target.value })} /></label></div>}
-         {(inspectorTab === 'overview' || inspectorTab === 'dependencies') && <div className="asset-dependencies-panel"><label className="asset-wide-field">引用角色（每行：引用 ID | identity/outfit/action/composition/scene_structure/style/lighting/product_structure | 来源 | 备注）<textarea id="asset-edit-references" name="asset-edit-references" value={draft.references} onChange={(event) => update({ references: event.target.value })} /></label><label className="asset-wide-field">镜头依赖（每行：资产 ID | 镜头 ID | 依赖角色）<textarea id="asset-edit-dependencies" name="asset-edit-dependencies" value={draft.dependencies} onChange={(event) => update({ dependencies: event.target.value })} /></label></div>}
-         {formError && (inspectorTab === 'overview' || inspectorTab === 'prompt') && <p className="asset-form-error" role="alert">{formError}</p>}
-         {(inspectorTab === 'overview' || inspectorTab === 'audit') && selected.assetClass === 'fusion' && <div className="fusion-gate-card"><div><strong>融合生产门</strong><p>{selected.fusionGate?.message || '尚未检查融合基础资产。'}</p>{selected.fusionGate?.missing_sources?.length ? <small>缺失基础资产：{selected.fusionGate.missing_sources.map((item) => String(item.asset_id)).join(', ')}</small> : null}</div><button onClick={() => onFusionGate(selected.id)} disabled={busy}>检查融合门</button></div>}
-         {(inspectorTab === 'overview' || inspectorTab === 'audit') && <section className="asset-audit-inline"><div className="asset-section-heading"><h4>QA 与审计</h4><button onClick={onRefreshAudit} disabled={busy}>刷新队列</button></div><div className="asset-audit-pills"><span>待图片 QA {audit?.counts?.['待图片 QA'] ?? 0}</span><span>待视频 QA {audit?.counts?.['待视频 QA'] ?? 0}</span><span>待参考审核 {audit?.counts?.['待参考审核'] ?? 0}</span><span>待登记 {audit?.counts?.['待登记'] ?? 0}</span><span>需修订 {audit?.counts?.['需要修订'] ?? 0}</span><span>拒绝 {audit?.counts?.['拒绝/重建 Prompt'] ?? 0}</span></div><p>QA Owner：{selected.qaOwner || selected.workflow?.qa_owner || ({ character: '角色设计导演', scene: '场景设计导演', prop: '道具设计导演', fusion: '融合生产导演', video: '镜头导演' } as Record<string, string>)[selected.assetClass] || '资产总控'} · {readiness?.qa_kind === 'video' ? '视频 QA' : readiness?.qa_kind === 'reference' ? '参考审核' : '图片 QA'}：{readiness?.qa_decision || '待处理'} · 已登记 ≠ 可入镜</p></section>}
-          {(inspectorTab === 'overview' || inspectorTab === 'history') && <div className="asset-history"><h4>版本与 Prompt 历史</h4><div className="version-row"><span>当前登记版本 · {selected.versions?.find((item: Record<string, unknown>) => item.is_active)?.version || '—'}</span><small>{selected.versions?.length || 0} 个资产版本保留 · {promptVersions.length} 个 Prompt 版本</small></div>{promptVersions.slice(0, 5).map((version: Record<string, any>) => <div className="version-row" key={version.id}><span>Prompt v{version.version} · {version.status}</span><small>{version.id}</small></div>)}{selected.comparisons?.map((comparison) => <details key={comparison.id}><summary>{comparison.comparison_group} · {comparison.strategy} · {comparison.candidates.length} 候选</summary>{comparison.candidates.map((candidate) => <div className="candidate-line" key={candidate.artifact_id}><span>{candidate.artifact_id} · {candidate.score ?? '未评分'} · {candidate.comment || '无批注'}</span><button onClick={() => onReview(selected.id, comparison.id, candidate.artifact_id)} disabled={busy || candidate.decision === 'Approved'}>{candidate.decision === 'Approved' ? '已批准' : '批准候选'}</button></div>)}</details>)}</div>}
-        {qaArtifact && <div className="asset-qa-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setQaArtifact(null); }}><section className="asset-qa-modal" role="dialog" aria-modal="true" aria-labelledby="asset-qa-title"><header><div><span>MEDIA QA · {qaArtifact.__qaType === 'reference' ? 'REFERENCE REVIEW' : String(qaArtifact.__qaType || 'image').toUpperCase()}</span><h3 id="asset-qa-title">审核候选文件</h3><p>{qaArtifact.id} · {qaArtifact.mime_type || '未知媒体'} · {selected.id}</p></div><button type="button" className="close-button" onClick={() => setQaArtifact(null)} aria-label="关闭 QA 审核">×</button></header><div className="asset-qa-body">{qaArtifact.url && String(qaArtifact.mime_type || '').startsWith('video/') ? <video className="asset-qa-preview" src={qaArtifact.url} controls preload="metadata" /> : qaArtifact.url ? <img className="asset-qa-preview" src={qaArtifact.url} alt="候选审核预览" /> : <div className="asset-media-fallback">没有可预览文件</div>}<div className="asset-qa-form"><p className="asset-qa-hint">审核必须记录结论与依据；Prompt QA 与媒体 QA 分开，不会互相替代。</p>{qaArtifact.__qaType === 'video' && <fieldset className="asset-qa-checklist-form"><legend>视频 QA 检查清单（Approved 必须全部确认）</legend>{qaChecklist.map(([key, label]) => <label key={key}><input type="checkbox" checked={Boolean(qaChecks[key])} onChange={(event) => setQaChecks((current) => ({ ...current, [key]: event.target.checked }))} />{label}</label>)}</fieldset>}<label>审核决策<select value={qaDecision} onChange={(event) => setQaDecision(event.target.value as AssetQaDecision)}><option value="Approved">Approved · 通过</option><option value="Needs revision">Needs revision · 需修订</option><option value="Rejected">Rejected · 拒绝</option><option value="Blocked">Blocked · 阻塞</option></select></label><label>审核依据 / 观察问题<textarea value={qaReport} onChange={(event) => setQaReport(event.target.value)} placeholder="记录可播放性、时长/FPS、画面连续性、闪烁/变形、水印、声画同步或参考用途等检查结果。" rows={7} /></label><div className="asset-qa-checklist"><span>目标：{qaArtifact.__qaType === 'video' ? '正式镜头视频 QA' : qaArtifact.__qaType === 'reference' ? '分镜参考审核' : '媒体 QA'}</span><span>QA Owner：{selected.workflow?.qa_owner || selected.qaOwner || '资产总控'}</span><span>{qaArtifact.metadata?.source || qaArtifact.source || '来源已登记'} · SHA-256 {qaArtifact.sha256 ? String(qaArtifact.sha256).slice(0, 12) + '…' : '待校验'}</span></div></div></div><footer><button type="button" onClick={() => setQaArtifact(null)}>取消</button><button type="button" className="asset-primary-action" onClick={() => { if (!qaReport.trim() && qaDecision !== 'Blocked') return; void Promise.resolve(onSubmitQa?.(String(qaArtifact.id), String(qaArtifact.__qaType || 'image') as AssetQaType, qaDecision, qaReport.trim(), qaChecks)).then(() => setQaArtifact(null)); }} disabled={busy || !onSubmitQa || (!qaReport.trim() && qaDecision !== 'Blocked') || (qaArtifact.__qaType === 'video' && qaDecision === 'Approved' && !qaChecklistReady)}>提交审核结论</button></footer></section></div>}
-        {registerArtifact && <div className="asset-qa-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setRegisterArtifact(null); }}><section className="asset-qa-modal asset-register-modal" role="dialog" aria-modal="true" aria-labelledby="asset-register-title"><header><div><span>REGISTER ARTIFACT VERSION</span><h3 id="asset-register-title">登记为资产版本</h3><p>{registerArtifact.id} · {registerArtifact.mime_type || '未知媒体'} · QA {registerArtifact.qa_decision || 'Approved'}</p></div><button type="button" className="close-button" onClick={() => setRegisterArtifact(null)} aria-label="关闭登记确认">×</button></header><div className="asset-register-summary"><div><b>目标资产</b><span>{selected.id} · {selected.name || '未命名资产'}</span></div><div><b>文件摘要</b><span>{registerArtifact.filename || registerArtifact.original_name || '候选文件'} · {registerArtifact.sha256 ? String(registerArtifact.sha256).slice(0, 18) + '…' : 'SHA-256 待校验'}</span></div><div><b>审核信息</b><span>{registerArtifact.qa_decision || 'Approved'} · {registerArtifact.qa_owner || selected.workflow?.qa_owner || '—'}</span></div><div><b>版本策略</b><span>{selected.versions?.some((item: Record<string, any>) => item.is_active) ? '已有 active 版本，默认登记为 candidate' : '没有 active 版本，将登记为 active'}</span></div><label className="check-row"><input type="checkbox" checked={replaceActive} onChange={(event) => setReplaceActive(event.target.checked)} />明确替换当前 active 版本</label><p className="asset-qa-hint">已登记 ≠ 可入镜。登记后仍需满足授权、Prompt、融合和镜头依赖门禁。</p></div><footer><button type="button" onClick={() => setRegisterArtifact(null)}>取消</button><button type="button" className="asset-primary-action" onClick={() => { void Promise.resolve(onRegisterArtifact?.(String(registerArtifact.id), replaceActive)).then(() => setRegisterArtifact(null)); }} disabled={busy || !onRegisterArtifact}>确认登记</button></footer></section></div>}
-      </div> : <div className="empty-state">当前筛选没有可检查的资产。</div>}
-    </div>
-  </section>;
-}
-
-function AssetImportDrawer({ library, busy, onClose, onImport }: { library: AssetLibraryEnvelope; busy: boolean; onClose: () => void; onImport: (items: Array<{ file: File; assetId: string; role: string }>) => Promise<void> }) {
-  const dialogFocus = useDialogFocus(true);
-  const [items, setItems] = useState<Array<{ file: File; assetId: string; role: string }>>([]);
-  const addFiles = (files: FileList | File[]) => setItems((current) => [...current, ...Array.from(files).map((file) => ({ file, assetId: library.assets[0]?.id || '', role: 'candidate' }))]);
-  return <div className="project-manager-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-    <section ref={dialogFocus.dialogRef} onKeyDown={dialogFocus.onKeyDown} className="project-manager asset-import-drawer" role="dialog" aria-modal="true" aria-labelledby="asset-import-title">
-      <header className="project-manager-heading"><div><span>ASSET INTAKE QUEUE</span><h2 id="asset-import-title">导入候选素材</h2><p>文件只进入候选队列；服务端按 MIME 和文件名分类为图片、视频、声音或参考素材，不会覆盖当前批准版本。</p></div><button className="close-button" onClick={onClose} aria-label="关闭导入抽屉">×</button></header>
-      <label className="asset-import-drop" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); addFiles(event.dataTransfer.files); }}><strong>拖放多个文件到这里</strong><span>支持 PNG / JPEG / WebP、MP4 / WebM / MOV、WAV / MP3 / M4A。</span><input id="asset-intake-files" name="asset-intake-files" aria-label="选择候选素材文件" type="file" multiple accept="image/png,image/jpeg,image/webp,video/mp4,video/webm,video/quicktime,audio/wav,audio/mpeg,audio/mp4,audio/x-m4a" onChange={(event) => { if (event.target.files) addFiles(event.target.files); event.currentTarget.value = ''; }} /></label>
-      <div className="asset-import-queue">{items.map((item, index) => { const extension = item.file.name.toLowerCase().split('.').pop() || ''; const inferredType = item.file.type || ({ mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime', wav: 'audio/wav', mp3: 'audio/mpeg', m4a: 'audio/mp4', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp' } as Record<string, string>)[extension] || ''; const supported = /^(image\/(png|jpeg|webp)|video\/(mp4|webm|quicktime)|audio\/(wav|mpeg|mp4|x-m4a))$/.test(inferredType); return <div className="asset-import-row" key={`${item.file.name}-${index}`}><div><strong>{item.file.name}</strong><small>{Math.ceil(item.file.size / 1024)} KB · {inferredType || '未知类型'}{!supported ? ' · 类型不受支持' : ''}</small></div><select id={`asset-intake-asset-${index}`} name={`asset-intake-asset-${index}`} aria-label={`候选文件 ${index + 1} 目标资产`} value={item.assetId} onChange={(event) => setItems((current) => current.map((candidate, candidateIndex) => candidateIndex === index ? { ...candidate, assetId: event.target.value } : candidate))}>{library.assets.map((asset) => <option key={asset.id} value={asset.id}>{asset.id} · {asset.name || asset.id}</option>)}</select><input id={`asset-intake-role-${index}`} name={`asset-intake-role-${index}`} aria-label={`候选文件 ${index + 1} 资产角色`} value={item.role} onChange={(event) => setItems((current) => current.map((candidate, candidateIndex) => candidateIndex === index ? { ...candidate, role: event.target.value } : candidate))} placeholder="资产角色" /><button type="button" onClick={() => setItems((current) => current.filter((_, candidateIndex) => candidateIndex !== index))}>移除</button></div>; })}{!items.length && <p className="muted">队列为空，请选择或拖入文件。</p>}</div>
-      <footer className="project-manager-footer"><span>{items.length} 个文件 · 上传后进入待 QA</span><div className="project-manager-footer-actions"><button onClick={onClose} disabled={busy}>取消</button><button className="project-create-submit" onClick={() => void onImport(items)} disabled={busy || !items.length || items.some((item) => !item.assetId)}>开始导入</button></div></footer>
-    </section>
-  </div>;
 }
 
 function AssetCreateModal({ draft, shots, busy, onChange, onClose, onSubmit }: { draft: { name: string; assetClass: string; assetRole: string; grade: string; required: boolean; shotId: string }; shots: StoryShot[]; busy: boolean; onChange: (patch: Partial<{ name: string; assetClass: string; assetRole: string; grade: string; required: boolean; shotId: string }>) => void; onClose: () => void; onSubmit: () => void }) {
@@ -2045,7 +1811,7 @@ function storyIssueGuidance(issue: StoryCheckIssue, shot?: StoryShot): string {
     return `${shot?.id || '该镜头'} 当前约 ${duration || '—'} 秒，对白 / 旁白估算约 ${estimated || '—'} 秒。请缩短对白，或把镜头时长调整到不小于约 ${estimated || '—'} 秒；也可以用“拆分”把对白和动作拆成两个镜头，修改后点击“保存镜头表”。`;
   }
   if (issue.code === 'asset_gap') {
-    return '这是故事与分镜完成后进入资产生产前的正常待处理项。这些 ID 已被镜头引用，但统一资产库中还没有对应登记；进入“资产生产”后登记或关联角色、场景、道具和声音资产即可。';
+    return '这是故事与分镜完成后进入资产生产前的正常待处理项。这些 ID 已被镜头引用，但资产数据中还没有对应登记；进入“资产生产工作区”后登记或关联角色、场景、道具和声音资产即可。';
   }
   if (issue.code === 'shot_field_missing') {
     const field = String(details.field || '必填字段');
@@ -2241,16 +2007,17 @@ const settingsCapabilityLabels: Record<string, string> = {
   tts: '语音 / TTS', music: '音乐', sfx: '音效', lip_sync: '口型同步', upscale: '放大 / 修复', upload: '媒体上传',
 };
 const settingsProviderLabels: Record<string, string> = {
-  openai: 'OpenAI', openai_compatible: 'OpenAI-compatible', jimeng_cli: '即梦官方 CLI', opencode: 'OpenCode Agent', comfyui: 'ComfyUI 本地',
+  openai: 'OpenAI', openai_compatible: 'OpenAI-compatible', jimeng_cli: '即梦官方 CLI', opencode: 'OpenCode Agent', comfyui: 'ComfyUI 本地', minimax: 'MiniMax TTS',
 };
-const settingsProviderTypes = ['openai', 'openai_compatible', 'jimeng_cli', 'opencode', 'comfyui'];
-const settingsEnvForType: Record<string, string> = { openai: 'OPENAI_API_KEY', openai_compatible: 'DEEPSEEK_API_KEY', opencode: 'OPENCODE_SERVER_PASSWORD', comfyui: 'COMFYUI_API_KEY' };
+const settingsProviderTypes = ['openai', 'openai_compatible', 'jimeng_cli', 'opencode', 'comfyui', 'minimax'];
+const settingsEnvForType: Record<string, string> = { openai: 'OPENAI_API_KEY', openai_compatible: 'DEEPSEEK_API_KEY', opencode: 'OPENCODE_SERVER_PASSWORD', comfyui: 'COMFYUI_API_KEY', minimax: 'MINIMAX_API_KEY' };
 const settingsProviderCapabilities: Record<string, string[]> = {
-  openai: ['orchestrator', 'vision', 'image', 'image_edit', 'tts'],
+  openai: ['orchestrator', 'vision', 'image', 'image_edit'],
   openai_compatible: ['orchestrator'],
   opencode: ['orchestrator'],
   jimeng_cli: ['video'],
   comfyui: ['image', 'image_edit', 'video', 'music', 'sfx', 'lip_sync', 'upscale', 'upload'],
+  minimax: ['tts'],
 };
 const JIMENG_VIDEO_MODELS = [
   { id: 'seedance2.0fast', description: '文生/图生/首尾帧 · 4–15 秒 · 720p' },
@@ -2261,6 +2028,16 @@ const JIMENG_VIDEO_MODELS = [
   { id: 'seedance2.5', description: 'VIP · 4–30 秒 · 480p/720p/1080p' },
   { id: 'seedance1.5pro', description: '图生/首尾帧 · 5–12 秒 · 720p' },
   { id: 'seedance1.0fast', description: '仅图生 · 5–10 秒 · 720p' },
+];
+const MINIMAX_TTS_MODELS = [
+  { id: 'speech-2.8-hd', description: '高质量同步语音' },
+  { id: 'speech-2.8-turbo', description: '低延迟同步语音' },
+  { id: 'speech-2.6-hd', description: '高质量同步语音' },
+  { id: 'speech-2.6-turbo', description: '低延迟同步语音' },
+  { id: 'speech-02-hd', description: '高质量同步语音' },
+  { id: 'speech-02-turbo', description: '低延迟同步语音' },
+  { id: 'speech-01-hd', description: '高质量同步语音' },
+  { id: 'speech-01-turbo', description: '低延迟同步语音' },
 ];
 type OpenCodeGoModel = { id: string; name: string; focus: string; note: string; quota?: string };
 
@@ -2356,6 +2133,7 @@ function SettingsView({ settings, busy, onRefresh, onSaveProvider, onAddPreset, 
   const probe = selected?.last_probe || null;
   const probeModels = Array.isArray(probe?.models) ? probe.models : [];
   const probeCapabilities = Array.isArray(probe?.capabilities) ? probe.capabilities : [];
+  const probeVoices = Array.isArray(probe?.voices) ? probe.voices as Array<Record<string, unknown>> : [];
   const probePending = Boolean(selected && probePendingId === selected.id);
   const probeStatus = probePending ? '正在检测' : probe?.ok === true ? '连接正常' : probe?.ok === false ? '连接失败' : '尚未检测';
   const probeStatusClass = probePending ? 'checking' : probe?.ok === true ? 'success' : probe?.ok === false ? 'error' : 'pending';
@@ -2369,7 +2147,7 @@ function SettingsView({ settings, busy, onRefresh, onSaveProvider, onAddPreset, 
   useEffect(() => {
     if (!selected) return;
     const config = selected.model_config || {};
-    setDraft({ providerType: selected.provider_type, displayName: selected.display_name, baseUrl: selected.base_url, capabilities: [...selected.capabilities], enabled: selected.enabled, modelConfig: JSON.stringify(config, null, 2), serverUsername: String(config.server_username || 'opencode'), agent: String(config.agent || 'build'), preferredModel: String(config.model_version || config.orchestrator_model || config.preferred_model || ''), thinkingStrength: String(config.thinking_strength || config.reasoning_effort || 'max'), cliExecutable: String(config.executable || 'dreamina') });
+    setDraft({ providerType: selected.provider_type, displayName: selected.display_name, baseUrl: selected.base_url, capabilities: [...selected.capabilities], enabled: selected.enabled, modelConfig: JSON.stringify(config, null, 2), serverUsername: String(config.server_username || 'opencode'), agent: String(config.agent || 'build'), preferredModel: String(config.model_version || config.orchestrator_model || config.preferred_model || config.tts_model || ''), thinkingStrength: String(config.thinking_strength || config.reasoning_effort || 'max'), cliExecutable: String(config.executable || 'dreamina') });
     setSecret('');
     setEnvironmentVariable(settingsEnvForType[selected.provider_type] || 'OPENAI_API_KEY');
   }, [selected?.id, selected?.model_config]);
@@ -2395,6 +2173,7 @@ function SettingsView({ settings, busy, onRefresh, onSaveProvider, onAddPreset, 
       Object.assign(config, { server_username: draft.serverUsername, agent: draft.agent, thinking_strength: draft.thinkingStrength || 'auto', ...(draft.preferredModel ? { orchestrator_model: draft.preferredModel } : {}) });
     }
     if (draft.providerType === 'jimeng_cli') Object.assign(config, { executable: draft.cliExecutable.trim() || 'dreamina', model_version: draft.preferredModel || 'seedance2.0fast', models: JIMENG_VIDEO_MODELS.map((model) => model.id) });
+    if (draft.providerType === 'minimax') Object.assign(config, { tts_model: draft.preferredModel || 'speech-2.8-hd' });
     const body: Record<string, unknown> = { display_name: draft.displayName.trim(), base_url: draft.providerType === 'jimeng_cli' ? 'cli://dreamina' : draft.baseUrl.trim(), capabilities: draft.capabilities.filter((capability) => supportedCapabilities.includes(capability)), enabled: draft.enabled, model_config: config };
     if (isCreating) body.provider_type = draft.providerType;
     const saved = await onSaveProvider(isCreating ? null : selectedId, body);
@@ -2411,7 +2190,7 @@ function SettingsView({ settings, busy, onRefresh, onSaveProvider, onAddPreset, 
       <article className="settings-health-card"><small>运行时</small><strong>{settings.system.runtime.toUpperCase()}</strong><span>FrameFlow {settings.system.version} · Schema {settings.system.schema_version}</span></article>
       <article className={`settings-health-card ${settings.system.keyring.available ? 'ok' : 'danger'}`}><small>系统凭据库</small><strong>{settings.system.keyring.available ? '可用' : '不可用'}</strong><span>{settings.system.keyring.backend || '未发现可用后端'}</span></article>
       <article className={`settings-health-card ${settings.system.media.ffmpeg && settings.system.media.ffprobe ? 'ok' : 'warn'}`}><small>媒体工具链</small><strong>{settings.system.media.ffmpeg && settings.system.media.ffprobe ? 'FFmpeg 就绪' : '需要补齐'}</strong><span>ffmpeg / ffprobe · {Math.round(settings.system.disk_free_bytes / 1024 / 1024 / 1024)} GB 可用</span></article>
-      <article className={`settings-health-card ${settings.system.openai.credential_configured ? 'ok' : 'warn'}`}><small>OpenAI</small><strong>{settings.system.openai.credential_configured ? '已配置' : '未配置'}</strong><span>{settings.system.provider_count} 个 Provider 配置</span></article>
+      <article className={`settings-health-card ${settings.system.minimax?.credential_configured ? 'ok' : 'warn'}`}><small>MiniMax TTS</small><strong>{settings.system.minimax?.credential_configured ? '已配置' : '未配置'}</strong><span>{settings.system.provider_count} 个 Provider 配置 · TTS 唯一路由</span></article>
     </div>
     <div className="settings-layout">
       <aside className="settings-provider-column"><div className="settings-column-heading"><div><small>PROVIDERS</small><h3>接入目录</h3></div><button onClick={startCreate}>＋ 新配置</button></div>
@@ -2419,18 +2198,19 @@ function SettingsView({ settings, busy, onRefresh, onSaveProvider, onAddPreset, 
         <div className="settings-presets"><small>快速接入预设</small>{settings.presets.map((preset: SettingsPreset) => <button key={preset.preset_id} onClick={() => onAddPreset(preset.preset_id)} disabled={busy}><b>{preset.display_name}</b><span>{settingsProviderLabels[preset.provider_type] || preset.provider_type} · 添加独立配置</span></button>)}</div>
       </aside>
         <div className="settings-editor">
-          <div className="settings-editor-heading"><div><small>{isCreating ? 'NEW PROVIDER' : 'PROVIDER PROFILE'}</small><h3>{isCreating ? '创建新的 V3 Provider' : selected?.display_name || '选择 Provider'}</h3></div>{selected && <div className="settings-editor-actions"><button onClick={async () => { setProbePendingId(selected.id); try { await onProbe(selected.id); } finally { setProbePendingId(null); } }} disabled={busy}>连接探测</button>{!['openai-default', 'jimeng-default', 'opencode-default'].includes(selected.id) && <button className="danger-button" onClick={() => onDeleteProvider(selected.id)} disabled={busy}>删除配置</button>}</div>}</div>
-         {selected && <section className={`settings-connection-result ${probeStatusClass}`} role="status" aria-live="polite"><div className="settings-connection-heading"><small>CONNECTION STATUS</small><strong>{probeStatus}</strong><span>{probe?.error ? String(probe.error) : probePending ? '正在验证接入点、认证与可用模型，请稍候…' : probe?.ok === true ? 'Provider 已响应，下面的数据来自最近一次探测。' : '点击右上角“连接探测”获取实时状态。'}</span></div><dl><div><dt>延迟</dt><dd>{probe?.latency_ms != null ? `${Number(probe.latency_ms)} ms` : '—'}</dd></div><div><dt>可用模型</dt><dd>{probeModels.length ? `${probeModels.length} 个` : '—'}</dd></div><div><dt>声明能力</dt><dd>{probeCapabilities.length ? probeCapabilities.map((capability) => settingsCapabilityLabels[String(capability)] || String(capability)).join('、') : '—'}</dd></div><div><dt>最近检测</dt><dd>{probe?.checked_at ? new Date(Number(probe.checked_at) * 1000).toLocaleString('zh-CN') : '—'}</dd></div>{probe?.server_version != null && <div><dt>Server 版本</dt><dd>{String(probe.server_version)}</dd></div>}</dl></section>}
+          <div className="settings-editor-heading"><div><small>{isCreating ? 'NEW PROVIDER' : 'PROVIDER PROFILE'}</small><h3>{isCreating ? '创建新的 V3 Provider' : selected?.display_name || '选择 Provider'}</h3></div>{selected && <div className="settings-editor-actions"><button onClick={async () => { setProbePendingId(selected.id); try { await onProbe(selected.id); } finally { setProbePendingId(null); } }} disabled={busy}>连接探测</button>{!['openai-default', 'jimeng-default', 'opencode-default', 'minimax-default'].includes(selected.id) && <button className="danger-button" onClick={() => onDeleteProvider(selected.id)} disabled={busy}>删除配置</button>}</div>}</div>
+         {selected && <section className={`settings-connection-result ${probeStatusClass}`} role="status" aria-live="polite"><div className="settings-connection-heading"><small>CONNECTION STATUS</small><strong>{probeStatus}</strong><span>{probe?.error ? String(probe.error) : probePending ? '正在验证接入点、认证与可用模型，请稍候…' : probe?.ok === true ? 'Provider 已响应，下面的数据来自最近一次探测。' : '点击右上角“连接探测”获取实时状态。'}</span></div><dl><div><dt>延迟</dt><dd>{probe?.latency_ms != null ? `${Number(probe.latency_ms)} ms` : '—'}</dd></div><div><dt>可用模型</dt><dd>{probeModels.length ? `${probeModels.length} 个` : '—'}</dd></div><div><dt>声明能力</dt><dd>{probeCapabilities.length ? probeCapabilities.map((capability) => settingsCapabilityLabels[String(capability)] || String(capability)).join('、') : '—'}</dd></div>{selected.provider_type === 'minimax' && <div><dt>可用音色</dt><dd>{probeVoices.length ? `${probeVoices.length} 个` : '—'}</dd></div>}<div><dt>最近检测</dt><dd>{probe?.checked_at ? new Date(Number(probe.checked_at) * 1000).toLocaleString('zh-CN') : '—'}</dd></div>{probe?.server_version != null && <div><dt>Server 版本</dt><dd>{String(probe.server_version)}</dd></div>}</dl>{selected.provider_type === 'minimax' && probeVoices.length > 0 && <p className="settings-help">音色 ID：{probeVoices.slice(0, 12).map((voice) => String(voice.voice_id || voice.id || '')).filter(Boolean).join('、')}{probeVoices.length > 12 ? ' …' : ''}</p>}</section>}
           <div className="settings-form-grid"><label>显示名称<input value={draft.displayName} onChange={(event) => setDraft({ ...draft, displayName: event.target.value })} /></label><label>Provider 类型<select value={draft.providerType} disabled={!isCreating} onChange={(event) => setDraft({ ...draft, providerType: event.target.value, capabilities: [] })}>{settingsProviderTypes.map((type) => <option key={type} value={type}>{settingsProviderLabels[type]}</option>)}</select></label>{draft.providerType === 'jimeng_cli' ? <label className="settings-wide">CLI 可执行文件（只填写程序路径）<input value={draft.cliExecutable} onChange={(event) => setDraft({ ...draft, cliExecutable: event.target.value })} placeholder="dreamina 或 dreamina.exe 的完整路径" /><small className="settings-field-help">不要把 curl 安装命令填在这里；安装命令请在终端执行，成功后这里保持为 dreamina。</small></label> : <label className="settings-wide">Base URL<input value={draft.baseUrl} onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })} placeholder="https://… 或本机 http://127.0.0.1…" /></label>}</div>
          <div className="settings-capability-picker"><span>声明能力</span>{Object.entries(settingsCapabilityLabels).map(([capability, label]) => { const supported = supportedCapabilities.includes(capability); return <label className={supported ? '' : 'unsupported'} key={capability}><input type="checkbox" checked={draft.capabilities.includes(capability)} disabled={!supported} onChange={() => toggleCapability(capability)} />{label}{!supported && <small>不支持</small>}</label>; })}{unsupportedSelectedCapabilities.length > 0 && <p className="settings-capability-help">当前配置中存在不受此 Provider 适配器支持的能力，保存时会自动忽略这些选项。</p>}<p className="settings-capability-explain">{draft.providerType === 'opencode' ? '这里表示 Provider 适配器可以承担的能力，不是单个 Go 模型的媒体生成能力。OpenCode Go 负责文本编排；图片、视频、声音等任务会按能力绑定交给其他 Provider。' : '这里表示当前 Provider 适配器可以承担的能力；具体模型仍以连接探测和能力绑定为准。'}</p></div>
          <label className="settings-toggle"><input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })} />启用此 Provider（停用后不可被能力路由选择）</label>
           {draft.providerType === 'opencode' && <div className="settings-agent-form"><div className="settings-subheading"><small>OPENCODE AGENT</small><h4>Agent 接入参数</h4></div><div className="settings-form-grid"><label>Server 用户名<input value={draft.serverUsername} onChange={(event) => setDraft({ ...draft, serverUsername: event.target.value })} /></label><label>Agent<input value={draft.agent} onChange={(event) => setDraft({ ...draft, agent: event.target.value })} /></label><label>思考强度<select value={draft.thinkingStrength} onChange={(event) => setDraft({ ...draft, thinkingStrength: event.target.value })}><option value="auto">自动（跟随模型）</option><option value="low">低 · 快速响应</option><option value="medium">中 · 平衡</option><option value="high">高 · 深度规划</option><option value="max">最大 · 复杂创作 / QA</option></select></label><label className="settings-wide">主力模型<select value={draft.preferredModel} onChange={(event) => setDraft({ ...draft, preferredModel: event.target.value })} disabled={!opencodeModelOptions.length}><option value="">{opencodeModelOptions.length ? '请选择主力模型' : '请先连接探测模型'}</option>{opencodeModelOptions.map((model) => <option key={model.id} value={model.id}>{model.label}</option>)}</select></label></div>{selectedGoModel && <div className="settings-go-model-card"><div className="settings-go-model-heading"><span>FRAMEFLOW 调度建议</span><strong>{selectedGoModel.name}</strong></div><div className="settings-go-model-focus"><small>更偏向视频制作</small><b>{selectedGoModel.focus}</b></div><p>{selectedGoModel.note}</p>{selectedGoModel.quota && <small className="settings-go-model-quota">官方典型额度：每 5 小时约 {selectedGoModel.quota} 次请求</small>}</div>}{draft.preferredModel && !selectedGoModel && !selectedDetectedModel && <div className="settings-go-model-card settings-go-model-card-warning"><div className="settings-go-model-heading"><span>当前配置</span><strong>{draft.preferredModel}</strong></div><p>该模型不在当前 OpenCode Go 官方目录中。重新探测后可切换到上方 Go 模型组合。</p></div>}<p className="settings-help">模型列表优先来自最近一次连接探测；OpenCode Go 官方组合仅用于补充用途说明。“思考强度”会作为 OpenCode 的 variant 参数发送。“更偏向视频制作”是 FRAMEFLOW 的调度建议，不代表模型原生支持图片或视频生成。保存后会写入 OpenCode 的编排模型配置，并自动同步“编排 Agent”能力绑定。</p></div>}
           {draft.providerType === 'jimeng_cli' && <div className="settings-agent-form"><div className="settings-subheading"><small>DREAMINA CLI</small><h4>即梦视频模型</h4></div><label className="settings-wide">默认模型<select className="settings-jimeng-model-select" value={draft.preferredModel || 'seedance2.0fast'} onChange={(event) => setDraft({ ...draft, preferredModel: event.target.value })}>{JIMENG_VIDEO_MODELS.map((model) => <option key={model.id} value={model.id}>{model.id} · {model.description}</option>)}</select></label><p className="settings-help">模型列表已按当前 dreamina CLI 帮助同步；VIP、图生/首尾帧专用模型会在不匹配的生成模式下被后端拦截。安装命令请在终端执行，不要填入上方路径。登录命令：dreamina login --headless。</p></div>}
+          {draft.providerType === 'minimax' && <div className="settings-agent-form"><div className="settings-subheading"><small>MINIMAX SPEECH</small><h4>MiniMax TTS 模型</h4></div><label className="settings-wide">默认模型<select value={draft.preferredModel || 'speech-2.8-hd'} onChange={(event) => setDraft({ ...draft, preferredModel: event.target.value })}>{(selected?.models.length ? selected.models.map((id) => ({ id, description: '最近探测到的模型' })) : MINIMAX_TTS_MODELS).map((model) => <option key={model.id} value={model.id}>{model.id} · {model.description}</option>)}</select></label><p className="settings-help">TTS 路由已固定为 MiniMax；Base URL 默认使用官方 HTTPS 接口。请先在系统凭据库写入 MINIMAX_API_KEY，再点击“连接探测”。声音 profile 中的 provider voice ID 应填写 MiniMax 音色目录返回的 voice_id。</p></div>}
           <label className="settings-json-field">扩展配置 JSON<textarea value={draft.modelConfig} onChange={(event) => setDraft({ ...draft, modelConfig: event.target.value })} spellCheck={false} /></label>
          <div className="settings-save-row"><button className="settings-primary" onClick={saveProvider} disabled={busy || !draft.displayName.trim() || !draft.baseUrl.trim()}>{isCreating ? '创建 Provider' : '保存 Provider 配置'}</button>{saveFeedback && <span className={`settings-save-feedback ${saveFeedback.kind}`} role="status">{saveFeedback.text}</span>}</div>
-        {!isCreating && selected && (selected.provider_type === 'jimeng_cli' ? <section className="settings-credential-card"><div className="settings-subheading"><small>LOCAL CLI LOGIN</small><h4>即梦本机登录态</h4><p>{selected.credential_configured ? 'CLI 已检测到本机登录态。' : '不填写 API Key；请先安装官方 CLI，并运行 dreamina login 或 dreamina login --headless。'}</p></div><small className="settings-security-note">登录态由官方 dreamina CLI 自己管理，FrameFlow 不读取、不保存 Cookie 或 token。</small></section> : <section className="settings-credential-card"><div className="settings-subheading"><small>CREDENTIALS</small><h4>系统凭据库</h4><p>{selected.credential_configured ? `当前状态：已配置 ${selected.credential_mask || '••••••••'}` : selected.provider_type === 'opencode' || selected.provider_type === 'comfyui' ? '当前 Provider 可以不配置密钥，连接由本地服务决定。' : '当前状态：未配置 API Key'}</p></div><div className="settings-credential-actions"><input type="password" value={secret} onChange={(event) => setSecret(event.target.value)} placeholder="输入后仅写入系统凭据库，不会保存到网页" autoComplete="off"/><button onClick={() => { onWriteCredential(selected.id, secret); setSecret(''); }} disabled={busy || !secret}>写入凭据库</button><select value={environmentVariable} onChange={(event) => setEnvironmentVariable(event.target.value)}><option>{settingsEnvForType[selected.provider_type] || 'OPENAI_API_KEY'}</option><option>OPENAI_API_KEY</option><option>DEEPSEEK_API_KEY</option><option>OPENCODE_SERVER_PASSWORD</option><option>COMFYUI_API_KEY</option></select><button onClick={() => onImportCredential(selected.id, environmentVariable)} disabled={busy}>导入环境变量</button><button className="danger-button" onClick={() => onClearCredential(selected.id)} disabled={busy}>清除系统凭据</button></div><small className="settings-security-note">API Key 不回显、不进入项目 JSON、运行快照、日志、前端 localStorage 或 Provider 探测结果。</small></section>)}
+        {!isCreating && selected && (selected.provider_type === 'jimeng_cli' ? <section className="settings-credential-card"><div className="settings-subheading"><small>LOCAL CLI LOGIN</small><h4>即梦本机登录态</h4><p>{selected.credential_configured ? 'CLI 已检测到本机登录态。' : '不填写 API Key；请先安装官方 CLI，并运行 dreamina login 或 dreamina login --headless。'}</p></div><small className="settings-security-note">登录态由官方 dreamina CLI 自己管理，FrameFlow 不读取、不保存 Cookie 或 token。</small></section> : <section className="settings-credential-card"><div className="settings-subheading"><small>CREDENTIALS</small><h4>系统凭据库</h4><p>{selected.credential_configured ? `当前状态：已配置 ${selected.credential_mask || '••••••••'}` : selected.provider_type === 'opencode' || selected.provider_type === 'comfyui' ? '当前 Provider 可以不配置密钥，连接由本地服务决定。' : '当前状态：未配置 API Key'}</p></div><div className="settings-credential-actions"><input type="password" value={secret} onChange={(event) => setSecret(event.target.value)} placeholder="输入后仅写入系统凭据库，不会保存到网页" autoComplete="off"/><button onClick={() => { onWriteCredential(selected.id, secret); setSecret(''); }} disabled={busy || !secret}>写入凭据库</button><select value={environmentVariable} onChange={(event) => setEnvironmentVariable(event.target.value)}><option>{settingsEnvForType[selected.provider_type] || 'OPENAI_API_KEY'}</option><option>OPENAI_API_KEY</option><option>DEEPSEEK_API_KEY</option><option>OPENCODE_SERVER_PASSWORD</option><option>COMFYUI_API_KEY</option><option>MINIMAX_API_KEY</option></select><button onClick={() => onImportCredential(selected.id, environmentVariable)} disabled={busy}>导入环境变量</button><button className="danger-button" onClick={() => onClearCredential(selected.id)} disabled={busy}>清除系统凭据</button></div><small className="settings-security-note">API Key 不回显、不进入项目 JSON、运行快照、日志、前端 localStorage 或 Provider 探测结果。</small></section>)}
        </div>
-       <aside className="settings-routing" aria-label="Capability routing"><div className="settings-column-heading"><div><small>CAPABILITY ROUTING</small><h3>能力绑定</h3></div><button onClick={onAutoMatch} disabled={busy}>补齐自动推荐</button></div><p className="settings-help">{settings.routing_policy || '先按 Provider 能力和状态自动匹配，再允许手动调整。'} 每项能力只保存一个默认 Provider + model；手动调整后点击“保存绑定”即可用于调试。</p>{settings.capabilities.map((capability) => { const binding = selectedBinding(capability); const candidates = providers.filter((provider) => provider.enabled && provider.contract?.capabilities.includes(capability)); const provider = providers.find((item) => item.id === binding.providerId); const models = provider?.models || []; return <div className="settings-binding-row" key={capability}><label>{settingsCapabilityLabels[capability] || capability}<select value={binding.providerId} onChange={(event) => updateBindingDraft(capability, { providerId: event.target.value, model: '' })}><option value="">未绑定</option>{candidates.map((item) => <option key={item.id} value={item.id}>{item.display_name}</option>)}</select></label><label>模型<select value={binding.model} onChange={(event) => updateBindingDraft(capability, { model: event.target.value })}><option value="">Provider 默认</option>{(models.length ? models : capability === 'orchestrator' ? settings.orchestrator_models.models.map((item) => item.id) : []).map((model) => <option key={model} value={model}>{model}</option>)}</select></label><button onClick={() => onBind(capability, binding.providerId, binding.model || null)} disabled={busy || !binding.providerId}>保存绑定</button></div>; })}</aside>
+       <aside className="settings-routing" aria-label="Capability routing"><div className="settings-column-heading"><div><small>CAPABILITY ROUTING</small><h3>能力绑定</h3></div><button onClick={onAutoMatch} disabled={busy}>补齐自动推荐</button></div><p className="settings-help">{settings.routing_policy || '先按 Provider 能力和状态自动匹配，再允许手动调整。'} MiniMax 是当前唯一 TTS Provider；每项能力只保存一个默认 Provider + model。</p>{settings.capabilities.map((capability) => { const binding = selectedBinding(capability); const candidates = providers.filter((provider) => provider.enabled && provider.contract?.capabilities.includes(capability)); const provider = providers.find((item) => item.id === binding.providerId); const models = provider?.models || []; return <div className="settings-binding-row" key={capability}><label>{settingsCapabilityLabels[capability] || capability}<select value={binding.providerId} onChange={(event) => updateBindingDraft(capability, { providerId: event.target.value, model: '' })}><option value="">未绑定</option>{candidates.map((item) => <option key={item.id} value={item.id}>{item.display_name}</option>)}</select></label><label>模型<select value={binding.model} onChange={(event) => updateBindingDraft(capability, { model: event.target.value })}><option value="">Provider 默认</option>{(models.length ? models : capability === 'orchestrator' ? settings.orchestrator_models.models.map((item) => item.id) : []).map((model) => <option key={model} value={model}>{model}</option>)}</select></label><button onClick={() => onBind(capability, binding.providerId, binding.model || null)} disabled={busy || !binding.providerId}>保存绑定</button></div>; })}</aside>
     </div>
     <section className="settings-security-panel"><div><small>SECURITY BOUNDARY</small><h3>安全与费用规则</h3></div><ul><li>付费媒体调用必须通过 V3 审批门，设置页不会直接触发生成。</li><li>密钥只进入系统凭据库；清除操作只清除系统存储，不修改环境变量。</li><li>Provider 探测只展示脱敏状态、延迟、能力和模型目录。</li><li>新结果保留为独立版本；设置变更不会覆盖项目、资产或时间线内容。</li></ul></section>
   </section>;
@@ -2468,11 +2248,6 @@ function Studio() {
   const [assetLibrary, setAssetLibrary] = useState<AssetLibraryEnvelope | null>(null);
   const [audioStudio, setAudioStudio] = useState<AudioStudioEnvelope | null>(null);
   const [audioDirty, setAudioDirty] = useState(false);
-  const [assetAudit, setAssetAudit] = useState<AssetAuditEnvelope | null>(null);
-  const [assetLibraryFilter, setAssetLibraryFilter] = useState<AssetLibraryStatusFilter>('all');
-  const [assetLibraryScope, setAssetLibraryScope] = useState<AssetLibraryScope>('all');
-  const [assetLibrarySearch, setAssetLibrarySearch] = useState('');
-  const [assetLibrarySort, setAssetLibrarySort] = useState<AssetSort>('priority');
   const [assetBoardEnvelope, setAssetBoardEnvelope] = useState<AssetBoardEnvelope | null>(null);
   const [assetBoardNodes, setAssetBoardNodes] = useState<AssetFlowNode[]>([]);
   const [assetBoardEdges, setAssetBoardEdges] = useState<Edge[]>([]);
@@ -2493,6 +2268,10 @@ function Studio() {
   const assetBoardSelectedKeyRef = useRef<AssetBoardSelectionKey | null>(null);
     const refreshAssetBoardRef = useRef<((preserveLayout?: boolean, libraryOverride?: AssetLibraryEnvelope, selectedAssetId?: string | null) => Promise<AssetBoardEnvelope | null>) | null>(null);
   const assetBoardColumnWidthsRef = useRef<AssetBoardColumnWidths>(defaultAssetBoardColumnWidths);
+  // Withdrawal advances the project revision. React state is asynchronous, so
+  // two nearby clicks must not send the same stale expected_revision.
+  const activeAssetRemovalQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const activeAssetRemovalCountRef = useRef(0);
   assetBoardEnvelopeRef.current = assetBoardEnvelope;
   assetBoardNodesRef.current = assetBoardNodes;
   assetBoardSelectedKeyRef.current = assetBoardSelectedKey;
@@ -2500,12 +2279,13 @@ function Studio() {
   const [assetBoardGap, setAssetBoardGap] = useState(16);
   const [assetBoardCollapsedScopes, setAssetBoardCollapsedScopes] = useState<Record<string, string | true>>({});
   const [assetBoardLocator, setAssetBoardLocator] = useState('');
+  const assetBoardLocatorTimerRef = useRef<number | null>(null);
   const [assetBoardIndexOpen, setAssetBoardIndexOpen] = useState(false);
   const [assetBoardIndexPosition, setAssetBoardIndexPosition] = useState({ x: 11, y: 100 });
   const [assetBoardDirectoryQuery, setAssetBoardDirectoryQuery] = useState('');
-  const [focusAssetId, setFocusAssetId] = useState('');
   const [assetProductionFocus, setAssetProductionFocus] = useState<AssetProductionFocus>(null);
   const [assetPromptDraft, setAssetPromptDraft] = useState<{ assetId: string; prompt: string; promptPack?: Record<string, unknown>; promptQuality?: LibraryAsset['promptQuality'] } | null>(null);
+  const [assetEditorDraftDirty, setAssetEditorDraftDirty] = useState(false);
   const [settings, setSettings] = useState<SettingsEnvelope | null>(null);
   const [storyRun, setStoryRun] = useState<StoryRun | null>(null);
   const [storyDiff, setStoryDiff] = useState<StoryDiff | null>(null);
@@ -2513,6 +2293,10 @@ function Studio() {
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('V3 工作台已连接');
+  const [autoSaveState, setAutoSaveState] = useState<AutoSaveState>('idle');
+  const [autoSaveError, setAutoSaveError] = useState('');
+  const [autoSaveErrorOpen, setAutoSaveErrorOpen] = useState(false);
+  const [autoSaveChangeVersion, setAutoSaveChangeVersion] = useState(0);
   const [assetPromptRun, setAssetPromptRun] = useState<AssetPromptRunState>({ status: 'idle', message: '', startedAt: null });
   const [storyDirty, setStoryDirty] = useState(false);
   const [newEdgeRelation, setNewEdgeRelation] = useState<EdgeRelation>('execution');
@@ -2531,7 +2315,6 @@ function Studio() {
   const requestConfirmation = useCallback((title: string, message: string, confirmLabel = '确认', danger = false) => new Promise<boolean>((resolve) => setConfirmation({ title, message, confirmLabel, danger, resolve })), []);
   const closeConfirmation = useCallback((accepted: boolean) => { confirmation?.resolve(accepted); setConfirmation(null); }, [confirmation]);
   const [assetCreateOpen, setAssetCreateOpen] = useState(false);
-  const [assetImportOpen, setAssetImportOpen] = useState(false);
   const [assetCreateDraft, setAssetCreateDraft] = useState({ name: '', assetClass: 'character', assetRole: 'identity', grade: 'B', required: true, shotId: '' });
   const [assetPlacement, setAssetPlacement] = useState<AssetPlacement | null>(null);
   const [assetContextMenu, setAssetContextMenu] = useState<{ x: number; y: number; target: AssetBoardContextTarget } | null>(null);
@@ -2545,6 +2328,30 @@ function Studio() {
   const assetBoardIndexClickSuppressed = useRef(false);
   const generateAssetPromptRef = useRef<(assetId: string) => void>(() => undefined);
   const generateFusionPromptRef = useRef<(assetId: string, sourceAssetIds: string[], shotId: string) => void>(() => undefined);
+  const graphEnvelopeRef = useRef<GraphEnvelope | null>(null);
+  const nodesRef = useRef<FlowNode[]>([]);
+  const edgesRef = useRef<Edge[]>([]);
+  const storyRef = useRef<StoryEnvelope | null>(null);
+  const timelineEnvelopeRef = useRef<TimelineEnvelope | null>(null);
+  const assetBoardEdgesRef = useRef<Edge[]>([]);
+  const assetBoardLayoutRef = useRef<AssetBoardLayoutState>({ preset: 'standard', mode: 'adaptive', columnWidth: 310, columnWidths: defaultAssetBoardColumnWidths, directoryPosition: { x: 11, y: 100 }, gap: 16 });
+  const assetBoardDirtyRef = useRef(false);
+  // Incremented whenever a server response replaces the board snapshot. An
+  // autosave queued before that replacement must never write its stale flow
+  // back over the authoritative response.
+  const assetBoardMutationEpochRef = useRef(0);
+  const audioStudioRef = useRef<AudioStudioEnvelope | null>(null);
+  const audioDraftRef = useRef<AudioStudioDocument | null>(null);
+  const audioRevisionRef = useRef<number | null>(null);
+  const assetEditorDraftsRef = useRef<Map<string, AssetEditorDraft>>(new Map());
+  const autoSaveTimerRef = useRef<number | null>(null);
+  const autoSaveRetryTimerRef = useRef<number | null>(null);
+  const autoSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const autoSaveInFlightRef = useRef(false);
+  const autoSaveFailureDetailsRef = useRef<Record<string, string>>({});
+  const autoSaveRetryAllowedRef = useRef(true);
+  const dirtyStateRef = useRef({ graph: false, story: false, assetBoard: false, assetEditor: false, audio: false, timeline: false });
+  const projectIdRef = useRef('');
   const projectLoadSequence = useRef(0);
   const [historyRevision, setHistoryRevision] = useState(0);
   const clearAssetBoardHistory = useCallback(() => {
@@ -2552,8 +2359,72 @@ function Studio() {
     assetBoardDragSnapshot.current = null;
   }, []);
 
+  graphEnvelopeRef.current = graphEnvelope;
+  nodesRef.current = nodes;
+  edgesRef.current = edges;
+  storyRef.current = story;
+  timelineEnvelopeRef.current = timelineEnvelope;
+  assetBoardEdgesRef.current = assetBoardEdges;
+  assetBoardLayoutRef.current = { preset: assetBoardLayoutPreset, mode: assetBoardLayoutMode, columnWidth: assetBoardColumnWidth, columnWidths: assetBoardColumnWidths, directoryPosition: assetBoardIndexPosition, gap: assetBoardGap };
+  assetBoardDirtyRef.current = assetBoardDirty;
+  dirtyStateRef.current = { graph: dirty, story: storyDirty, assetBoard: assetBoardDirty, assetEditor: assetEditorDraftDirty, audio: audioDirty, timeline: timelineDirty };
+  projectIdRef.current = projectId;
+
+  useEffect(() => {
+    if (!audioStudio) {
+      audioDraftRef.current = null;
+      audioRevisionRef.current = null;
+      return;
+    }
+    if (!audioDirty) {
+      audioStudioRef.current = audioStudio;
+      audioDraftRef.current = audioStudio.document;
+      audioRevisionRef.current = audioStudio.revision;
+    }
+  }, [audioDirty, audioStudio?.revision]);
+
+  const bumpAutoSaveChange = useCallback(() => {
+    autoSaveRetryAllowedRef.current = true;
+    if (autoSaveRetryTimerRef.current !== null) {
+      window.clearTimeout(autoSaveRetryTimerRef.current);
+      autoSaveRetryTimerRef.current = null;
+    }
+    setAutoSaveChangeVersion((value) => value + 1);
+  }, []);
+  const markGraphDirty = useCallback(() => { setDirty(true); bumpAutoSaveChange(); }, [bumpAutoSaveChange]);
+  const markStoryDirty = useCallback(() => { setStoryDirty(true); bumpAutoSaveChange(); }, [bumpAutoSaveChange]);
+  const markAssetBoardDirty = useCallback(() => { assetBoardDirtyRef.current = true; setAssetBoardDirty(true); bumpAutoSaveChange(); }, [bumpAutoSaveChange]);
+  const markTimelineDirty = useCallback(() => { setTimelineDirty(true); bumpAutoSaveChange(); }, [bumpAutoSaveChange]);
+  const markAudioDirty = useCallback(() => { setAudioDirty(true); bumpAutoSaveChange(); }, [bumpAutoSaveChange]);
+  const commitAssetBoardServerState = useCallback((envelope: AssetBoardEnvelope, nextNodes: AssetFlowNode[], nextEdges: Edge[]) => {
+    // Update all refs before scheduling React state updates. Any queued
+    // autosave that runs in this window can therefore only see one coherent
+    // server snapshot, never a new envelope paired with old flow edges.
+    assetBoardEnvelopeRef.current = envelope;
+    assetBoardNodesRef.current = nextNodes;
+    assetBoardEdgesRef.current = nextEdges;
+    assetBoardDirtyRef.current = false;
+    dirtyStateRef.current.assetBoard = false;
+    assetBoardMutationEpochRef.current += 1;
+    setAssetBoardEnvelope(envelope);
+    setAssetBoardNodes(nextNodes);
+    setAssetBoardEdges(nextEdges);
+    setAssetBoardDirty(false);
+  }, []);
+  const handleAudioDocumentChange = useCallback((document: AudioStudioDocument, isDirty: boolean) => {
+    audioDraftRef.current = document;
+    if (isDirty) markAudioDirty();
+  }, [markAudioDirty]);
+  const handleAssetEditorDraftChange = useCallback((assetId: string, draft: AssetEditorDraft) => {
+    const previous = assetEditorDraftsRef.current.get(assetId);
+    if (previous && JSON.stringify(previous) === JSON.stringify(draft)) return;
+    assetEditorDraftsRef.current.set(assetId, draft);
+    setAssetEditorDraftDirty(true);
+    bumpAutoSaveChange();
+  }, [bumpAutoSaveChange]);
+
   const project = projects.find((item) => item.document.id === projectId);
-  const currentPageDirty = mode === 'story' ? storyDirty : mode === 'timeline' ? timelineDirty : mode === 'canvas' ? assetBoardDirty : mode === 'audio' ? audioDirty : dirty;
+  const currentPageDirty = mode === 'story' ? storyDirty : mode === 'timeline' ? timelineDirty : mode === 'canvas' ? assetBoardDirty || assetEditorDraftDirty : mode === 'audio' ? audioDirty : dirty;
   const selectedNodeIds = useMemo(() => nodes.filter((node) => node.selected).map((node) => node.id), [nodes]);
   const selectedEdgeIds = useMemo(() => edges.filter((edge) => edge.selected).map((edge) => edge.id), [edges]);
   const selectedEdge = useMemo(() => selectedEdgeIds.length === 1 ? edges.find((edge) => edge.id === selectedEdgeIds[0]) : undefined, [edges, selectedEdgeIds]);
@@ -2638,7 +2509,7 @@ function Studio() {
       asset_board: assetBoardEnvelope?.revision || null,
       timeline: timelineEnvelope?.revision || null,
     },
-    pending_changes: { graph: dirty, story: storyDirty, asset_board: assetBoardDirty, timeline: timelineDirty },
+    pending_changes: { graph: dirty, story: storyDirty, asset_board: assetBoardDirty, asset_editor_draft: assetEditorDraftDirty, timeline: timelineDirty },
     project_document: project?.document || null,
     story_document: story?.story || null,
     asset_library: assetLibrary || null,
@@ -2689,12 +2560,9 @@ function Studio() {
     const fullPrompt = composeAssetPrompt(asset, story, asset.prompt);
     try {
       await navigator.clipboard.writeText(fullPrompt);
-      const opened = window.open('https://chatgpt.com/', '_blank', 'noopener,noreferrer');
-      setNotice(opened
-        ? `「${asset.name || asset.id}」Prompt 已复制，ChatGPT 已打开；生成后请把图片导回该资产卡`
-        : `「${asset.name || asset.id}」Prompt 已复制；浏览器阻止了新标签页，请手动打开 ChatGPT`);
+      setNotice(`「${asset.name || asset.id}」Prompt 已复制`);
     } catch {
-      setNotice('浏览器未授权剪贴板，请在右侧资产面板手动复制。');
+      setNotice('浏览器未授权剪贴板，请手动复制右侧 Prompt。');
     }
   };
 
@@ -2702,7 +2570,7 @@ function Studio() {
     if (!projectId) return;
     const board = await studioApi.assetBoard(projectId);
       const boardNodes = assetBoardToFlowNodes(board.board, library.assets, assetBoardFilter, assetBoardShowShots, story?.story.shots || [], { preset: assetBoardLayoutPreset, columnWidth: assetBoardColumnWidth, gap: assetBoardGap, layoutMode: assetBoardLayoutMode, collapsedScopes: assetBoardCollapsedScopes, onToggleScope: toggleAssetBoardScope, onContextMenu: openAssetContextMenu, onApprovePrompt: approveAssetPromptCard, onGenerateImage: generateAssetImageCard, onCopyPrompt: copyAssetPromptCard, onUploadAsset: uploadAssetFromBoard, onApproveAsset: approveAssetFromBoard, onRejectAsset: rejectAssetFromBoard, onRegisterAsset: registerAssetFromBoard, onRemoveArtifact: removeUploadedAssetFromBoard, onOpenAssetProduction: openAssetProductionShortcut });
-    setAssetBoardEnvelope(board); setAssetBoardNodes(boardNodes); setAssetBoardEdges(assetBoardToFlowEdges(board.board, boardNodes)); setAssetBoardDirty(false);
+    commitAssetBoardServerState(board, boardNodes, assetBoardToFlowEdges(board.board, boardNodes));
   };
 
   const approveAssetPromptCard = async (assetId: string) => {
@@ -2780,10 +2648,7 @@ function Studio() {
       setStoryDirty(false);
       setProjects((current) => current.map((item) => item.document.id === projectId ? { ...item, revision: assigned.project_revision } : item));
       setAssetLibrary(assigned.library);
-      setAssetBoardEnvelope(synced);
-      setAssetBoardNodes(boardNodes);
-      setAssetBoardEdges(assetBoardToFlowEdges(synced.board, boardNodes));
-      setAssetBoardDirty(false);
+      commitAssetBoardServerState(synced, boardNodes, assetBoardToFlowEdges(synced.board, boardNodes));
       setAssetPlacement(null);
       setNotice(`${pending.name} 已${pending.mode === 'move' ? '移动并' : '分配到'} ${normalizedShotId}，已加入 ${normalizedShotId} 分镜资产组`);
     } catch (error) {
@@ -2819,6 +2684,11 @@ function Studio() {
       return;
     }
     setAssetBoardLocator(normalized);
+    if (assetBoardLocatorTimerRef.current !== null) window.clearTimeout(assetBoardLocatorTimerRef.current);
+    assetBoardLocatorTimerRef.current = window.setTimeout(() => {
+      setAssetBoardLocator((current) => current === normalized ? '' : current);
+      assetBoardLocatorTimerRef.current = null;
+    }, 720);
     setNotice(`已定位：${node.data.label}`);
   }, [assetBoardNodes]);
   const clampAssetBoardIndexPosition = useCallback((x: number, y: number) => {
@@ -2844,7 +2714,7 @@ function Studio() {
       setAssetBoardIndexPosition(next);
       if (assetBoardEnvelope) {
         setAssetBoardEnvelope((current) => current ? { ...current, board: { ...current.board, metadata: { ...current.board.metadata, layout_directory_position: next } } } : current);
-        setAssetBoardDirty(true);
+        markAssetBoardDirty();
       }
     };
     const stop = () => {
@@ -2856,7 +2726,7 @@ function Studio() {
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', stop, { once: true });
-  }, [assetBoardEnvelope, assetBoardIndexPosition, clampAssetBoardIndexPosition]);
+  }, [assetBoardEnvelope, assetBoardIndexPosition, clampAssetBoardIndexPosition, markAssetBoardDirty]);
   const openAssetProductionShortcut = useCallback((assetId: string, target: 'prompt' | 'upload', nodeId?: string) => {
     const currentEnvelope = assetBoardEnvelopeRef.current;
     const currentNodes = assetBoardNodesRef.current;
@@ -2958,8 +2828,8 @@ function Studio() {
     setAssetBoardColumnWidth(Math.max(220, Math.round((safeNextWidths['asset-flow'] - assetBoardGap) / 2)));
     setAssetBoardEnvelope((currentEnvelope) => currentEnvelope ? { ...currentEnvelope, board } : currentEnvelope);
     setAssetBoardNodes(applyFixedAssetBoardFrame(nextNodes, safeNextWidths));
-    setAssetBoardDirty(true);
-  }, [applyFixedAssetBoardFrame, assetBoardLayoutMode]);
+    markAssetBoardDirty();
+  }, [applyFixedAssetBoardFrame, assetBoardLayoutMode, markAssetBoardDirty]);
   useLayoutEffect(() => {
     setAssetBoardNodes((current) => {
       let changed = false;
@@ -2970,7 +2840,7 @@ function Studio() {
        });
       return changed ? next : current;
     });
-  }, [generateFusionPromptFromBoard, generatePromptFromBoard, openAssetProductionShortcut, resizeAssetBoardColumn]);
+  }, [assetBoardNodes, generateFusionPromptFromBoard, generatePromptFromBoard, openAssetProductionShortcut, resizeAssetBoardColumn]);
   const assetBoardLocatorOptions = useMemo(() => {
     const seen = new Set<string>();
     const options: Array<{ value: string; label: string; group: 'shot' | 'asset' }> = [];
@@ -3035,12 +2905,25 @@ function Studio() {
     setAudioDirty(false);
     setAssetBoardEnvelope(null);
     setAssetBoardSelection(null);
-    setAssetAudit(null);
     setStoryRun(null);
     setRun(null);
+    setDirty(false);
+    setStoryDirty(false);
+    setTimelineDirty(false);
+    setAssetBoardDirty(false);
+    assetBoardDirtyRef.current = false;
+    assetBoardMutationEpochRef.current += 1;
+    setAssetEditorDraftDirty(false);
+    assetEditorDraftsRef.current.clear();
+    setAutoSaveState('idle');
+    setAutoSaveError('');
+    setAutoSaveErrorOpen(false);
+    audioStudioRef.current = null;
+    audioDraftRef.current = null;
+    audioRevisionRef.current = null;
     setBusy(true);
     studioApi.loadProjectSnapshot(projectId, controller.signal)
-      .then(({ graph: envelope, timeline: timelineEnvelope, timelinePreflight: preflight, story: storyEnvelope, storyRuns, assetLibrary: library, assetBoard, dashboard: dashboardEnvelope, assetAudit, audioStudio: audioEnvelope }) => {
+      .then(({ graph: envelope, timeline: timelineEnvelope, timelinePreflight: preflight, story: storyEnvelope, storyRuns, assetLibrary: library, assetBoard, dashboard: dashboardEnvelope, audioStudio: audioEnvelope }) => {
         if (controller.signal.aborted || sequence !== projectLoadSequence.current) return;
         setGraphEnvelope(envelope);
         setNodes(toFlowNodes(envelope.graph));
@@ -3053,8 +2936,6 @@ function Studio() {
         setAssetLibrary(library);
         setAudioStudio(audioEnvelope);
         setAudioDirty(false);
-        setAssetAudit(assetAudit);
-        setAssetBoardEnvelope(assetBoard);
         setAssetBoardCollapsedScopes({});
         setAssetBoardLocator('');
         const loadedPreset = (['compact', 'standard', 'spacious'] as AssetGridPreset[]).includes(String(assetBoard.board.metadata.layout_preset) as AssetGridPreset) ? String(assetBoard.board.metadata.layout_preset) as AssetGridPreset : 'standard';
@@ -3072,9 +2953,7 @@ function Studio() {
         setAssetBoardGap(loadedGap);
         setAssetBoardIndexPosition(clampAssetBoardIndexPosition(Number(storedIndexPosition.x) || 11, Number(storedIndexPosition.y) || 100));
       const boardNodes = assetBoardToFlowNodes(assetBoard.board, library.assets, 'all', true, storyEnvelope.story.shots, { preset: loadedPreset, columnWidth: loadedColumnWidth, gap: loadedGap, layoutMode: loadedLayoutMode, collapsedScopes: {}, onToggleScope: toggleAssetBoardScope, onContextMenu: openAssetContextMenu, onApprovePrompt: approveAssetPromptCard, onGenerateImage: generateAssetImageCard, onCopyPrompt: copyAssetPromptCard, onUploadAsset: uploadAssetFromBoard, onApproveAsset: approveAssetFromBoard, onRejectAsset: rejectAssetFromBoard, onRegisterAsset: registerAssetFromBoard, onRemoveArtifact: removeUploadedAssetFromBoard, onOpenAssetProduction: openAssetProductionShortcut });
-        setAssetBoardNodes(boardNodes);
-        setAssetBoardEdges(assetBoardToFlowEdges(assetBoard.board, boardNodes));
-        setAssetBoardDirty(false);
+        commitAssetBoardServerState(assetBoard, boardNodes, assetBoardToFlowEdges(assetBoard.board, boardNodes));
          setDashboard(dashboardEnvelope);
          setDashboardError('');
         setStoryRun(storyRuns.runs[0] || null);
@@ -3149,11 +3028,8 @@ function Studio() {
     const selectedNode = selectedAssetId ? boardNodes.find((node) => !node.data.presentationOnly && node.data.node_type === 'asset' && String(node.data.asset_id || '') === selectedAssetId) : undefined;
     const selectedSelectionKey = selectedNode ? assetBoardSelectionKey(selectedNode.data) : null;
     const nextBoardNodes = selectedSelectionKey ? applyAssetBoardSelection(boardNodes, selectedSelectionKey) : boardNodes;
-    setAssetBoardEnvelope(refreshed);
-    setAssetBoardNodes(nextBoardNodes);
     setAssetBoardSelection(selectedSelectionKey);
-    setAssetBoardEdges(assetBoardToFlowEdges(refreshed.board, nextBoardNodes));
-    setAssetBoardDirty(false);
+    commitAssetBoardServerState(refreshed, nextBoardNodes, assetBoardToFlowEdges(refreshed.board, nextBoardNodes));
     return refreshed;
   };
   refreshAssetBoardRef.current = refreshAssetBoard;
@@ -3183,14 +3059,10 @@ function Studio() {
       const result = await studioApi.deleteAsset(projectId, assetId, project.revision);
       setProjects((current) => current.map((item) => item.document.id === projectId ? { ...item, revision: result.revision } : item));
       setAssetLibrary(result.library);
-      void studioApi.assetAudit(projectId).then(setAssetAudit).catch(() => undefined);
       if (result.story) setStory((current) => current ? { ...current, story: result.story } : current);
       const envelope = result.asset_board || await studioApi.assetBoard(projectId);
       const flow = buildAssetBoardFlow(envelope, result.library, result.story?.shots || story?.story.shots || []);
-      setAssetBoardEnvelope(envelope);
-      setAssetBoardNodes(flow.boardNodes);
-      setAssetBoardEdges(flow.boardEdges);
-      setAssetBoardDirty(false);
+      commitAssetBoardServerState(envelope, flow.boardNodes, flow.boardEdges);
       setAssetPlacement(null);
       setNotice(`已删除资产「${label}」及其画布内容；候选文件已保留`);
       void refreshDashboard(false);
@@ -3242,13 +3114,6 @@ function Studio() {
     } finally { setBusy(false); }
   };
 
-  const refreshAssets = () => {
-     if (!projectId) return;
-     setBusy(true);
-     Promise.all([studioApi.assetLibrary(projectId), studioApi.assetAudit(projectId)]).then(([library, audit]) => { setAssetLibrary(library); setAssetAudit(audit); return refreshAssetBoard(true, library); }).then(() => { void refreshDashboard(false); }).catch((error: Error) => setNotice(error.message)).finally(() => setBusy(false));
-  };
-  const refreshAssetAudit = () => { const requestedProjectId = projectId; if (!requestedProjectId) return; studioApi.assetAudit(requestedProjectId).then((value) => { if (requestedProjectId === projectId) setAssetAudit(value); }).catch((error: Error) => { if (requestedProjectId === projectId) setNotice(error.message); }); };
-
   const refreshDashboard = async (showProgress = true) => {
     const requestedProjectId = projectId;
     if (!requestedProjectId) return;
@@ -3268,7 +3133,7 @@ function Studio() {
   };
 
   const openDashboardTask = async (task: DashboardTask) => {
-    const route = task.route as StudioMode;
+    const route = String(task.route || 'home');
     if (task.action === 'confirm_generation' && task.targetId) {
       setBusy(true);
       try {
@@ -3314,21 +3179,22 @@ function Studio() {
       return;
     }
     if (route === 'assets') {
-      // A dashboard task is a deep link. Clear a previous semantic/status
-      // filter first, otherwise the target asset can remain hidden while the
-      // library opens on a different selection.
-      setAssetLibraryFilter('all');
-      setAssetLibraryScope('all');
-      setAssetLibrarySearch('');
-      setFocusAssetId(task.targetId || '');
+      // Asset work is now centered on the production canvas. Keep the
+      // dashboard's legacy route value as a data contract, but resolve it to
+      // the canvas and select the target asset there.
+      setMode('canvas');
+      await refreshAssetBoard(true, undefined, task.targetId || null);
+      setNotice(`已定位到：${task.title}`);
+      return;
     }
-    setMode(route);
+    const nextMode: StudioMode = ['home', 'story', 'canvas', 'timeline', 'audio', 'settings'].includes(route) ? route as StudioMode : 'home';
+    setMode(nextMode);
     setNotice(`已定位到：${task.title}`);
   };
 
   const openDashboardStage = (stage: ProjectDashboard['stages'][number]) => {
-    if (stage.route === 'assets') { setFocusAssetId(''); setAssetLibraryFilter('all'); setAssetLibraryScope('all'); }
-    setMode(stage.route as StudioMode);
+    const route = String(stage.route || 'home');
+    setMode(route === 'assets' ? 'canvas' : ['home', 'story', 'canvas', 'timeline', 'audio', 'settings'].includes(route) ? route as StudioMode : 'home');
     setNotice(`已进入${stage.label}`);
   };
 
@@ -3466,19 +3332,45 @@ function Studio() {
     try { setTimelinePreflight(await studioApi.timelinePreflight(projectId)); } catch (error) { setNotice((error as Error).message); }
   };
 
-  const saveTimeline = async () => {
-    if (!projectId || !timelineEnvelope) return;
-    setBusy(true);
+  const saveTimeline = async (background = false, expectedRevisionOverride?: number, allowRetry = true): Promise<TimelineEnvelope | null> => {
+    const current = timelineEnvelopeRef.current || timelineEnvelope;
+    if (!projectId || !current) return null;
+    const document = current.document;
+    const expectedRevision = expectedRevisionOverride ?? current.revision;
+    if (!background) setBusy(true);
     try {
-      const saved = await studioApi.saveTimeline(projectId, timelineEnvelope.document, timelineEnvelope.revision);
-      setTimelineEnvelope(saved);
-      setTimelineDirty(false);
-      await refreshTimelinePreflight();
-      setNotice(`时间线已保存 · v${saved.revision}`);
-      void refreshDashboard(false);
+      const saved = await studioApi.saveTimeline(projectId, document, expectedRevision);
+      const unchanged = JSON.stringify(timelineEnvelopeRef.current?.document || {}) === JSON.stringify(document);
+      const next = unchanged ? saved : { ...saved, document: timelineEnvelopeRef.current?.document || saved.document };
+      timelineEnvelopeRef.current = next;
+      setTimelineEnvelope((currentEnvelope) => unchanged || !currentEnvelope ? next : { ...next, document: currentEnvelope.document });
+      if (unchanged) setTimelineDirty(false);
+      if (background) {
+        void studioApi.timelinePreflight(projectId).then(setTimelinePreflight).catch(() => undefined);
+      } else {
+        await refreshTimelinePreflight();
+        setNotice(`时间线已保存 · v${saved.revision}`);
+        void refreshDashboard(false);
+      }
+      return next;
     } catch (error) {
+      if (background && allowRetry && error instanceof StudioApiError && error.status === 409) {
+        try {
+          const latest = await studioApi.timeline(projectId);
+          const local = timelineEnvelopeRef.current || current;
+          const merged = { ...latest, document: local.document };
+          timelineEnvelopeRef.current = merged;
+          setTimelineEnvelope(merged);
+          return await saveTimeline(true, latest.revision, false);
+        } catch (retryError) {
+          error = retryError;
+        }
+      }
+      if (background && error instanceof StudioApiError && !error.retryable && error.status !== 409) autoSaveRetryAllowedRef.current = false;
+      if (background) autoSaveFailureDetailsRef.current['时间线'] = (error as Error).message;
       setNotice((error as Error).message);
-    } finally { setBusy(false); }
+      return null;
+    } finally { if (!background) setBusy(false); }
   };
 
   const captureAssetBoardSnapshot = useCallback((nodes = assetBoardNodes, edges = assetBoardEdges, board = assetBoardEnvelope?.board): AssetBoardEditorSnapshot | null => {
@@ -3521,7 +3413,7 @@ function Studio() {
       const framedNodes = applyFixedAssetBoardFrame(nextNodes);
      setAssetBoardNodes(framedNodes);
     setAssetBoardEdges(assetBoardToFlowEdges(board, nextNodes));
-    setAssetBoardDirty(true);
+    markAssetBoardDirty();
   }, [applyFixedAssetBoardFrame, assetBoardCollapsedScopes, assetBoardEnvelope, assetBoardFilter, assetBoardOnlyBlocked, assetBoardShowCandidates, assetBoardShowShots, assetBoardShotId, assetLibrary?.assets, openAssetContextMenu, approveAssetPromptCard, generateAssetImageCard, copyAssetPromptCard, setAssetBoardSelection, story?.story.shots, toggleAssetBoardScope]);
 
   const undoAssetBoard = useCallback(() => {
@@ -3577,8 +3469,8 @@ function Studio() {
       assetBoardDragSnapshot.current = null;
        rememberAssetBoardEdit(before, captureAssetBoardSnapshot(framedNodes, assetBoardEdges));
     }
-    if (acceptedChanges.some((change) => change.type !== 'select')) setAssetBoardDirty(true);
-     }, [applyFixedAssetBoardFrame, assetBoardEdges, assetBoardNodes, captureAssetBoardSnapshot, recordAssetBoardState, rememberAssetBoardEdit, setAssetBoardSelection]);
+    if (acceptedChanges.some((change) => change.type !== 'select')) markAssetBoardDirty();
+     }, [applyFixedAssetBoardFrame, assetBoardEdges, assetBoardNodes, captureAssetBoardSnapshot, markAssetBoardDirty, recordAssetBoardState, rememberAssetBoardEdit, setAssetBoardSelection]);
 
   const onAssetNodeDragStart = useCallback(() => {
     assetBoardDragSnapshot.current = captureAssetBoardSnapshot();
@@ -3594,8 +3486,8 @@ function Studio() {
     const nextEdges = applyEdgeChangesLocal(changes, assetBoardEdges);
     setAssetBoardEdges(nextEdges);
     if (changes.some((change) => change.type !== 'select')) recordAssetBoardState(assetBoardNodes, assetBoardEdges, assetBoardNodes, nextEdges);
-    if (changes.some((change) => change.type !== 'select')) setAssetBoardDirty(true);
-  }, [assetBoardEdges, assetBoardNodes, recordAssetBoardState]);
+    if (changes.some((change) => change.type !== 'select')) markAssetBoardDirty();
+  }, [assetBoardEdges, assetBoardNodes, markAssetBoardDirty, recordAssetBoardState]);
 
   const connectAssetBoard = useCallback((connection: Connection) => {
     if (!connection.source || !connection.target || connection.source === connection.target) return;
@@ -3625,43 +3517,75 @@ function Studio() {
     if (nextEdges.length === assetBoardEdges.length) return;
     setAssetBoardEdges(nextEdges);
     recordAssetBoardState(assetBoardNodes, assetBoardEdges, assetBoardNodes, nextEdges);
-    setAssetBoardDirty(true);
+    markAssetBoardDirty();
     if (relation === 'fusion_input') setNotice('已建立融合输入关系；选中融合资产后可生成融合 Prompt');
-  }, [assetBoardEdges, assetBoardNodes, assetLibrary?.assets, recordAssetBoardState]);
+  }, [assetBoardEdges, assetBoardNodes, assetLibrary?.assets, markAssetBoardDirty, recordAssetBoardState]);
 
-  const saveAssetBoard = async () => {
-    if (!projectId || !assetBoardEnvelope) return null;
-    setBusy(true);
+  const saveAssetBoard = async (background = false, expectedRevisionOverride?: number, allowRetry = true, expectedMutationEpoch?: number): Promise<AssetBoardEnvelope | null> => {
+    if (background && expectedMutationEpoch !== undefined && expectedMutationEpoch !== assetBoardMutationEpochRef.current) return assetBoardEnvelopeRef.current;
+    const current = assetBoardEnvelopeRef.current || assetBoardEnvelope;
+    if (!projectId || !current) return null;
+    const layout = assetBoardLayoutRef.current;
+    const board = assetBoardFromFlow({ ...current.board, metadata: { ...current.board.metadata, layout_preset: layout.preset, layout_view: layout.mode, layout_column_width: layout.columnWidth, layout_column_widths: layout.columnWidths, layout_directory_position: layout.directoryPosition, layout_gap: layout.gap } }, assetBoardNodesRef.current, assetBoardEdgesRef.current);
+    const expectedRevision = expectedRevisionOverride ?? current.revision;
+    if (!background) setBusy(true);
     try {
-      const board = assetBoardFromFlow({ ...assetBoardEnvelope.board, metadata: { ...assetBoardEnvelope.board.metadata, layout_preset: assetBoardLayoutPreset, layout_view: assetBoardLayoutMode, layout_column_width: assetBoardColumnWidth, layout_column_widths: assetBoardColumnWidths, layout_directory_position: assetBoardIndexPosition, layout_gap: assetBoardGap } }, assetBoardNodes, assetBoardEdges);
-      const saved = await studioApi.saveAssetBoard(projectId, board, assetBoardEnvelope.revision);
-      const nextNodes = assetBoardToFlowNodes(saved.board, assetLibrary?.assets || [], assetBoardFilter, assetBoardShowShots, story?.story.shots || [], { preset: assetBoardLayoutPreset, columnWidth: assetBoardColumnWidth, gap: assetBoardGap, layoutMode: assetBoardLayoutMode, collapsedScopes: assetBoardCollapsedScopes, onToggleScope: toggleAssetBoardScope, onContextMenu: openAssetContextMenu, onApprovePrompt: approveAssetPromptCard, onGenerateImage: generateAssetImageCard, onCopyPrompt: copyAssetPromptCard, onUploadAsset: uploadAssetFromBoard, onApproveAsset: approveAssetFromBoard, onRejectAsset: rejectAssetFromBoard, onRegisterAsset: registerAssetFromBoard, onRemoveArtifact: removeUploadedAssetFromBoard, onOpenAssetProduction: openAssetProductionShortcut });
-      setAssetBoardEnvelope(saved);
-      setAssetBoardNodes(nextNodes);
-      setAssetBoardEdges(assetBoardToFlowEdges(saved.board, nextNodes));
-      setAssetBoardDirty(false);
-      setNotice(`资产画布已保存 · v${saved.revision}`);
-      return saved;
+      const saved = await studioApi.saveAssetBoard(projectId, board, expectedRevision);
+      // A server-side operation such as Fusion Prompt generation may have
+      // completed while this request was in flight. Do not apply this older
+      // response to the freshly replaced board or queue a stale retry.
+      if (background && expectedMutationEpoch !== undefined && expectedMutationEpoch !== assetBoardMutationEpochRef.current) return assetBoardEnvelopeRef.current;
+      const latestEnvelope = assetBoardEnvelopeRef.current;
+      const latestBoard = latestEnvelope ? assetBoardFromFlow({ ...latestEnvelope.board, metadata: { ...latestEnvelope.board.metadata, layout_preset: assetBoardLayoutRef.current.preset, layout_view: assetBoardLayoutRef.current.mode, layout_column_width: assetBoardLayoutRef.current.columnWidth, layout_column_widths: assetBoardLayoutRef.current.columnWidths, layout_directory_position: assetBoardLayoutRef.current.directoryPosition, layout_gap: assetBoardLayoutRef.current.gap } }, assetBoardNodesRef.current, assetBoardEdgesRef.current) : null;
+      const unchanged = JSON.stringify(latestBoard || {}) === JSON.stringify(board);
+      const next = unchanged ? saved : latestEnvelope ? { ...saved, board: latestEnvelope.board } : saved;
+      assetBoardEnvelopeRef.current = next;
+      if (unchanged) {
+        const nextNodes = assetBoardToFlowNodes(saved.board, assetLibrary?.assets || [], assetBoardFilter, assetBoardShowShots, story?.story.shots || [], { preset: layout.preset, columnWidth: layout.columnWidth, gap: layout.gap, layoutMode: layout.mode, collapsedScopes: assetBoardCollapsedScopes, onToggleScope: toggleAssetBoardScope, onContextMenu: openAssetContextMenu, onApprovePrompt: approveAssetPromptCard, onGenerateImage: generateAssetImageCard, onCopyPrompt: copyAssetPromptCard, onUploadAsset: uploadAssetFromBoard, onApproveAsset: approveAssetFromBoard, onRejectAsset: rejectAssetFromBoard, onRegisterAsset: registerAssetFromBoard, onRemoveArtifact: removeUploadedAssetFromBoard, onOpenAssetProduction: openAssetProductionShortcut });
+        const nextEdges = assetBoardToFlowEdges(saved.board, nextNodes);
+        commitAssetBoardServerState(saved, nextNodes, nextEdges);
+      } else {
+        // Preserve newer local edits, but keep the envelope revision coherent
+        // for the next queued save.
+        assetBoardMutationEpochRef.current += 1;
+        setAssetBoardEnvelope(next);
+      }
+      if (!background) {
+        setNotice(`资产画布已保存 · v${saved.revision}`);
+        void refreshDashboard(false);
+      }
+      return next;
     } catch (error) {
+      if (background && allowRetry && error instanceof StudioApiError && error.status === 409) {
+        try {
+          const latest = await studioApi.assetBoard(projectId);
+          const local = assetBoardEnvelopeRef.current || current;
+          const merged = { ...latest, board: local.board };
+          assetBoardEnvelopeRef.current = merged;
+          setAssetBoardEnvelope(merged);
+          return await saveAssetBoard(true, latest.revision, false, expectedMutationEpoch);
+        } catch (retryError) {
+          error = retryError;
+        }
+      }
+      if (background && error instanceof StudioApiError && !error.retryable && error.status !== 409) autoSaveRetryAllowedRef.current = false;
+      if (background) autoSaveFailureDetailsRef.current['资产画布'] = (error as Error).message;
       setNotice((error as Error).message);
       return null;
-    } finally { setBusy(false); }
+    } finally { if (!background) setBusy(false); }
   };
 
   const syncAssetBoard = async (showProgress = true) => {
     if (!projectId || !assetBoardEnvelope) return null;
     if (assetBoardDirty) {
-      setNotice('当前资产生产工作区有未保存修改，请先保存后再同步故事与分镜');
+      setNotice('当前资产生产工作区正在自动保存，请稍候再同步故事与分镜');
       return null;
     }
     if (showProgress) setBusy(true);
     try {
       const synced = await studioApi.syncAssetBoard(projectId, assetBoardEnvelope.revision, true);
       const boardNodes = assetBoardToFlowNodes(synced.board, assetLibrary?.assets || [], assetBoardFilter, assetBoardShowShots, story?.story.shots || [], { preset: assetBoardLayoutPreset, columnWidth: assetBoardColumnWidth, gap: assetBoardGap, layoutMode: assetBoardLayoutMode, collapsedScopes: assetBoardCollapsedScopes, onToggleScope: toggleAssetBoardScope, onContextMenu: openAssetContextMenu, onApprovePrompt: approveAssetPromptCard, onGenerateImage: generateAssetImageCard, onCopyPrompt: copyAssetPromptCard, onUploadAsset: uploadAssetFromBoard, onApproveAsset: approveAssetFromBoard, onRejectAsset: rejectAssetFromBoard, onRegisterAsset: registerAssetFromBoard, onRemoveArtifact: removeUploadedAssetFromBoard, onOpenAssetProduction: openAssetProductionShortcut });
-      setAssetBoardEnvelope(synced);
-      setAssetBoardNodes(boardNodes);
-      setAssetBoardEdges(assetBoardToFlowEdges(synced.board, boardNodes));
-      setAssetBoardDirty(false);
+      commitAssetBoardServerState(synced, boardNodes, assetBoardToFlowEdges(synced.board, boardNodes));
       setNotice(`故事与分镜已同步到资产画布 · ${boardNodes.filter((node) => node.data.node_type === 'shot').length} 个镜头节点`);
       return synced;
     } catch (error) {
@@ -3672,7 +3596,7 @@ function Studio() {
 
   const openAssetCreate = () => {
     if (!projectId || !project) { setNotice('请先选择一个项目'); return; }
-    if (!['canvas', 'assets'].includes(mode)) { setMode('canvas'); setNotice('请在资产生产工作区新增逻辑资产'); return; }
+    if (mode !== 'canvas') { setMode('canvas'); setNotice('请在资产生产工作区新增逻辑资产'); return; }
     setAssetCreateDraft({ name: '', assetClass: 'character', assetRole: 'identity', grade: 'B', required: true, shotId: '' });
     setAssetCreateOpen(true);
   };
@@ -3737,10 +3661,9 @@ function Studio() {
       setAssetPromptRun({ status: 'running', message: '正在调用资产总控模型，执行依赖审计并生成 Prompt 卡…', startedAt });
       const result = await studioApi.generateAssetPrompts(projectId, { expected_revision: currentStory.revision, ...(targetAssetId ? { target_asset_id: targetAssetId } : {}), ...(options.reviewFeedback?.trim() ? { review_feedback: options.reviewFeedback.trim(), source_qa_run_id: options.sourceQaRunId } : {}) });
       setStory(result.story); setStoryDirty(false); setAssetLibrary(result.library); setProjects((current) => current.map((item) => item.document.id === projectId ? { ...item, revision: result.revision } : item));
-      setAssetBoardEnvelope(result.asset_board);
       const flow = buildAssetBoardFlow(result.asset_board, result.library, result.story.story.shots);
       const nextBoardNodes = targetAssetId ? flow.boardNodes.map((node) => ({ ...node, selected: node.data.node_type === 'asset' && String(node.data.asset_id || '') === targetAssetId })) : flow.boardNodes;
-      setAssetBoardNodes(nextBoardNodes); setAssetBoardEdges(flow.boardEdges); setAssetBoardDirty(false); setMode('canvas');
+      commitAssetBoardServerState(result.asset_board, nextBoardNodes, flow.boardEdges); setMode('canvas');
       if (targetAssetId) {
         const generated = result.run.promptCards.find((card) => card.id === targetAssetId);
         setAssetPromptDraft(generated?.prompt ? { assetId: targetAssetId, prompt: generated.prompt, promptPack: generated.promptPack, promptQuality: generated.promptQuality } : null);
@@ -3763,10 +3686,10 @@ function Studio() {
     try {
       await navigator.clipboard.writeText(fullPrompt);
     } catch {
-      setNotice('浏览器未授权剪贴板，请手动复制右侧 Prompt；ChatGPT 地址仍可手动打开。');
+      setNotice('浏览器未授权剪贴板，请手动复制右侧 Prompt。');
+      return;
     }
-    const opened = window.open('https://chatgpt.com/', '_blank', 'noopener,noreferrer');
-    setNotice(opened ? 'Prompt 已复制，ChatGPT 已打开；请生成并下载图片后拖回当前资产。' : 'Prompt 已复制；浏览器阻止了新标签页，请手动打开 https://chatgpt.com/。');
+    setNotice('Prompt 已复制');
   };
 
   const importAssetCandidate = async (asset: LibraryAsset, file: File) => {
@@ -3806,30 +3729,10 @@ function Studio() {
     } finally { setBusy(false); }
   };
 
-  const importAssetBatch = async (items: Array<{ file: File; assetId: string; role: string }>) => {
-    if (!projectId || !assetLibrary) return;
-    setBusy(true);
-    let imported = 0;
-    try {
-      for (const item of items) {
-        const asset = assetLibrary.assets.find((candidate) => candidate.id === item.assetId);
-        if (!asset) continue;
-        const itemMime = item.file.type || ({ mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime', wav: 'audio/wav', mp3: 'audio/mpeg', m4a: 'audio/mp4', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp' } as Record<string, string>)[item.file.name.toLowerCase().split('.').pop() || ''] || '';
-        if (!/^(image\/(png|jpeg|webp)|video\/(mp4|webm|quicktime)|audio\/(wav|mpeg|mp4|x-m4a))$/.test(itemMime)) throw new Error(`${item.file.name} 不是支持的图片、视频或音频格式。`);
-        const form = new FormData();
-        form.append('file', item.file, item.file.name); form.append('logical_asset_id', asset.id); form.append('asset_class', asset.assetClass); form.append('asset_role', item.role || asset.assetRole || asset.assetClass); form.append('source_type', 'asset-library-batch'); form.append('prompt_version', String(asset.promptVersion || 'manual-bridge')); form.append('relevant_shots_json', JSON.stringify((asset.dependencies || []).map((dependency) => dependency.shot_id).filter(Boolean))); form.append('authorization_status', asset.authorizationStatus || 'pending');
-        await studioApi.intakeAsset(projectId, form); imported += 1;
-      }
-      const [library, audit] = await Promise.all([studioApi.assetLibrary(projectId), studioApi.assetAudit(projectId)]);
-      setAssetLibrary(library); setAssetAudit(audit); await refreshAssetBoard(true, library); setAssetImportOpen(false); setNotice(`已导入 ${imported} 个候选文件 · 全部进入待 QA，当前版本保持不变`); void refreshDashboard(false);
-    } catch (error) { setNotice((error as Error).message); } finally { setBusy(false); }
-  };
-
   const refreshAssetProduction = async () => {
     if (!projectId) return;
-    const [library, projectEnvelope, audit] = await Promise.all([studioApi.assetLibrary(projectId), studioApi.projects(), studioApi.assetAudit(projectId)]);
+    const [library, projectEnvelope] = await Promise.all([studioApi.assetLibrary(projectId), studioApi.projects()]);
     setAssetLibrary(library);
-    setAssetAudit(audit);
     setProjects(projectEnvelope.projects.map((item) => ({ ...item, document: { ...item.document, productionStatus: item.document.productionStatus || 'in_progress' } })));
     await refreshAssetBoard(true, library);
   };
@@ -3908,11 +3811,96 @@ function Studio() {
     if (!projectId) return;
     setBusy(true);
     try {
-      await studioApi.registerAssetArtifact(projectId, artifactId, replaceActive);
+      const result = await studioApi.registerAssetArtifact(projectId, artifactId, replaceActive);
+      const projectRevision = Number(result.project_revision ?? result.revision);
+      if (Number.isFinite(projectRevision) && projectRevision > 0) {
+        setProjects((current) => current.map((item) => item.document.id === projectId ? { ...item, revision: projectRevision } : item));
+      }
+      const registeredLibrary = result.library as AssetLibraryEnvelope | undefined;
+      const registeredBoard = result.asset_board as AssetBoardEnvelope | undefined;
+      if (registeredLibrary && registeredBoard) {
+        setAssetLibrary(registeredLibrary);
+        const flow = buildAssetBoardFlow(registeredBoard, registeredLibrary, story?.story.shots || []);
+        commitAssetBoardServerState(registeredBoard, flow.boardNodes, flow.boardEdges);
+      } else {
+        await refreshAssetProduction();
+      }
+      // Set the success notice after all projection refreshes so the generic
+      // autosave status cannot immediately hide the registration result.
       setNotice(replaceActive ? '候选已登记并替换当前 active 版本；历史版本仍保留。' : '候选已登记为资产版本；已有 active 时默认保留当前版本。');
-      await refreshAssetProduction();
       void refreshDashboard(false);
     } catch (error) { setNotice((error as Error).message); } finally { setBusy(false); }
+  };
+
+  const removeActiveAssetImage = async (assetId: string, artifactId: string) => {
+    if (!projectId) return;
+    const asset = assetLibrary?.assets.find((candidate) => candidate.id === assetId);
+    const artifact = asset?.artifacts?.find((candidate: Record<string, any>) => String(candidate.id || candidate.artifact_id || '') === artifactId);
+    if (!asset || !artifact) {
+      setNotice('当前登记图片已不存在，请刷新资产生产工作区后重试。');
+      return;
+    }
+    if (!(await requestConfirmation(
+      '撤下当前登记图片',
+      `将先从「${asset.name || assetId}」撤下当前登记图片，再允许重新上传新的候选图。原文件、资产版本、QA 和审计记录会保留在项目文件夹中。撤下后该资产暂时不可入镜，直到新图完成 QA 与登记。`,
+      '撤下并重新上传',
+      true,
+    ))) return;
+    activeAssetRemovalCountRef.current += 1;
+    const queuedRemoval = activeAssetRemovalQueueRef.current.then(async () => {
+      setBusy(true);
+      try {
+        const resolveLatestRevision = async () => {
+          const latest = await studioApi.projects();
+          const current = latest.projects.find((item) => item.document.id === projectId);
+          if (!current) throw new Error('当前项目已不存在，请刷新项目列表后重试。');
+          // Keep the visible project row aligned immediately, even before the
+          // next React render commits the response state.
+          setProjects((items) => items.map((item) => item.document.id === projectId
+            ? { ...item, revision: Math.max(Number(item.revision) || 0, Number(current.revision) || 0) }
+            : item));
+          return Number(current.revision);
+        };
+
+        let expectedRevision = await resolveLatestRevision();
+        let result: Record<string, any>;
+        try {
+          result = await studioApi.removeActiveAssetVersion(projectId, assetId, expectedRevision);
+        } catch (error) {
+          // Another normal project write may land between the revision read
+          // and DELETE. Refresh once and retry the same logical asset; any
+          // persistent conflict remains visible to the user.
+          if (!(error instanceof StudioApiError) || error.status !== 409) throw error;
+          expectedRevision = await resolveLatestRevision();
+          result = await studioApi.removeActiveAssetVersion(projectId, assetId, expectedRevision);
+        }
+        const library = result.library as AssetLibraryEnvelope;
+        const board = result.asset_board as AssetBoardEnvelope;
+        const storyDocument = result.story as StoryDocument | undefined;
+        if (result.project_revision !== undefined) {
+          setProjects((current) => current.map((item) => item.document.id === projectId
+            ? { ...item, revision: Math.max(Number(item.revision) || 0, Number(result.project_revision) || 0) }
+            : item));
+        }
+        setAssetLibrary(library);
+        if (storyDocument) setStory((current) => current ? { ...current, revision: Number(result.project_revision ?? current.revision), story: storyDocument } : current);
+        const resolvedBoard = board || await studioApi.assetBoard(projectId);
+        const flow = buildAssetBoardFlow(resolvedBoard, library, storyDocument?.shots || story?.story.shots || []);
+        commitAssetBoardServerState(resolvedBoard, flow.boardNodes, flow.boardEdges);
+        clearAssetBoardHistory();
+        setNotice(result.active_removed === false ? '当前已经没有 active 图片，可直接上传新的候选图。' : '当前登记图片已撤下并归档；现在可以上传新的候选图，完成 QA 后再登记。');
+        void refreshDashboard(false);
+      } catch (error) {
+        setNotice(`撤下失败：${(error as Error).message}`);
+      } finally {
+        activeAssetRemovalCountRef.current -= 1;
+        if (activeAssetRemovalCountRef.current === 0) setBusy(false);
+      }
+    });
+    // A failed withdrawal must not prevent a later queued withdrawal from
+    // running. The operation itself owns the user-facing error notice.
+    activeAssetRemovalQueueRef.current = queuedRemoval.catch(() => undefined);
+    await queuedRemoval;
   };
 
   const generateFusionPrompt = async (assetId: string, sourceAssetIds: string[], shotId: string) => {
@@ -3930,11 +3918,9 @@ function Studio() {
       const result = await studioApi.generateFusionPrompt(projectId, { expected_project_revision: project.revision, expected_board_revision: currentBoard.revision, fusion_asset_id: assetId, shot_id: shotId, source_asset_ids: sourceAssetIds, confirmed: true });
       setProjects((current) => current.map((item) => item.document.id === projectId ? { ...item, revision: result.revision } : item));
       setAssetLibrary(result.library);
-      setAssetBoardEnvelope(result.asset_board);
       const nextNodes = assetBoardToFlowNodes(result.asset_board.board, result.library.assets, assetBoardFilter, assetBoardShowShots, story?.story.shots || [], { preset: assetBoardLayoutPreset, columnWidth: assetBoardColumnWidth, gap: assetBoardGap, layoutMode: assetBoardLayoutMode, collapsedScopes: assetBoardCollapsedScopes, onToggleScope: toggleAssetBoardScope, onContextMenu: openAssetContextMenu, onApprovePrompt: approveAssetPromptCard, onGenerateImage: generateAssetImageCard, onCopyPrompt: copyAssetPromptCard, onUploadAsset: uploadAssetFromBoard, onApproveAsset: approveAssetFromBoard, onRejectAsset: rejectAssetFromBoard, onRegisterAsset: registerAssetFromBoard, onRemoveArtifact: removeUploadedAssetFromBoard, onOpenAssetProduction: openAssetProductionShortcut });
-      setAssetBoardNodes(nextNodes);
-      setAssetBoardEdges(assetBoardToFlowEdges(result.asset_board.board, nextNodes));
-      setAssetBoardDirty(false);
+      const nextEdges = assetBoardToFlowEdges(result.asset_board.board, nextNodes);
+      commitAssetBoardServerState(result.asset_board, nextNodes, nextEdges);
       clearAssetBoardHistory();
       setNotice(`融合 Prompt 已生成 · ${assetId} · ${shotId} · 待 Prompt QA`);
     } catch (error) { setNotice((error as Error).message); } finally { setBusy(false); }
@@ -4007,6 +3993,11 @@ function Studio() {
       setNotice('当前候选图片已不存在，请刷新资产画布后重试。');
       return;
     }
+    const activeVersion = asset?.versions?.find((version: Record<string, any>) => Boolean(version.is_active) && String(version.artifact_id) === artifactId);
+    if (activeVersion) {
+      void removeActiveAssetImage(assetId, artifactId);
+      return;
+    }
     if (['ready', 'superseded'].includes(String(artifact.status || ''))) {
       setNotice('已登记或当前 active 版本不能从缩略图移除，请在版本历史中处理。');
       return;
@@ -4024,14 +4015,9 @@ function Studio() {
         const result = await studioApi.archiveAssetArtifact(projectId, artifactId);
         const library = result.library || await studioApi.assetLibrary(projectId);
         const board = result.asset_board || await studioApi.assetBoard(projectId);
-        const audit = await studioApi.assetAudit(projectId);
         const flow = buildAssetBoardFlow(board, library, story?.story.shots || []);
         setAssetLibrary(library);
-        setAssetAudit(audit);
-        setAssetBoardEnvelope(board);
-        setAssetBoardNodes(flow.boardNodes);
-        setAssetBoardEdges(flow.boardEdges);
-        setAssetBoardDirty(false);
+        commitAssetBoardServerState(board, flow.boardNodes, flow.boardEdges);
         clearAssetBoardHistory();
         if (result.project_revision !== undefined) {
           setProjects((current) => current.map((item) => item.document.id === projectId ? { ...item, revision: result.project_revision as number } : item));
@@ -4104,22 +4090,57 @@ function Studio() {
     const hasImage = Boolean(sourceAsset?.artifactId || sourceAsset?.artifact_id || sourceAsset?.filePath || sourceAsset?.file_path || sourceAsset?.previewUrl || (Array.isArray(sourceAsset?.artifacts) && sourceAsset.artifacts.length));
     const existingMetadata = sourceAsset?.assetMetadata || {};
     const existingDraft = (existingMetadata.production_draft || (existingMetadata.metadata as Record<string, any> | undefined)?.production_draft) as Record<string, any> | undefined;
+    const bodyWithDraftCleared = { ...body, metadata: { ...(body.metadata as Record<string, unknown> | undefined), asset_editor_draft: null } };
     const saveBody = promptValue && hasImage && existingDraft?.active
-      ? { ...body, metadata: { ...(body.metadata as Record<string, unknown> | undefined), production_draft: { ...existingDraft, active: false, updated_at: new Date().toISOString() } } }
-      : body;
+      ? { ...bodyWithDraftCleared, metadata: { ...bodyWithDraftCleared.metadata, production_draft: { ...existingDraft, active: false, updated_at: new Date().toISOString() } } }
+      : bodyWithDraftCleared;
     setBusy(true);
-    studioApi.updateAssetMetadata(projectId, assetId, saveBody).then(({ revision }) => { setProjects((current) => current.map((item) => item.document.id === projectId ? { ...item, revision } : item)); setAssetPromptDraft((current) => current?.assetId === assetId ? null : current); setNotice(`资产规格已保存，项目修订版 ${revision}`); return studioApi.assetLibrary(projectId); }).then((library) => { setAssetLibrary(library); return refreshAssetBoard(false, library); }).then(() => { void refreshDashboard(false); }).catch((error: Error) => setNotice(error.message)).finally(() => setBusy(false));
+    studioApi.updateAssetMetadata(projectId, assetId, saveBody).then(({ revision }) => { setProjects((current) => current.map((item) => item.document.id === projectId ? { ...item, revision } : item)); assetEditorDraftsRef.current.delete(assetId); setAssetEditorDraftDirty(assetEditorDraftsRef.current.size > 0); setAssetPromptDraft((current) => current?.assetId === assetId ? null : current); setNotice(`资产规格已保存，项目修订版 ${revision}`); return studioApi.assetLibrary(projectId); }).then((library) => { setAssetLibrary(library); return refreshAssetBoard(false, library); }).then(() => { void refreshDashboard(false); }).catch((error: Error) => setNotice(error.message)).finally(() => setBusy(false));
   };
 
-  const checkFusionGate = (assetId: string) => {
-    if (!projectId) return;
-    setBusy(true);
-    studioApi.fusionGate(projectId, assetId).then((result) => { setNotice(result.status === 'allowed' ? '融合门已通过' : '融合门仍阻塞：请先完成基础资产登记'); return studioApi.assetLibrary(projectId); }).then(setAssetLibrary).then(() => { void refreshDashboard(false); }).catch((error: Error) => setNotice(error.message)).finally(() => setBusy(false));
+  const saveAssetEditorDraft = async (assetId: string, draft: AssetEditorDraft, expectedRevisionOverride?: number, allowRetry = true): Promise<boolean> => {
+    const currentProject = projects.find((item) => item.document.id === projectId) || project;
+    if (!projectId || !currentProject) return false;
+    const expectedRevision = expectedRevisionOverride ?? currentProject.revision;
+    try {
+      const result = await studioApi.updateAssetMetadata(projectId, assetId, { expected_revision: expectedRevision, metadata: { asset_editor_draft: draft } });
+      setProjects((current) => current.map((item) => item.document.id === projectId ? { ...item, revision: result.revision } : item));
+      if (result.library) setAssetLibrary(result.library);
+      else setAssetLibrary(await studioApi.assetLibrary(projectId));
+      if (result.asset_board) {
+        const localBoard = assetBoardEnvelopeRef.current;
+        const boardDirtyNow = dirtyStateRef.current.assetBoard;
+        const nextBoard = boardDirtyNow && localBoard ? { ...result.asset_board, board: localBoard.board } : result.asset_board;
+        assetBoardEnvelopeRef.current = nextBoard;
+        setAssetBoardEnvelope(nextBoard);
+      }
+      const currentDraft = assetEditorDraftsRef.current.get(assetId);
+      if (currentDraft && JSON.stringify(currentDraft) === JSON.stringify(draft)) {
+        assetEditorDraftsRef.current.delete(assetId);
+        setAssetEditorDraftDirty(assetEditorDraftsRef.current.size > 0);
+      }
+      return true;
+    } catch (error) {
+      if (allowRetry && error instanceof StudioApiError && error.status === 409) {
+        try {
+          const latestProjects = await studioApi.projects();
+          setProjects(latestProjects.projects);
+          const latest = latestProjects.projects.find((item) => item.document.id === projectId);
+          if (latest) return await saveAssetEditorDraft(assetId, assetEditorDraftsRef.current.get(assetId) || draft, latest.revision, false);
+        } catch (retryError) {
+          error = retryError;
+        }
+      }
+      if (error instanceof StudioApiError && !error.retryable && error.status !== 409) autoSaveRetryAllowedRef.current = false;
+      autoSaveFailureDetailsRef.current[`资产编辑 ${assetId}`] = (error as Error).message;
+      setNotice((error as Error).message);
+      return false;
+    }
   };
 
   const createAgentPlan = async (message: string, skillId = assistantSkillId): Promise<boolean> => {
     if (!project || !graphEnvelope || dirty) {
-      setNotice(dirty ? '请先保存当前工作流图，再让 Agent 读取稳定版本。' : '尚未加载项目图。');
+    setNotice(dirty ? '当前工作流图正在自动保存，请稍候再让 Agent 读取稳定版本。' : '尚未加载项目图。');
       return false;
     }
     setAgentBusy(true);
@@ -4173,12 +4194,6 @@ function Studio() {
     } finally { setAgentBusy(false); }
   };
 
-  const reviewAssetCandidate = (assetId: string, comparisonId: string, candidateArtifactId: string) => {
-    if (!projectId) return;
-    setBusy(true);
-    studioApi.reviewComparison(projectId, assetId, comparisonId, { candidate_artifact_id: candidateArtifactId, decision: 'Approved', score: 100, comment: '在资产库中批准候选', annotations: [] }).then(() => studioApi.assetLibrary(projectId)).then(setAssetLibrary).then(() => { void refreshDashboard(false); }).catch((error: Error) => setNotice(error.message)).finally(() => setBusy(false));
-  };
-
   useEffect(() => {
     if (!projectId || !story) return;
     const versions = story.story.script_versions.filter((version) => typeof version.id === 'string');
@@ -4191,27 +4206,46 @@ function Studio() {
     studioApi.storyDiff(projectId, String(previous.id), String(active.id)).then(setStoryDiff).catch(() => setStoryDiff(null));
   }, [projectId, story?.revision]);
 
-  const saveStory = async (manageBusy = true): Promise<StoryEnvelope | null> => {
-    if (!story || !projectId) return null;
+  const saveStory = async (manageBusy = true, background = false, expectedRevisionOverride?: number, allowRetry = true): Promise<StoryEnvelope | null> => {
+    const current = storyRef.current || story;
+    if (!current || !projectId) return null;
+    const document = current.story;
+    const expectedRevision = expectedRevisionOverride ?? current.revision;
     if (manageBusy) setBusy(true);
     try {
-      setNotice('正在保存故事与分镜…');
-      const saved = await studioApi.saveStory(projectId, story.story, story.revision);
-      setStory(saved);
-      setProjects((current) => current.map((item) => item.document.id === projectId ? { ...item, revision: saved.revision } : item));
+      if (!background) setNotice('正在保存故事与分镜…');
+      const saved = await studioApi.saveStory(projectId, document, expectedRevision);
+      const unchanged = JSON.stringify(storyRef.current?.story || {}) === JSON.stringify(document);
+      const next = unchanged ? saved : { ...saved, story: storyRef.current?.story || saved.story };
+      storyRef.current = next;
+      setStory(next);
+      setProjects((currentProjects) => currentProjects.map((item) => item.document.id === projectId ? { ...item, revision: saved.revision } : item));
       if (saved.library) setAssetLibrary(saved.library);
-      if (saved.asset_board && saved.library) {
+      if (unchanged && saved.asset_board && saved.library) {
         const flow = buildAssetBoardFlow(saved.asset_board, saved.library, saved.story.shots);
-        setAssetBoardEnvelope(saved.asset_board);
-        setAssetBoardNodes(flow.boardNodes);
-        setAssetBoardEdges(flow.boardEdges);
-        setAssetBoardDirty(false);
+        commitAssetBoardServerState(saved.asset_board, flow.boardNodes, flow.boardEdges);
       }
-      setStoryDirty(false);
-      setNotice(`故事与分镜已保存 · v${saved.revision}`);
-      void refreshDashboard(false);
-      return saved;
+      if (unchanged) setStoryDirty(false);
+      if (!background) {
+        setNotice(`故事与分镜已保存 · v${saved.revision}`);
+        void refreshDashboard(false);
+      }
+      return next;
     } catch (error) {
+      if (background && allowRetry && error instanceof StudioApiError && error.status === 409) {
+        try {
+          const latest = await studioApi.story(projectId);
+          const local = storyRef.current || current;
+          const merged = { ...latest, story: local.story };
+          storyRef.current = merged;
+          setStory(merged);
+          return await saveStory(false, true, latest.revision, false);
+        } catch (retryError) {
+          error = retryError;
+        }
+      }
+      if (background && error instanceof StudioApiError && !error.retryable && error.status !== 409) autoSaveRetryAllowedRef.current = false;
+      if (background) autoSaveFailureDetailsRef.current['故事与分镜'] = (error as Error).message;
       setNotice((error as Error).message);
       return null;
     } finally { if (manageBusy) setBusy(false); }
@@ -4263,10 +4297,7 @@ function Studio() {
       if (restored.library) setAssetLibrary(restored.library);
       if (restored.asset_board && restored.library) {
         const flow = buildAssetBoardFlow(restored.asset_board, restored.library, restored.story.shots);
-        setAssetBoardEnvelope(restored.asset_board);
-        setAssetBoardNodes(flow.boardNodes);
-        setAssetBoardEdges(flow.boardEdges);
-        setAssetBoardDirty(false);
+        commitAssetBoardServerState(restored.asset_board, flow.boardNodes, flow.boardEdges);
       } else {
         const library = restored.library || await studioApi.assetLibrary(projectId);
         setAssetLibrary(library);
@@ -4311,9 +4342,9 @@ function Studio() {
   const commitEdit = useCallback((before: EditorSnapshot, after: EditorSnapshot) => {
     setNodes(after.nodes);
     setEdges(after.edges);
-    setDirty(true);
+    markGraphDirty();
     rememberEdit(before);
-  }, [rememberEdit]);
+  }, [markGraphDirty, rememberEdit]);
 
   const onNodesChange = useCallback((changes: NodeChange<FlowNode>[]) => {
     const removedIds = new Set(changes.filter((change) => change.type === 'remove').map((change) => change.id));
@@ -4350,9 +4381,9 @@ function Studio() {
     const after = editorSnapshot(nodes, edges);
     if (JSON.stringify(before) !== JSON.stringify(after)) {
       rememberEdit(before);
-      setDirty(true);
+      markGraphDirty();
     }
-  }, [edges, nodes, rememberEdit]);
+  }, [edges, markGraphDirty, nodes, rememberEdit]);
 
   const onConnect = useCallback((connection: Connection) => {
     const graphEdges = edges.map((edge) => ({
@@ -4391,10 +4422,10 @@ function Studio() {
     const restored = cloneEditorSnapshot(before);
     setNodes(restored.nodes);
     setEdges(restored.edges);
-    setDirty(true);
+    markGraphDirty();
     setHistoryRevision((value) => value + 1);
     setNotice('已撤销上一步编辑');
-  }, [edges, nodes]);
+  }, [edges, markGraphDirty, nodes]);
 
   const redo = useCallback(() => {
     const next = editorHistory.current.future[0];
@@ -4407,10 +4438,10 @@ function Studio() {
     const restored = cloneEditorSnapshot(next);
     setNodes(restored.nodes);
     setEdges(restored.edges);
-    setDirty(true);
+    markGraphDirty();
     setHistoryRevision((value) => value + 1);
     setNotice('已重做上一步编辑');
-  }, [edges, nodes]);
+  }, [edges, markGraphDirty, nodes]);
 
   const duplicateSelectedNodes = useCallback(() => {
     const selected = nodes.filter((node) => node.selected);
@@ -4538,7 +4569,7 @@ function Studio() {
             return { ...source, id, position: { x: source.position.x + 44, y: source.position.y + 44 }, selected: true, data: { ...source.data, label: `${source.data.label} 副本`, config: { ...source.data.config } } };
           });
           setNodes((current) => [...current.map((node) => ({ ...node, selected: false })), ...pasted]);
-          setDirty(true);
+          markGraphDirty();
           setNotice(`已粘贴 ${pasted.length} 个工作流节点`);
           return;
         }
@@ -4549,7 +4580,7 @@ function Studio() {
           const ids = new Set(selected.map((node) => node.id));
           setNodes((current) => current.filter((node) => !ids.has(node.id)));
           setEdges((current) => current.filter((edge) => !ids.has(edge.source) && !ids.has(edge.target)));
-          setDirty(true);
+          markGraphDirty();
           setNotice(`已剪切 ${selected.length} 个工作流节点`);
         } else setNotice(`已复制 ${selected.length} 个工作流节点，可使用 Ctrl+V 粘贴`);
         return;
@@ -4568,7 +4599,7 @@ function Studio() {
     };
     window.addEventListener('keydown', onShortcut);
     return () => window.removeEventListener('keydown', onShortcut);
-  }, [duplicateSelectedNodes, mode, nodes, redo, undo]);
+  }, [duplicateSelectedNodes, markGraphDirty, mode, nodes, redo, undo]);
 
   useEffect(() => {
     const onAssetShortcut = (event: KeyboardEvent) => {
@@ -4602,7 +4633,7 @@ function Studio() {
         setAssetBoardNodes(nextNodes);
         setAssetBoardSelection(pasted.length === 1 ? assetBoardSelectionKey(pasted[0].data) : null);
         recordAssetBoardState(assetBoardNodes, assetBoardEdges, nextNodes, assetBoardEdges);
-        setAssetBoardDirty(true);
+        markAssetBoardDirty();
         setNotice(`已粘贴 ${pasted.length} 个资产节点`);
         return;
       }
@@ -4617,7 +4648,7 @@ function Studio() {
         setAssetBoardEdges(nextEdges);
         setAssetBoardSelection(null);
         recordAssetBoardState(assetBoardNodes, assetBoardEdges, nextNodes, nextEdges);
-        setAssetBoardDirty(true);
+        markAssetBoardDirty();
         setNotice(`已剪切 ${selected.length} 个节点`);
       } else {
         setNotice(`已复制 ${selected.length} 个节点，可使用 Ctrl+V 粘贴`);
@@ -4625,22 +4656,41 @@ function Studio() {
     };
     window.addEventListener('keydown', onAssetShortcut);
     return () => window.removeEventListener('keydown', onAssetShortcut);
-  }, [assetBoardEdges, assetBoardNodes, mode, recordAssetBoardState, setAssetBoardSelection]);
+  }, [assetBoardEdges, assetBoardNodes, markAssetBoardDirty, mode, recordAssetBoardState, setAssetBoardSelection]);
 
-  const save = async (): Promise<GraphEnvelope | null> => {
-    if (!graphEnvelope || !projectId) return null;
-    setBusy(true);
+  const save = async (background = false, expectedRevisionOverride?: number, allowRetry = true): Promise<GraphEnvelope | null> => {
+    const current = graphEnvelopeRef.current || graphEnvelope;
+    if (!current || !projectId) return null;
+    const graph = fromFlow(current.graph, nodesRef.current, edgesRef.current);
+    const expectedRevision = expectedRevisionOverride ?? current.revision;
+    if (!background) setBusy(true);
     try {
-      const saved = await studioApi.saveGraph(projectId, fromFlow(graphEnvelope.graph, nodes, edges), graphEnvelope.revision);
+      const saved = await studioApi.saveGraph(projectId, graph, expectedRevision);
+      const unchanged = JSON.stringify(fromFlow(graphEnvelopeRef.current?.graph || saved.graph, nodesRef.current, edgesRef.current)) === JSON.stringify(graph);
+      graphEnvelopeRef.current = saved;
       setGraphEnvelope(saved);
-      setDirty(false);
-      setNotice(`工作流图已保存 · v${saved.revision}`);
-      void refreshDashboard(false);
+      if (unchanged) setDirty(false);
+      if (!background) {
+        setNotice(`工作流图已保存 · v${saved.revision}`);
+        void refreshDashboard(false);
+      }
       return saved;
     } catch (error) {
+      if (background && allowRetry && error instanceof StudioApiError && error.status === 409) {
+        try {
+          const latest = await studioApi.graph(projectId);
+          graphEnvelopeRef.current = latest;
+          setGraphEnvelope(latest);
+          return await save(true, latest.revision, false);
+        } catch (retryError) {
+          error = retryError;
+        }
+      }
+      if (background && error instanceof StudioApiError && !error.retryable && error.status !== 409) autoSaveRetryAllowedRef.current = false;
+      if (background) autoSaveFailureDetailsRef.current['流程图'] = (error as Error).message;
       setNotice((error as Error).message);
       return null;
-    } finally { setBusy(false); }
+    } finally { if (!background) setBusy(false); }
   };
 
   const applyAssetGridLayout = useCallback((preset: AssetGridPreset = assetBoardLayoutPreset, overrides: { columnWidth?: number; gap?: number; layoutMode?: AssetBoardLayoutMode } = {}) => {
@@ -4663,9 +4713,9 @@ function Studio() {
     setAssetBoardEnvelope((current) => current ? { ...current, board } : current);
     setAssetBoardNodes(nextNodes);
     setAssetBoardEdges(nextEdges);
-    setAssetBoardDirty(true);
+    markAssetBoardDirty();
     setNotice(`${nextLayoutMode === 'adaptive' ? '自适应资产流' : '资产类型矩阵'} · 列宽 ${nextColumnWidth}px · 间距 ${nextGap}px`);
-  }, [assetBoardCollapsedScopes, assetBoardColumnWidth, assetBoardColumnWidths, assetBoardEdges, assetBoardEnvelope, assetBoardFilter, assetBoardGap, assetBoardLayoutMode, assetBoardLayoutPreset, assetBoardNodes, assetBoardShowShots, assetLibrary?.assets, recordAssetBoardState, story?.story.shots, toggleAssetBoardScope]);
+  }, [assetBoardCollapsedScopes, assetBoardColumnWidth, assetBoardColumnWidths, assetBoardEdges, assetBoardEnvelope, assetBoardFilter, assetBoardGap, assetBoardLayoutMode, assetBoardLayoutPreset, assetBoardNodes, assetBoardShowShots, assetLibrary?.assets, markAssetBoardDirty, recordAssetBoardState, story?.story.shots, toggleAssetBoardScope]);
 
   const autoLayoutAssetBoard = useCallback(() => applyAssetGridLayout(assetBoardLayoutPreset), [applyAssetGridLayout, assetBoardLayoutPreset]);
 
@@ -4676,10 +4726,10 @@ function Studio() {
     setAssetBoardColumnWidth(310);
     setAssetBoardEnvelope((current) => current ? { ...current, board: { ...current.board, metadata: { ...current.board.metadata, layout_column_widths: widths, layout_column_width: 310 } } } : current);
     setAssetBoardNodes((current) => applyFixedAssetBoardFrame(current, widths).map((node) => node.data.presentationOnly || assetBoardCardIsLocked(node.data) ? node : { ...node, data: { ...node.data, config: { ...node.data.config, position_source: 'manual' } } }));
-    setAssetBoardDirty(true);
+    markAssetBoardDirty();
     setAssetBoardToolbarOpen(null);
-    setNotice('已恢复默认列宽；请点击顶部“保存”写入画布');
-  }, [applyFixedAssetBoardFrame, assetBoardEnvelope]);
+    setNotice('已恢复默认列宽；将自动保存画布');
+  }, [applyFixedAssetBoardFrame, assetBoardEnvelope, markAssetBoardDirty]);
 
   const updateAssetBoardFilter = (value: string) => {
     setAssetBoardFilter(value);
@@ -4705,31 +4755,158 @@ function Studio() {
     } finally { setBusy(false); }
   };
 
-  const saveAudioStudio = async (document: AudioStudioDocument): Promise<AudioStudioEnvelope | null> => {
-    if (!projectId || !audioStudio) return null;
-    setBusy(true);
+  const saveAudioStudio = async (document: AudioStudioDocument, background = false, expectedRevisionOverride?: number, allowRetry = true): Promise<AudioStudioEnvelope | null> => {
+    const current = audioStudioRef.current || audioStudio;
+    if (!projectId || !current) return null;
+    if (!background) audioDraftRef.current = document;
+    const expectedRevision = expectedRevisionOverride ?? audioRevisionRef.current ?? current.revision;
+    if (!background) setBusy(true);
     try {
-      const saved = await studioApi.saveAudioStudio(projectId, document, audioStudio.revision);
-      setAudioStudio(saved);
-      setAudioDirty(false);
-      setProjects((current) => current.map((item) => item.document.id === projectId ? { ...item, revision: saved.revision, document: { ...item.document, audio: saved.document } } : item));
-      setNotice(`声音工作区已保存 · v${saved.revision}`);
-      void refreshDashboard(false);
+      const saved = await studioApi.saveAudioStudio(projectId, document, expectedRevision);
+      audioRevisionRef.current = saved.revision;
+      const unchanged = JSON.stringify(audioDraftRef.current || {}) === JSON.stringify(document);
+      if (unchanged) {
+        audioStudioRef.current = saved;
+        setAudioStudio(saved);
+        setAudioDirty(false);
+      }
+      setProjects((currentProjects) => currentProjects.map((item) => item.document.id === projectId ? { ...item, revision: saved.revision, document: { ...item.document, audio: saved.document } } : item));
+      if (!background) {
+        setNotice(`声音工作区已保存 · v${saved.revision}`);
+        void refreshDashboard(false);
+      }
       return saved;
     } catch (error) {
+      if (background && allowRetry && error instanceof StudioApiError && error.status === 409) {
+        try {
+          const latest = await studioApi.audioStudio(projectId);
+          audioRevisionRef.current = latest.revision;
+          return await saveAudioStudio(audioDraftRef.current || document, true, latest.revision, false);
+        } catch (retryError) {
+          error = retryError;
+        }
+      }
+      if (background && error instanceof StudioApiError && !error.retryable && error.status !== 409) autoSaveRetryAllowedRef.current = false;
+      if (background) autoSaveFailureDetailsRef.current['声音工作区'] = (error as Error).message;
       setNotice((error as Error).message);
       return null;
-    } finally { setBusy(false); }
+    } finally { if (!background) setBusy(false); }
   };
+
+  const runAutoSave = () => {
+    const targetProjectId = projectId;
+    const queued = autoSaveQueueRef.current.then(async () => {
+      if (!targetProjectId || targetProjectId !== projectIdRef.current || busy || agentBusy) return;
+      autoSaveInFlightRef.current = true;
+      autoSaveFailureDetailsRef.current = {};
+      autoSaveRetryAllowedRef.current = true;
+      setAutoSaveState('saving');
+      setAutoSaveError('');
+      setAutoSaveErrorOpen(false);
+      const failures: string[] = [];
+      let savedCount = 0;
+      const saveOne = async (label: string, action: () => Promise<unknown | null>) => {
+        const result = await action();
+        if (result) savedCount += 1;
+        else failures.push(label);
+      };
+      try {
+        const pending = dirtyStateRef.current;
+        const boardMutationEpoch = assetBoardMutationEpochRef.current;
+        // Asset-board edits are saved before story edits because saving a story
+        // also rebuilds the board projection from the latest storyboard.
+        if (pending.graph) await saveOne('流程图', () => save(true));
+        if (pending.assetBoard && assetBoardDirtyRef.current && boardMutationEpoch === assetBoardMutationEpochRef.current) {
+          await saveOne('资产画布', () => saveAssetBoard(true, undefined, true, boardMutationEpoch));
+        }
+        for (const [assetId, draft] of assetEditorDraftsRef.current.entries()) await saveOne(`资产编辑 ${assetId}`, () => saveAssetEditorDraft(assetId, draft));
+        if (pending.story) await saveOne('故事与分镜', () => saveStory(false, true));
+        const audioDocument = audioDraftRef.current || audioStudioRef.current?.document;
+        if (pending.audio && audioDocument) await saveOne('声音工作区', () => saveAudioStudio(audioDocument, true));
+        if (pending.audio && !audioDocument) {
+          autoSaveRetryAllowedRef.current = false;
+          autoSaveFailureDetailsRef.current['声音工作区'] = '当前声音草稿尚未同步到自动保存队列';
+          failures.push('声音工作区');
+        }
+        if (pending.timeline) await saveOne('时间线', () => saveTimeline(true));
+      } finally {
+        autoSaveInFlightRef.current = false;
+      }
+      if (failures.length) {
+        const labels = [...new Set(failures)].map((label) => autoSaveFailureDetailsRef.current[label] ? `${label}（${autoSaveFailureDetailsRef.current[label]}）` : label);
+        const message = `自动保存失败：${labels.join('、')}。系统将在稍后重试。`;
+        setAutoSaveState('error');
+        setAutoSaveError(message);
+        setAutoSaveErrorOpen(true);
+        if (autoSaveRetryAllowedRef.current) {
+          if (autoSaveRetryTimerRef.current !== null) window.clearTimeout(autoSaveRetryTimerRef.current);
+          autoSaveRetryTimerRef.current = window.setTimeout(() => {
+            autoSaveRetryTimerRef.current = null;
+            setAutoSaveChangeVersion((value) => value + 1);
+          }, AUTO_SAVE_RETRY_DELAY_MS);
+        }
+      } else if (savedCount > 0 || !Object.values(dirtyStateRef.current).some(Boolean) && assetEditorDraftsRef.current.size === 0) {
+        setAutoSaveState('saved');
+        setAutoSaveError('');
+        setAutoSaveErrorOpen(false);
+      }
+    });
+    autoSaveQueueRef.current = queued.catch((error: unknown) => {
+      autoSaveInFlightRef.current = false;
+      const message = error instanceof Error ? error.message : '未知错误';
+      setAutoSaveState('error');
+      setAutoSaveError(`自动保存失败：${message}。系统将在稍后重试。`);
+      setAutoSaveErrorOpen(true);
+      if (autoSaveRetryAllowedRef.current) {
+        if (autoSaveRetryTimerRef.current !== null) window.clearTimeout(autoSaveRetryTimerRef.current);
+        autoSaveRetryTimerRef.current = window.setTimeout(() => {
+          autoSaveRetryTimerRef.current = null;
+          setAutoSaveChangeVersion((value) => value + 1);
+        }, AUTO_SAVE_RETRY_DELAY_MS);
+      }
+    });
+    return queued;
+  };
+
+  const hasPendingAutoSave = dirty || storyDirty || assetBoardDirty || assetEditorDraftDirty || audioDirty || timelineDirty;
+  useEffect(() => {
+    if (autoSaveTimerRef.current !== null) {
+      window.clearTimeout(autoSaveTimerRef.current);
+      autoSaveTimerRef.current = null;
+    }
+    if (!projectId || !hasPendingAutoSave || busy || agentBusy) return undefined;
+    setAutoSaveState('scheduled');
+    autoSaveTimerRef.current = window.setTimeout(() => {
+      autoSaveTimerRef.current = null;
+      void runAutoSave();
+    }, AUTO_SAVE_DELAY_MS);
+    return () => {
+      if (autoSaveTimerRef.current !== null) {
+        window.clearTimeout(autoSaveTimerRef.current);
+        autoSaveTimerRef.current = null;
+      }
+    };
+    // runAutoSave reads the latest editor snapshots through refs. The change
+    // version is the explicit debounce trigger for edits that keep dirty=true.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentBusy, autoSaveChangeVersion, busy, hasPendingAutoSave, projectId]);
+
+  useEffect(() => () => {
+    if (autoSaveTimerRef.current !== null) window.clearTimeout(autoSaveTimerRef.current);
+    if (autoSaveRetryTimerRef.current !== null) window.clearTimeout(autoSaveRetryTimerRef.current);
+    if (assetBoardLocatorTimerRef.current !== null) window.clearTimeout(assetBoardLocatorTimerRef.current);
+  }, []);
 
   const refreshAudioStudio = async () => {
     if (!projectId) return;
     setBusy(true);
     try {
-      const [audioEnvelope, library, audit] = await Promise.all([studioApi.audioStudio(projectId), studioApi.assetLibrary(projectId), studioApi.assetAudit(projectId)]);
+      const [audioEnvelope, library] = await Promise.all([studioApi.audioStudio(projectId), studioApi.assetLibrary(projectId)]);
+      audioStudioRef.current = audioEnvelope;
+      audioDraftRef.current = audioEnvelope.document;
+      audioRevisionRef.current = audioEnvelope.revision;
       setAudioStudio(audioEnvelope);
       setAssetLibrary(library);
-      setAssetAudit(audit);
       setAudioDirty(false);
       setNotice('声音资产与 QA 状态已刷新');
     } catch (error) {
@@ -4744,7 +4921,12 @@ function Studio() {
       const result = await studioApi.createAsset(projectId, { expected_revision: project.revision, name, asset_class: assetClass, asset_role: role, grade: 'B', required: false });
       setProjects((current) => current.map((item) => item.document.id === projectId ? { ...item, revision: result.revision } : item));
       setAssetLibrary(result.library);
-      setAudioStudio((current) => current ? { ...current, revision: result.revision, assets: result.library.assets.filter((asset) => ['audio', 'music', 'sfx'].includes(String(asset.assetClass))) } : current);
+      setAudioStudio((current) => {
+        const next = current ? { ...current, revision: result.revision, assets: result.library.assets.filter((asset) => ['audio', 'music', 'sfx'].includes(String(asset.assetClass))) } : current;
+        audioStudioRef.current = next;
+        audioRevisionRef.current = result.revision;
+        return next;
+      });
       return String(result.asset.id || '');
     } catch (error) {
       setNotice((error as Error).message);
@@ -4771,7 +4953,7 @@ function Studio() {
   const saveCurrentPage = async () => {
     if (mode === 'story') return saveStory();
     if (mode === 'timeline') return saveTimeline();
-    if (mode === 'audio') return audioStudio ? saveAudioStudio(audioStudio.document) : null;
+    if (mode === 'audio') return audioStudio ? saveAudioStudio(audioDraftRef.current || audioStudio.document) : null;
     if (mode === 'canvas') return saveAssetBoard();
     setNotice('当前页面没有待保存的修改');
     return null;
@@ -4856,8 +5038,7 @@ function Studio() {
     { id: 'story', label: '打开故事与分镜', description: '编辑创意目标、剧本和镜头计划', shortcut: 'Alt 2', onSelect: () => setMode('story') },
     { id: 'canvas', label: '打开资产生产工作区', description: '按镜头管理资产依赖、Prompt、候选和生产关系', shortcut: 'Alt 3', onSelect: () => { void openAssetBoard(); } },
     { id: 'timeline', label: '打开后期时间线', description: '编排片段、音轨和交付输出', shortcut: 'Alt 4', onSelect: () => setMode('timeline') },
-    { id: 'audio', label: '打开声音资产工坊', description: '制作人物声音、对白、音乐 Cue、音效和声轨交接', shortcut: 'Alt 7', onSelect: () => setMode('audio') },
-    { id: 'assets', label: '打开统一资产库', description: '检索资产、候选版本和 QA 状态', shortcut: 'Alt 5', onSelect: () => { setAssetLibraryFilter('all'); setAssetLibraryScope('all'); setMode('assets'); } },
+    { id: 'audio', label: '打开声音资产工坊', description: '制作人物声音、对白、音乐 Cue、音效和声轨交接', shortcut: 'Alt 5', onSelect: () => setMode('audio') },
     { id: 'settings', label: '打开设置与 Provider', description: '管理模型接入、凭据和能力路由', shortcut: 'Alt 6', onSelect: () => setMode('settings') },
     { id: 'save', label: '保存当前页面', description: currentPageDirty ? '写入当前页面的未保存修改' : '当前页面没有待保存的修改', shortcut: 'Ctrl / ⌘ S', disabled: busy, onSelect: () => { void saveCurrentPage(); } },
     { id: 'assistant', label: '打开 AI 创作助手', description: '读取当前项目并生成可审阅的结构化修改', shortcut: 'Ctrl / ⌘ Shift A', onSelect: () => setAssistantOpen(true) },
@@ -4884,6 +5065,7 @@ function Studio() {
       const primary = event.ctrlKey || event.metaKey;
 
       if (event.key === 'Escape') {
+        if (autoSaveErrorOpen) { event.preventDefault(); setAutoSaveErrorOpen(false); return; }
         if (rejectFeedback) { event.preventDefault(); setRejectFeedback(null); return; }
         if (confirmation) { event.preventDefault(); closeConfirmation(false); return; }
         if (paidConfirmation) { event.preventDefault(); setPaidConfirmation(null); return; }
@@ -4892,7 +5074,6 @@ function Studio() {
         if (assistantOpen) { event.preventDefault(); setAssistantOpen(false); return; }
         if (projectManagerOpen) { event.preventDefault(); setProjectManagerOpen(false); return; }
         if (assetCreateOpen) { event.preventDefault(); setAssetCreateOpen(false); return; }
-        if (assetImportOpen) { event.preventDefault(); setAssetImportOpen(false); return; }
         if (assetContextMenu) { event.preventDefault(); setAssetContextMenu(null); return; }
         if (assetBoardIndexOpen) { event.preventDefault(); setAssetBoardIndexOpen(false); return; }
         if (assetBoardToolbarOpen) { event.preventDefault(); setAssetBoardToolbarOpen(null); return; }
@@ -4920,8 +5101,8 @@ function Studio() {
           setAssetBoardEdges(nextEdges);
           setAssetBoardSelection(null);
           recordAssetBoardState(assetBoardNodes, assetBoardEdges, nextNodes, nextEdges);
-          setAssetBoardDirty(true);
-          setNotice(`已移除 ${removableCandidates.length} 个候选版本卡；保存后生效`);
+          markAssetBoardDirty();
+          setNotice(`已移除 ${removableCandidates.length} 个候选版本卡；将自动保存`);
           return;
         }
         setNotice('请先选择资产卡、Prompt / 图片卡或候选版本卡');
@@ -4949,10 +5130,11 @@ function Studio() {
         return;
       }
       if (editable) return;
-      if (!primary && event.altKey && /^[1-7]$/.test(event.key)) {
+      if (!primary && event.altKey && /^[1-6]$/.test(event.key)) {
         event.preventDefault();
-        const modes: Record<string, StudioMode> = { '1': 'home', '2': 'story', '3': 'canvas', '4': 'timeline', '5': 'assets', '6': 'settings', '7': 'audio' };
-        setMode(modes[event.key]);
+        const modes: Record<string, StudioMode> = { '1': 'home', '2': 'story', '3': 'canvas', '4': 'timeline', '5': 'audio', '6': 'settings' };
+        const nextMode = modes[event.key];
+        if (nextMode) setMode(nextMode);
         return;
       }
       if (!primary && (event.key === '?' || event.key === '/')) {
@@ -4962,47 +5144,63 @@ function Studio() {
     };
     window.addEventListener('keydown', onGlobalShortcut);
     return () => window.removeEventListener('keydown', onGlobalShortcut);
-  }, [assetBoardEdges, assetBoardIndexOpen, assetBoardNodes, assetBoardToolbarOpen, assetContextMenu, assetCreateOpen, assetImportOpen, assistantOpen, busy, closeConfirmation, commandPaletteOpen, confirmation, deleteAssetById, mode, paidConfirmation, projectManagerOpen, recordAssetBoardState, redoAssetBoard, rejectFeedback, saveCurrentPage, setAssetBoardSelection, shortcutHelpOpen, undoAssetBoard]);
+  }, [assetBoardEdges, assetBoardIndexOpen, assetBoardNodes, assetBoardToolbarOpen, assetContextMenu, assetCreateOpen, assistantOpen, autoSaveErrorOpen, busy, closeConfirmation, commandPaletteOpen, confirmation, deleteAssetById, markAssetBoardDirty, mode, paidConfirmation, projectManagerOpen, recordAssetBoardState, redoAssetBoard, rejectFeedback, saveCurrentPage, setAssetBoardSelection, shortcutHelpOpen, undoAssetBoard]);
+
+  const autoSaveStatusText = autoSaveState === 'scheduled'
+    ? '修改将自动保存…'
+    : autoSaveState === 'saving'
+      ? '自动保存中…'
+      : autoSaveState === 'error'
+        ? autoSaveError
+        : autoSaveState === 'saved'
+          ? '已自动保存'
+          : currentPageDirty
+            ? `等待自动保存 · ${notice}`
+            : projectId
+              ? `自动保存已开启 · ${notice}`
+              : notice;
 
   return (
     <div className="studio-shell">
       <aside className="studio-sidebar" aria-label="Primary navigation">
         <div className="brand"><b>F</b><div><strong>FRAMEFLOW</strong><span>AI VIDEO OS · V3</span></div></div>
-        <button className="create-button" onClick={() => { if (mode === 'canvas' || mode === 'assets') openAssetCreate(); else void openAssetBoard(); }} disabled={busy || !project}>{mode === 'canvas' ? '＋ 新增资产' : mode === 'assets' ? '＋ 新增逻辑资产' : '进入资产生产'}</button>
+        <button className="create-button" onClick={() => { if (mode === 'canvas') openAssetCreate(); else void openAssetBoard(); }} disabled={busy || !project}>{mode === 'canvas' ? '＋ 新增资产' : '进入资产生产'}</button>
         <nav aria-label="Primary workspace navigation">
           <p>工作空间</p>
           <button className={mode === 'home' ? 'active' : ''} aria-current={mode === 'home' ? 'page' : undefined} onClick={() => setMode('home')}>⌂ 首页 / 项目总览</button>
           <button className={mode === 'story' ? 'active' : ''} aria-current={mode === 'story' ? 'page' : undefined} onClick={() => setMode('story')}>▥ 故事与分镜</button>
-          <button className={mode === 'canvas' ? 'active' : ''} aria-current={mode === 'canvas' ? 'page' : undefined} onClick={() => setMode('canvas')}>◇ 资产生产工作区</button>
+          <button className={mode === 'canvas' ? 'active' : ''} aria-current={mode === 'canvas' ? 'page' : undefined} onClick={() => setMode('canvas')}>◇ 资产生产工作区 <i aria-hidden="true">{assetLibrary?.summary.total || 0}</i></button>
           <button className={mode === 'audio' ? 'active' : ''} aria-current={mode === 'audio' ? 'page' : undefined} onClick={() => setMode('audio')}>♫ 声音资产工坊 <i aria-hidden="true">{audioStudio?.document.dialogues.length || 0}</i></button>
           <button className={mode === 'timeline' ? 'active' : ''} aria-current={mode === 'timeline' ? 'page' : undefined} onClick={() => setMode('timeline')}>≋ 后期时间线</button>
-          <p>项目资产</p>
-          <button className={mode === 'assets' && assetLibraryScope === 'all' ? 'active' : ''} aria-current={mode === 'assets' && assetLibraryScope === 'all' ? 'page' : undefined} onClick={() => { setAssetLibraryScope('all'); setAssetLibraryFilter('all'); setMode('assets'); }}>统一资产库 <i aria-hidden="true">{assetLibrary?.summary.total || 0}</i></button>
-          <button className={mode === 'assets' && assetLibraryScope === 'character' ? 'active' : ''} aria-current={mode === 'assets' && assetLibraryScope === 'character' ? 'page' : undefined} onClick={() => { setAssetLibraryScope('character'); setAssetLibraryFilter('all'); setMode('assets'); }}>人物与角色 <i aria-hidden="true">{assetLibrary?.summary.by_class?.character || 0}</i></button>
-          <button className={mode === 'assets' && assetLibraryScope === 'scene-prop' ? 'active' : ''} aria-current={mode === 'assets' && assetLibraryScope === 'scene-prop' ? 'page' : undefined} onClick={() => { setAssetLibraryScope('scene-prop'); setAssetLibraryFilter('all'); setMode('assets'); }}>场景与道具 <i aria-hidden="true">{(assetLibrary?.summary.by_class?.scene || 0) + (assetLibrary?.summary.by_class?.prop || 0)}</i></button>
-          <button className={mode === 'assets' && assetLibraryScope === 'fusion' ? 'active' : ''} aria-current={mode === 'assets' && assetLibraryScope === 'fusion' ? 'page' : undefined} onClick={() => { setAssetLibraryScope('fusion'); setAssetLibraryFilter('all'); setMode('assets'); }}>融合与候选 <i aria-hidden="true">{(assetLibrary?.summary.by_class?.fusion || 0) + (assetLibrary?.assets.filter((asset) => Boolean(asset.comparisons?.length)).length || 0)}</i></button>
           <p>系统</p>
           <button className={mode === 'settings' ? 'active' : ''} aria-current={mode === 'settings' ? 'page' : undefined} onClick={() => setMode('settings')}>⚙ 设置与 Provider</button>
         </nav>
         <div className="sidebar-footer"><span>V3 ONLY · 本地优先运行时</span><span>/api/v2 · revision protected</span></div>
       </aside>
       <main className="studio-main">
-        <h1 className="a11y-page-title">{({ home: '项目总览', story: '故事与分镜', canvas: '资产生产工作区', timeline: '后期时间线', audio: '声音资产工坊', assets: '统一资产库', settings: '设置与 Provider' } as Record<StudioMode, string>)[mode]}</h1>
+        <h1 className="a11y-page-title">{({ home: '项目总览', story: '故事与分镜', canvas: '资产生产工作区', timeline: '后期时间线', audio: '声音资产工坊', settings: '设置与 Provider' } as Record<StudioMode, string>)[mode]}</h1>
         <header className="studio-topbar">
           <div className="topbar-project">
             <strong className="project-title" title={project?.document.name || '尚未选择项目'}>{project?.document.name || '尚未选择项目'}</strong>
             <button type="button" className="project-manager-trigger" onClick={openProjectManager} disabled={busy}>项目管理</button>
-            {mode !== 'story' && <span className={currentPageDirty ? 'save-state dirty' : 'save-state'} role="status" aria-live="polite" title={currentPageDirty ? `有未保存更改 · ${notice}` : notice}>{currentPageDirty ? `有未保存更改 · ${notice}` : notice}</span>}
+            {mode !== 'home' && <div className="save-state-wrap">
+              {autoSaveState === 'error' ? <>
+                <button type="button" className="save-state auto-save-error save-state-error-button" onClick={() => setAutoSaveErrorOpen((value) => !value)} aria-expanded={autoSaveErrorOpen} aria-controls="auto-save-error-details" title="点击查看自动保存失败的完整原因"><span>自动保存失败</span><small>{autoSaveErrorOpen ? '收起详情' : '查看详情'}</small></button>
+                {autoSaveErrorOpen && <div id="auto-save-error-details" className="save-error-popover" role="alert">
+                  <div className="save-error-popover-head"><strong>自动保存失败</strong><button type="button" onClick={() => setAutoSaveErrorOpen(false)} aria-label="关闭错误详情">×</button></div>
+                  <p>{autoSaveError || '系统未返回具体错误描述，请稍后重试。'}</p>
+                </div>}
+              </> : <span className={`save-state ${currentPageDirty ? 'dirty ' : ''}auto-save-${autoSaveState}`} role="status" aria-live="polite" title={autoSaveStatusText}>{autoSaveStatusText}</span>}
+            </div>}
           </div>
           <div className="top-actions"><button type="button" className={`assistant-launcher ${agentPlan?.status === 'awaiting_review' ? 'has-plan' : ''}`} onClick={() => setAssistantOpen(true)} title="打开 FRAMEFLOW AI 创作助手（Ctrl / ⌘ + Shift + A）"><span>✦</span> AI 助手{agentPlan?.status === 'awaiting_review' && <i>待审阅</i>}</button><button type="button" className="shortcut-launcher" onClick={() => setShortcutHelpOpen(true)} title="查看工作台快捷键（?）"><span>⌨</span> 快捷键 <kbd>?</kbd></button>{mode !== 'home' && <><button type="button" onClick={saveCurrentPage} disabled={!currentPageDirty || busy} title="保存当前页面的修改（Ctrl / ⌘ + S）">保存</button>{mode !== 'canvas' && <button type="button" className="run-button" onClick={startRun} disabled={busy || !graphEnvelope} title="运行专业流程图；故事页的 AI 分镜候选请使用“AI 整合并优化为拍摄剧本”">✦ {selectedNodeIds.length ? `运行所选 ${selectedNodeIds.length} 项` : '启动工作流'}</button>}</>}</div>
         </header>
         <div className="studio-content">
           {busy && <div className="progress-bar" />}
-          {mode === 'story' && <StoryView story={story} storyRun={storyRun} storyDiff={storyDiff} dirty={storyDirty} busy={busy} notice={notice} assetPromptRun={assetPromptRun} onChange={(next) => { setStory((current) => current ? { ...current, story: next } : current); setStoryDirty(true); }} onSave={saveStory} onGenerate={generateStoryCandidate} onAccept={acceptStoryLayer} onRollback={rollbackStory} onOpenAssetBoard={openAssetBoard} onGenerateAssetPrompts={generateAssetPrompts} />}
+          {mode === 'story' && <StoryView story={story} storyRun={storyRun} storyDiff={storyDiff} dirty={storyDirty} busy={busy} notice={notice} assetPromptRun={assetPromptRun} onChange={(next) => { setStory((current) => current ? { ...current, story: next } : current); markStoryDirty(); }} onSave={saveStory} onGenerate={generateStoryCandidate} onAccept={acceptStoryLayer} onRollback={rollbackStory} onOpenAssetBoard={openAssetBoard} onGenerateAssetPrompts={generateAssetPrompts} />}
           {mode === 'home' && <HomeView dashboard={dashboard} error={dashboardError} currentProjectId={projectId} busy={busy} onSelectProject={(id) => { setProjectId(id); setMode('home'); }} onOpenTask={openDashboardTask} onOpenStage={openDashboardStage} onRefresh={() => { void refreshDashboard(); }} />}
-          {mode === 'assets' && <AssetLibraryViewV3 library={assetLibrary} focusAssetId={focusAssetId} busy={busy} scope={assetLibraryScope} filter={assetLibraryFilter} search={assetLibrarySearch} sort={assetLibrarySort} audit={assetAudit} onScopeChange={setAssetLibraryScope} onFilterChange={(value) => setAssetLibraryFilter(value as AssetLibraryStatusFilter)} onSearchChange={setAssetLibrarySearch} onSortChange={setAssetLibrarySort} onRefresh={refreshAssets} onSave={saveAssetMetadata} onFusionGate={checkFusionGate} onReview={reviewAssetCandidate} onCreateAsset={openAssetCreate} onOpenImport={() => setAssetImportOpen(true)} onRefreshAudit={refreshAssetAudit} onManualProductionApproval={manualProductionApproval} onDeleteAsset={(assetId, label) => { void deleteAssetById(assetId, label); }} onStartQa={(artifactId, qaType) => startAssetQa(artifactId, qaType, true)} onSubmitQa={submitAssetQaReview} onRegisterArtifact={registerAssetCandidate} />}
-          {mode === 'audio' && <AudioStudioView projectId={projectId} projectName={project?.document.name || '当前项目'} envelope={audioStudio} assetLibrary={assetLibrary} settings={settings} story={story} busy={busy} onSave={saveAudioStudio} onRefresh={refreshAudioStudio} onCreateAsset={createAudioAsset} onNotice={setNotice} onDirtyChange={setAudioDirty} onOpenStory={() => setMode('story')} />}
-          {mode === 'timeline' && <TimelineView envelope={timelineEnvelope} preflight={timelinePreflight} story={story} assetLibrary={assetLibrary} renderJob={renderJob} busy={busy} onChange={(document) => { setTimelineEnvelope((current) => current ? { ...current, document } : current); setTimelineDirty(true); }} onSave={saveTimeline} onAssemble={assembleTimeline} onPreview={previewTimeline} onRender={renderTimeline} />}
+          {mode === 'audio' && <AudioStudioView projectId={projectId} projectName={project?.document.name || '当前项目'} envelope={audioStudio} assetLibrary={assetLibrary} settings={settings} story={story} busy={busy} onSave={saveAudioStudio} onRefresh={refreshAudioStudio} onCreateAsset={createAudioAsset} onNotice={setNotice} onDirtyChange={(isDirty) => { if (!isDirty) setAudioDirty(false); }} onDocumentChange={handleAudioDocumentChange} onOpenStory={() => setMode('story')} />}
+          {mode === 'timeline' && <TimelineView envelope={timelineEnvelope} preflight={timelinePreflight} story={story} assetLibrary={assetLibrary} renderJob={renderJob} busy={busy} onChange={(document) => { setTimelineEnvelope((current) => current ? { ...current, document } : current); markTimelineDirty(); }} onSave={saveTimeline} onAssemble={assembleTimeline} onPreview={previewTimeline} onRender={renderTimeline} />}
           {mode === 'settings' && <SettingsView settings={settings} busy={busy} onRefresh={refreshSettings} onSaveProvider={saveSettingsProvider} onAddPreset={addSettingsPreset} onDeleteProvider={deleteSettingsProvider} onWriteCredential={writeSettingsCredential} onImportCredential={importSettingsCredential} onClearCredential={clearSettingsCredential} onProbe={probeSettingsProvider} onBind={bindSettingsCapability} onAutoMatch={autoMatchSettingsBindings} />}
           {mode === 'canvas' && (
             <section className="canvas-wrap asset-board-wrap" onMouseDownCapture={handleAssetBoardControlSelection}>
@@ -5057,7 +5255,7 @@ function Studio() {
                     onNodeClick={onAssetBoardNodeClick}
                     onNodeDragStart={onAssetNodeDragStart}
                     onNodeDragStop={onAssetNodeDragStop}
-                    onMoveEnd={(viewport) => { setAssetBoardEnvelope((current) => current ? { ...current, board: { ...current.board, viewport } } : current); setAssetBoardDirty(true); }}
+                    onMoveEnd={(viewport) => { setAssetBoardEnvelope((current) => current ? { ...current, board: { ...current.board, viewport } } : current); markAssetBoardDirty(); }}
                     defaultViewport={assetBoardEnvelope?.board.viewport as Viewport | undefined}
                   />
                 </Suspense>
@@ -5067,7 +5265,7 @@ function Studio() {
       </main>
       <aside className="context-panel" aria-label="Project context" tabIndex={0}>
         <header><span>PROJECT CONTEXT</span><h2>{project?.document.name || '尚未选择项目'}</h2><p>{project?.document.brief || '项目上下文、运行和审批状态会显示在这里。'}</p></header>
-          {mode === 'canvas' ? selectedAssetBoardCards.length > 1 ? <section className="asset-selection-multi-state"><span>ASSET BOARD SELECTION</span><h3>已选中多个卡片</h3><p>当前选中了 {selectedAssetBoardCards.length} 张卡片。请单独选择一张卡片查看对应的资产、Prompt 或候选版本。</p></section> : <AssetProductionPanel asset={selectedProductionAsset} selectedCardType={selectedAssetBoardNode?.data.node_type === 'asset' || selectedAssetBoardNode?.data.node_type === 'handoff' || selectedAssetBoardNode?.data.node_type === 'artifact' ? selectedAssetBoardNode.data.node_type : undefined} story={story} fusionSources={selectedFusionSources} busy={busy} projectRevision={project?.revision} assetBoardDirty={assetBoardDirty} promptDraft={assetPromptDraft && assetPromptDraft.assetId === selectedProductionAsset?.id ? assetPromptDraft.prompt : undefined} promptPackDraft={assetPromptDraft && assetPromptDraft.assetId === selectedProductionAsset?.id ? assetPromptDraft.promptPack : undefined} promptQualityDraft={assetPromptDraft && assetPromptDraft.assetId === selectedProductionAsset?.id ? assetPromptDraft.promptQuality : undefined} onSave={saveAssetMetadata} onHandoff={handoffAssetToChatGPT} onImport={importAssetCandidate} onStartQa={startAssetQa} onApprove={approveAssetCandidate} onRegister={registerAssetCandidate} onApprovePromptCard={approveAssetPromptCard} onGenerateImageCard={generateAssetImageCard} onGeneratePrompt={generateAssetPrompts} onGenerateFusionPrompt={generateFusionPrompt} onManualProductionApproval={manualProductionApproval} /> : <>
+          {mode === 'canvas' ? selectedAssetBoardCards.length > 1 ? <section className="asset-selection-multi-state"><span>ASSET BOARD SELECTION</span><h3>已选中多个卡片</h3><p>当前选中了 {selectedAssetBoardCards.length} 张卡片。请单独选择一张卡片查看对应的资产、Prompt 或候选版本。</p></section> : <AssetProductionPanel asset={selectedProductionAsset} selectedCardType={selectedAssetBoardNode?.data.node_type === 'asset' || selectedAssetBoardNode?.data.node_type === 'handoff' || selectedAssetBoardNode?.data.node_type === 'artifact' ? selectedAssetBoardNode.data.node_type : undefined} story={story} fusionSources={selectedFusionSources} busy={busy} projectRevision={project?.revision} assetBoardDirty={assetBoardDirty} promptDraft={assetPromptDraft && assetPromptDraft.assetId === selectedProductionAsset?.id ? assetPromptDraft.prompt : undefined} promptPackDraft={assetPromptDraft && assetPromptDraft.assetId === selectedProductionAsset?.id ? assetPromptDraft.promptPack : undefined} promptQualityDraft={assetPromptDraft && assetPromptDraft.assetId === selectedProductionAsset?.id ? assetPromptDraft.promptQuality : undefined} onSave={saveAssetMetadata} onHandoff={handoffAssetToChatGPT} onImport={importAssetCandidate} onStartQa={startAssetQa} onApprove={approveAssetCandidate} onRegister={registerAssetCandidate} onApprovePromptCard={approveAssetPromptCard} onGenerateImageCard={generateAssetImageCard} onGeneratePrompt={generateAssetPrompts} onGenerateFusionPrompt={generateFusionPrompt} onManualProductionApproval={manualProductionApproval} onDraftChange={handleAssetEditorDraftChange} /> : <>
         {selectedNode && <section className="node-inspector"><h3>{selectedNode.data.kind === 'group' ? '分组 Inspector' : '节点 Inspector'}</h3><label>节点名称<input value={selectedNode.data.label} onChange={(event) => updateSelectedNode({ label: event.target.value })} /></label>{selectedNode.data.kind !== 'group' && <><label className="check-row"><input type="checkbox" checked={Boolean(selectedNode.data.config.paid)} onChange={(event) => updateSelectedNode({}, { paid: event.target.checked })} />付费节点</label><label>预计费用<input type="number" min="0" step="0.01" value={String(selectedNode.data.config.estimated_cost ?? '')} onChange={(event) => updateSelectedNode({}, { estimated_cost: event.target.value === '' ? 0 : Number(event.target.value) })} /></label></>}{selectedNode.data.kind === 'group' && <label className="check-row"><input type="checkbox" checked={Boolean(selectedNode.data.config.collapsed)} onChange={(event) => updateSelectedNode({}, { collapsed: event.target.checked })} />折叠组内容</label>}<label className="check-row"><input type="checkbox" checked={selectedNode.data.locked} onChange={(event) => updateSelectedNode({ locked: event.target.checked })} />锁定节点位置</label><small className="inspector-hint">修改会进入图编辑历史，保存时受 revision 冲突保护。</small></section>}
         <section><h3>制作规格</h3><dl><div><dt>画幅</dt><dd>{project?.document.ratio || '—'}</dd></div><div><dt>时长</dt><dd>{project?.document.duration || 0}s</dd></div><div><dt>图版本</dt><dd>v{graphEnvelope?.revision || 0}</dd></div><div><dt>时间线</dt><dd>v{timelineEnvelope?.revision || 0}{timelineDirty ? ' · 未保存' : ''}</dd></div></dl></section>
         {renderJob && <section><h3>交付作业</h3><div className="run-card"><b>{renderJob.status}</b><code>{renderJob.id}</code>{renderJob.result?.delivery && <small>MP4、字幕、项目 JSON、资产清单和 manifest 已生成</small>}{renderJob.error && <small>{String(renderJob.error.message || '渲染失败')}</small>}</div></section>}
@@ -5080,7 +5278,6 @@ function Studio() {
       <CommandPalette open={commandPaletteOpen} query={commandQuery} actions={commandActions} onQueryChange={setCommandQuery} onClose={closeCommandPalette} />
       <ShortcutHelp open={shortcutHelpOpen} onClose={() => setShortcutHelpOpen(false)} />
       {assetCreateOpen && <AssetCreateModal draft={assetCreateDraft} shots={story?.story.shots || []} busy={busy} onChange={(patch) => setAssetCreateDraft((current) => ({ ...current, ...patch }))} onClose={() => setAssetCreateOpen(false)} onSubmit={() => { void addAssetToBoard(); }} />}
-      {assetImportOpen && assetLibrary && <AssetImportDrawer library={assetLibrary} busy={busy} onClose={() => setAssetImportOpen(false)} onImport={importAssetBatch} />}
       {rejectFeedback && <AssetRejectFeedbackModal draft={rejectFeedback} busy={busy} onChange={(value) => setRejectFeedback((current) => current ? { ...current, value } : current)} onClose={() => setRejectFeedback(null)} onSubmit={submitRejectFeedback} />}
       {paidConfirmation && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setPaidConfirmation(null); }}>
         <section className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="paid-confirmation-title">

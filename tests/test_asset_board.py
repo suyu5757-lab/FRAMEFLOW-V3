@@ -260,14 +260,15 @@ class AssetBoardV3Tests(unittest.TestCase):
             files={"file": ("candidate.png", PNG_1X1, "image/png")},
         )
         self.assertEqual(intake.status_code, 200, intake.text)
-        artifact = intake.json()["artifact"]
+        intake_payload = intake.json()
+        artifact = intake_payload["artifact"]
         artifact_id = artifact["id"]
         source_path = Path(artifact["local_path"])
         self.assertTrue(source_path.is_file())
 
         synced = self.client.post(
             "/api/v2/projects/PRJ_BOARD/asset-board/sync",
-            json={"expected_revision": initial.json()["revision"], "preserve_layout": True},
+            json={"expected_revision": intake_payload["asset_board"]["revision"], "preserve_layout": True},
         )
         self.assertEqual(synced.status_code, 200, synced.text)
         handoff_before = next(node for node in synced.json()["board"]["nodes"] if node["id"] == "handoff:CHAR_01")
@@ -303,11 +304,12 @@ class AssetBoardV3Tests(unittest.TestCase):
             files={"file": ("candidate.png", PNG_1X1, "image/png")},
         )
         self.assertEqual(response.status_code, 200, response.text)
-        artifact_id = response.json()["artifact"]["id"]
+        response_payload = response.json()
+        artifact_id = response_payload["artifact"]["id"]
 
         synced = self.client.post(
             "/api/v2/projects/PRJ_BOARD/asset-board/sync",
-            json={"expected_revision": initial.json()["revision"], "preserve_layout": True},
+            json={"expected_revision": response_payload["asset_board"]["revision"], "preserve_layout": True},
         )
         self.assertEqual(synced.status_code, 200, synced.text)
         handoff = next(node for node in synced.json()["board"]["nodes"] if node["id"] == "handoff:CHAR_01")
@@ -366,7 +368,7 @@ class AssetBoardV3Tests(unittest.TestCase):
         self.assertNotEqual(copied_id, "CHAR_01")
         self.assertTrue(any(item["logical_asset_id"] == copied_id for item in copied.json()["asset"]["artifacts"]))
 
-        synced = self.client.post("/api/v2/projects/PRJ_BOARD/asset-board/sync", json={"expected_revision": 1, "preserve_layout": True})
+        synced = self.client.post("/api/v2/projects/PRJ_BOARD/asset-board/sync", json={"expected_revision": intake.json()["asset_board"]["revision"], "preserve_layout": True})
         self.assertEqual(synced.status_code, 200, synced.text)
         self.assertTrue(any(node.get("asset_id") == copied_id for node in synced.json()["board"]["nodes"]))
 

@@ -116,6 +116,26 @@ class DashboardApiTests(unittest.TestCase):
         self.assertEqual(snapshot["primary_next_task"]["targetId"], "RUN_PAID")
         self.assertNotEqual(snapshot["stages"][-2]["status"], "completed")
 
+    def test_registered_asset_with_production_gate_is_not_reported_as_completed(self) -> None:
+        changed = document("DASH_1")
+        changed.update({
+            "script": "镜头脚本",
+            "shots": [{"id": "SH01", "scene": "SC01", "duration": 4, "purpose": "建立空间", "size": "中景", "camera": "固定", "action": "人物入画"}],
+        })
+        snapshot = build_dashboard_snapshot(
+            changed,
+            asset_library={"assets": [{
+                "id": "CHAR_REGISTERED",
+                "assetClass": "character",
+                "grade": "B",
+                "readiness": {"required": False, "status": "ready", "ready": True, "production_ready": False, "production_missing": ["prompt_qa"]},
+            }]},
+        )
+        self.assertNotEqual(snapshot["project"]["status"], "completed")
+        self.assertIsNotNone(snapshot["primary_next_task"])
+        self.assertEqual(snapshot["primary_next_task"]["targetId"], "CHAR_REGISTERED")
+        self.assertEqual(snapshot["primary_next_task"]["action"], "complete_asset")
+
 
 if __name__ == "__main__":
     unittest.main()

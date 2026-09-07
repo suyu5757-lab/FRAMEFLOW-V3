@@ -50,7 +50,9 @@ const json = (method: string, body: unknown): RequestInit => ({
 });
 
 export const studioApi = {
-  projects: (includeArchived = false) => request<{ projects: ProjectRecord[] }>(`/api/v2/projects${includeArchived ? '?include_archived=true' : ''}`),
+  // Project revisions are the optimistic-concurrency source of truth. Do not
+  // let a browser cache return an older revision immediately after a write.
+  projects: (includeArchived = false) => request<{ projects: ProjectRecord[] }>(`/api/v2/projects${includeArchived ? '?include_archived=true' : ''}`, { cache: 'no-store' }),
   workflows: () => request<{ workflows: WorkflowManifest[] }>('/api/v2/workflows'),
   createProject: (body: ProjectCreateInput) => request<{ ok: boolean; document: ProjectRecord['document']; revision: number; updated_at: string }>('/api/v2/projects', json('POST', body)),
   dashboard: (projectId?: string) => request<DashboardEnvelope>(`/api/v2/dashboard${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''}`, { cache: 'no-store' }),
@@ -142,13 +144,16 @@ export const studioApi = {
     mapArtifact: (projectId: string, artifactId: string, body: Record<string, unknown> = {}) => request<Record<string, any>>(`/api/v2/projects/${encodeURIComponent(projectId)}/artifacts/${encodeURIComponent(artifactId)}/map`, json('POST', body)),
     resolveArtifact: (projectId: string, artifactId: string, body: Record<string, unknown> = {}) => request<Record<string, any>>(`/api/v2/projects/${encodeURIComponent(projectId)}/artifacts/${encodeURIComponent(artifactId)}/resolution`, json('POST', body)),
     assetWorkflow: (projectId: string, assetId: string) => request<Record<string, any>>(`/api/v2/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(assetId)}/workflow`),
-    projectStorageIntegrity: (projectId?: string) => request<Record<string, any>>(projectId ? `/api/v2/projects/${encodeURIComponent(projectId)}/integrity` : '/api/v2/projects/integrity'),
+  projectStorageIntegrity: (projectId?: string) => request<Record<string, any>>(projectId ? `/api/v2/projects/${encodeURIComponent(projectId)}/integrity` : '/api/v2/projects/integrity'),
+  projectStorage: (projectId: string) => request<Record<string, any>>(`/api/v2/projects/${encodeURIComponent(projectId)}/storage`),
+  syncProjectStorage: (projectId: string) => request<{ ok: boolean; storage: Record<string, any> }>(`/api/v2/projects/${encodeURIComponent(projectId)}/storage/sync`, { method: 'POST' }),
   generateAssetImage: (projectId: string, assetId: string, body: AssetImageGenerate) => request<Record<string, any>>(`/api/v2/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(assetId)}/generate-image`, json('POST', body)),
   assetQaRuns: (projectId: string, artifactId: string) => request<{ qa_runs: Array<Record<string, any>> }>(`/api/v2/projects/${encodeURIComponent(projectId)}/artifacts/${encodeURIComponent(artifactId)}/qa-runs`),
   submitAssetQa: (projectId: string, qaRunId: string, body: Record<string, unknown>) => request<Record<string, any>>(`/api/v2/projects/${encodeURIComponent(projectId)}/qa-runs/${encodeURIComponent(qaRunId)}/submit`, json('POST', body)),
   registerAssetArtifact: (projectId: string, artifactId: string, replaceActive = false) => request<Record<string, any>>(`/api/v2/projects/${encodeURIComponent(projectId)}/artifacts/${encodeURIComponent(artifactId)}/register`, json('POST', { replace_active: replaceActive })),
   archiveAssetArtifact: (projectId: string, artifactId: string) => request<{ ok: boolean; project_id: string; artifact_id: string; status: string; file_preserved?: boolean; project_revision?: number; artifact?: Record<string, any>; library: AssetLibraryEnvelope; asset_board?: AssetBoardEnvelope }>(`/api/v2/projects/${encodeURIComponent(projectId)}/artifacts/${encodeURIComponent(artifactId)}`, { method: 'DELETE' }),
-  updateAssetMetadata: (projectId: string, assetId: string, body: Record<string, unknown>) => request<{ project_id: string; revision: number; asset: Record<string, unknown> }>(`/api/v2/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(assetId)}`, json('PATCH', body)),
+  removeActiveAssetVersion: (projectId: string, assetId: string, expectedRevision?: number) => request<Record<string, any>>(`/api/v2/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(assetId)}/active-version${expectedRevision === undefined ? '' : `?expected_revision=${expectedRevision}`}`, { method: 'DELETE' }),
+  updateAssetMetadata: (projectId: string, assetId: string, body: Record<string, unknown>) => request<{ project_id: string; revision: number; asset: Record<string, unknown>; library?: AssetLibraryEnvelope; asset_board?: AssetBoardEnvelope }>(`/api/v2/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(assetId)}`, json('PATCH', body)),
   manualProductionApproval: (projectId: string, assetId: string, body: { expected_revision: number; approved: boolean; reason?: string; artifact_id: string }) => request<{ project_id: string; revision: number; asset: Record<string, any>; summary: Record<string, any> }>(`/api/v2/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(assetId)}/manual-production-approval`, json('POST', body)),
   assignAsset: (projectId: string, body: { expected_project_revision: number; expected_board_revision: number; asset_id: string; shot_id: string; mode?: 'assign' | 'move' | 'remove'; role?: string; required?: boolean; required_readiness?: 'registered' | 'production' }) => request<{ project_revision: number; board_revision: number; story: StoryEnvelope['story']; asset_board: AssetBoardEnvelope; library: AssetLibraryEnvelope }>(`/api/v2/projects/${encodeURIComponent(projectId)}/asset-assignments`, json('POST', body)),
   fusionGate: (projectId: string, assetId: string) => request<{ status: string; gate: Record<string, unknown> }>(`/api/v2/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(assetId)}/fusion-gate`, { method: 'POST' }),
@@ -159,7 +164,7 @@ export const studioApi = {
   loadProjectSnapshot: async (projectId: string, signal: AbortSignal) => {
     const encoded = encodeURIComponent(projectId);
     const init: RequestInit = { cache: 'no-store', signal };
-    const [graph, timeline, timelinePreflight, story, storyRuns, assetLibrary, assetBoard, dashboard, assetAudit, audioStudio] = await Promise.all([
+    const [graph, timeline, timelinePreflight, story, storyRuns, assetLibrary, assetBoard, dashboard, audioStudio] = await Promise.all([
       request<GraphEnvelope>(`/api/v2/projects/${encoded}/graph`, init),
       request<TimelineEnvelope>(`/api/v2/projects/${encoded}/timeline`, init),
       request<TimelinePreflight>(`/api/v2/projects/${encoded}/timeline/preflight`, init),
@@ -168,9 +173,8 @@ export const studioApi = {
       request<AssetLibraryEnvelope>(`/api/v2/projects/${encoded}/assets`, init),
       request<AssetBoardEnvelope>(`/api/v2/projects/${encoded}/asset-board`, init),
       request<DashboardEnvelope>(`/api/v2/dashboard?project_id=${encoded}`, init),
-      request<AssetAuditEnvelope>(`/api/v2/projects/${encoded}/asset-audit?queue=all`, init),
       request<AudioStudioEnvelope>(`/api/v2/projects/${encoded}/audio-studio`, init),
     ]);
-    return { graph, timeline, timelinePreflight, story, storyRuns, assetLibrary, assetBoard, dashboard, assetAudit, audioStudio, projectId };
+    return { graph, timeline, timelinePreflight, story, storyRuns, assetLibrary, assetBoard, dashboard, audioStudio, projectId };
   },
 };

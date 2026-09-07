@@ -33,9 +33,10 @@ from frameflow.provider_adapters import CAPABILITIES, adapter_for_profile, crede
 from frameflow.production_gate import ProductionArtifactGateError, production_artifact_gate
 from frameflow.prompt_authority import PromptAuthorityError, approve_prompt_version, canonical_approved_prompt, prompt_sha256
 from frameflow.prompt_design import PROMPT_CONTRACT_VERSION, PROMPT_WORKFLOW_ID, assess_prompt_pack, canonical_asset_class, canonicalize_prompt_output, prompt_contract, prompt_contract_instructions, render_prompt_value
+from frameflow.project_storage import describe_project_storage, sync_all_project_files, sync_project_files
 from frameflow.reference_authority import normalize_reference_authority, ordered_reference_snapshot
 from frameflow.recovery import RecoveryError, apply_recovery_plan, create_recovery_preview, create_verified_backup, export_project, recovery_scan
-from frameflow.providers import ASSET_PROMPT_OUTPUT_SCHEMA, FUSION_PROMPT_OUTPUT_SCHEMA, PROJECT_PATCH_SCHEMA, REGULATOR_OUTPUT_SCHEMA, STORYBOARD_OUTPUT_SCHEMA, ProviderError, openai_assistant, openai_image, openai_image_edit, openai_speech, openai_structured, probe_profile
+from frameflow.providers import ASSET_PROMPT_OUTPUT_SCHEMA, FUSION_PROMPT_OUTPUT_SCHEMA, MINIMAX_DEFAULT_TTS_MODEL, MINIMAX_DEFAULT_VOICE_ID, MINIMAX_TTS_FORMATS, MINIMAX_TTS_MODELS, MINIMAX_TTS_SPEED_MAX, MINIMAX_TTS_SPEED_MIN, PROJECT_PATCH_SCHEMA, REGULATOR_OUTPUT_SCHEMA, STORYBOARD_OUTPUT_SCHEMA, ProviderError, minimax_speech, minimax_tts_payload, openai_assistant, openai_image, openai_image_edit, openai_speech, openai_structured, probe_profile
 from frameflow.runtime import execute_v3_run
 from frameflow.schemas import AgentPatchPreviewV3, AgentPlanCreateV3, AgentPlanDecisionV3, AgentPatchV3, ArtifactLineageCreateV3, ArtifactMapRequest, ArtifactRegisterRequest, AssetAssignmentV3, AssetBoardSyncV3, AssetBoardUpdateV3, AssetComparisonCreate, AssetComparisonReview, AssetCreateV3, AssetDuplicateV3, AssetImageGenerate, AssetManualProductionApproval, AssetMetadataUpdate, AssetPromptRunCreate, AssetReferenceRole, AssistantRequest, BackupCreateV3, CapabilityBinding, CredentialImport, CredentialWrite, FusionPromptRunCreate, ImageEdit, ImageGenerate, ProjectCreateV3, ProjectImport, ProjectMetadataUpdate, PromptCreateRequest, PromptQADecision, PromptRebuildRequest, PromptReviseRequest, ProviderProfileCreate, ProviderProfileUpdate, ProviderRoutePreviewV3, ProxyCreateV3, QADecisionSubmit, QARunCreate, RecoveryApplyV3, RecoveryPreviewV3, RenderCreateV3, RenderDecisionV3, RenderEstimateV3, RenderRequest, ResolutionRequest, RunDecisionV3, SeedancePackageCreate, SpeechGenerate, StoryDocumentUpdateV3, StoryOptimizationCreate, StoryRollbackV3, StoryboardAcceptRequest, TaskCreate, TimelineAssemblyRequestV3, TimelinePreviewRequestV3, TimelineUpdateV3, WorkflowGraphUpdateV3, WorkflowRunCreate, WorkflowRunCreateV3, WorkflowRunEstimateV3, WorkflowTemplateApplyV3, WorkflowTemplateCreateV3
 from frameflow.secrets_store import SecretStoreError, delete_secret, get_secret, mask_secret, set_secret
@@ -45,8 +46,7 @@ from frameflow.story import story_checks, story_document
 from frameflow.upload_storage import UploadTooLarge, cleanup_file, cleanup_staged_upload, finalize_staged_upload, stage_upload
 
 ROOT=Path(__file__).resolve().parent
-if __name__ == "__main__":
-    load_dotenv(ROOT / ".env", override=False)
+load_dotenv(ROOT / ".env", override=False)
 configured_resource_dir=os.environ.get("FRAMEFLOW_RESOURCE_DIR", "").strip()
 RESOURCE_DIR=Path(configured_resource_dir or ROOT).expanduser().resolve()
 DATA_DIR=RESOURCE_DIR/"data"; DEFAULT_DATA_DIR=DATA_DIR; GENERATED_DIR=RESOURCE_DIR/"generated"; STUDIO_DIST=ROOT/"web"/"dist"; GENERATED_AUDIO_DIR=GENERATED_DIR/"audio"; REFERENCE_AUDIO_DIR=GENERATED_AUDIO_DIR/"references"
@@ -85,6 +85,7 @@ PROVIDER_PRESETS={
     "opencode":{"id":"opencode-default","provider_type":"opencode","display_name":"OpenCode Go Plan Agent","base_url":"http://127.0.0.1:4096","model_config":{"server_username":"opencode","agent":"build","preferred_provider_id":"opencode-go","product":"go_plan","directory":str(DEFAULT_OPENCODE_DIRECTORY)},"capabilities":["orchestrator"],"enabled":True,"model_options":[]},
     "comfyui":{"id":"comfyui-default","provider_type":"comfyui","display_name":"ComfyUI 本地 API","base_url":"http://127.0.0.1:8188","model_config":{"models":[],"capabilities":["image","image_edit","video","music","sfx","upscale","lip_sync","upload"]},"capabilities":["image","image_edit","video","music","sfx","upscale","lip_sync","upload"],"enabled":True,"model_options":[]},
     "jimeng":{"id":"jimeng-default","provider_type":"jimeng_cli","display_name":"即梦 CLI（本机）","base_url":"cli://dreamina","model_config":{"executable":"dreamina","model_version":"seedance2.0fast","models":JIMENG_VIDEO_MODEL_IDS},"capabilities":["video"],"enabled":True,"model_options":JIMENG_VIDEO_MODEL_OPTIONS},
+    "minimax":{"id":"minimax-default","provider_type":"minimax","display_name":"MiniMax TTS","base_url":"https://api.minimax.cn/v1","model_config":{"tts_model":MINIMAX_DEFAULT_TTS_MODEL,"voice_id":MINIMAX_DEFAULT_VOICE_ID,"language_boost":"Chinese","audio_setting":{"sample_rate":32000,"bitrate":128000,"format":"wav","channel":1}},"capabilities":["tts"],"enabled":True,"model_options":[{"id":model,"label":model,"description":"MiniMax 同步 TTS 模型"} for model in MINIMAX_TTS_MODELS]},
 }
 AUTO_ROUTING_PROVIDER_PRIORITY={
     "orchestrator": ["opencode", "openai", "openai_compatible"],
@@ -92,7 +93,7 @@ AUTO_ROUTING_PROVIDER_PRIORITY={
     "image": ["openai", "comfyui"],
     "image_edit": ["openai", "comfyui"],
     "video": ["jimeng_cli", "comfyui"],
-    "tts": ["openai"],
+    "tts": ["minimax"],
     "music": ["comfyui"],
     "sfx": ["comfyui"],
     "lip_sync": ["comfyui"],
@@ -173,9 +174,23 @@ def _migrate_legacy_video_profiles(database:Database, now:str) -> None:
 
 
 def seed_defaults(database:Database)->None:
-    now=utcnow(); _migrate_legacy_video_profiles(database, now); profiles=[("openai-default","openai","OpenAI","https://api.openai.com/v1","provider:openai-default",{"orchestrator_model":DEFAULT_ORCHESTRATOR_MODEL,"image_model":"gpt-image-2","tts_model":"gpt-4o-mini-tts"},["orchestrator","image","tts"]),("jimeng-default","jimeng_cli","即梦 CLI（本机）","cli://dreamina","provider:jimeng-default",{"executable":"dreamina","model_version":DEFAULT_VIDEO_MODEL,"models":JIMENG_VIDEO_MODEL_IDS},["video"]),("opencode-default","opencode","OpenCode Go Plan Agent","http://127.0.0.1:4096","provider:opencode-default",{"server_username":"opencode","agent":"build","preferred_provider_id":"opencode-go","product":"go_plan","directory":str(DEFAULT_OPENCODE_DIRECTORY)},["orchestrator"])]
+    now=utcnow(); _migrate_legacy_video_profiles(database, now)
+    minimax_config={"tts_model":MINIMAX_DEFAULT_TTS_MODEL,"voice_id":MINIMAX_DEFAULT_VOICE_ID,"language_boost":"Chinese","audio_setting":{"sample_rate":32000,"bitrate":128000,"format":"wav","channel":1}}
+    profiles=[
+        ("openai-default","openai","OpenAI","https://api.openai.com/v1","provider:openai-default",{"orchestrator_model":DEFAULT_ORCHESTRATOR_MODEL,"image_model":"gpt-image-2"},["orchestrator","image"]),
+        ("jimeng-default","jimeng_cli","即梦 CLI（本机）","cli://dreamina","provider:jimeng-default",{"executable":"dreamina","model_version":DEFAULT_VIDEO_MODEL,"models":JIMENG_VIDEO_MODEL_IDS},["video"]),
+        ("opencode-default","opencode","OpenCode Go Plan Agent","http://127.0.0.1:4096","provider:opencode-default",{"server_username":"opencode","agent":"build","preferred_provider_id":"opencode-go","product":"go_plan","directory":str(DEFAULT_OPENCODE_DIRECTORY)},["orchestrator"]),
+        ("minimax-default","minimax","MiniMax TTS","https://api.minimax.cn/v1","provider:minimax-default",minimax_config,["tts"]),
+    ]
     with database.connect() as c:
         for p in profiles:c.execute("INSERT OR IGNORE INTO provider_profiles(id,provider_type,display_name,base_url,credential_ref,model_config_json,capabilities_json,enabled,created_at,updated_at) VALUES(?,?,?,?,?,?,?,1,?,?)",(*p[:5],database.encode(p[5]),database.encode(p[6]),now,now))
+        # Existing workspaces used OpenAI as the default TTS route. Migrate
+        # only that capability; OpenAI remains available for image/orchestration.
+        for row in c.execute("SELECT id,capabilities_json FROM provider_profiles WHERE provider_type='openai'").fetchall():
+            capabilities=database.decode(row["capabilities_json"],[])
+            if isinstance(capabilities,list) and "tts" in capabilities:
+                c.execute("UPDATE provider_profiles SET capabilities_json=?,updated_at=? WHERE id=?",(database.encode([item for item in capabilities if item!="tts"]),now,row["id"]))
+        c.execute("UPDATE capability_bindings SET provider_profile_id=?,model=?,updated_at=? WHERE capability='tts' AND provider_profile_id!=?",("minimax-default",MINIMAX_DEFAULT_TTS_MODEL,now,"minimax-default"))
         for row in c.execute("SELECT id,model_config_json FROM provider_profiles WHERE provider_type='jimeng_cli'").fetchall():
             config=database.decode(row["model_config_json"],{})
             if isinstance(config,dict) and _jimeng_executable_config_error(config):
@@ -191,7 +206,7 @@ def seed_defaults(database:Database)->None:
             if isinstance(config,dict) and not str(config.get("directory") or "").strip():
                 config["directory"] = str(DEFAULT_OPENCODE_DIRECTORY)
                 c.execute("UPDATE provider_profiles SET model_config_json=?,updated_at=? WHERE id=?",(database.encode(config),now,row["id"]))
-        for cap,pid,model in [("orchestrator","openai-default",DEFAULT_ORCHESTRATOR_MODEL),("image","openai-default","gpt-image-2"),("tts","openai-default","gpt-4o-mini-tts"),("video","jimeng-default",DEFAULT_VIDEO_MODEL)]:c.execute("INSERT OR IGNORE INTO capability_bindings(capability,provider_profile_id,model,updated_at) VALUES(?,?,?,?)",(cap,pid,model,now))
+        for cap,pid,model in [("orchestrator","openai-default",DEFAULT_ORCHESTRATOR_MODEL),("image","openai-default","gpt-image-2"),("tts","minimax-default",MINIMAX_DEFAULT_TTS_MODEL),("video","jimeng-default",DEFAULT_VIDEO_MODEL)]:c.execute("INSERT OR IGNORE INTO capability_bindings(capability,provider_profile_id,model,updated_at) VALUES(?,?,?,?)",(cap,pid,model,now))
         c.execute("UPDATE capability_bindings SET model=?,updated_at=? WHERE capability='video' AND provider_profile_id='jimeng-default'",(DEFAULT_VIDEO_MODEL,now))
 
 
@@ -215,7 +230,16 @@ async def lifespan(application:FastAPI):
         REFERENCE_AUDIO_DIR = GENERATED_AUDIO_DIR / "references"
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         os.environ["JIMENG_CLI_HOME"] = str(runtime_root / "dreamina-home")
-    application.state.db=Database(DB_PATH); seed_defaults(application.state.db); ensure_daily_startup_backup(application.state.db); await resume_tasks(application); await resume_v3_runs(application); await resume_v3_renders(application); yield
+    application.state.db=Database(DB_PATH); seed_defaults(application.state.db)
+    try:
+        application.state.prompt_registration_reconciliation = reconcile_registered_prompt_links(application.state.db, DATA_DIR)
+        application.state.project_storage = sync_all_project_files(application.state.db, DATA_DIR)
+        application.state.project_storage_error = None
+    except Exception as exc:  # Keep the local API available so doctor can expose the filesystem problem.
+        application.state.prompt_registration_reconciliation = None
+        application.state.project_storage = None
+        application.state.project_storage_error = {"message": str(exc)[:2000]}
+    ensure_daily_startup_backup(application.state.db); await resume_tasks(application); await resume_v3_runs(application); await resume_v3_renders(application); yield
 
 app=FastAPI(title="FRAMEFLOW V3",version="3.0.0",lifespan=lifespan)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "testserver"])
@@ -366,6 +390,7 @@ async def resume_v3_renders(application: FastAPI) -> None:
 
 def provider_environment(profile:dict[str,Any]|sqlite3.Row)->str:
     if profile["provider_type"]=="jimeng_cli":return ""
+    if profile["provider_type"]=="minimax":return "MINIMAX_API_KEY"
     if profile["provider_type"]=="opencode":return "OPENCODE_SERVER_PASSWORD"
     if profile["provider_type"]=="comfyui":return "COMFYUI_API_KEY"
     if "api.deepseek.com" in str(profile["base_url"]).lower():return "DEEPSEEK_API_KEY"
@@ -417,6 +442,7 @@ def get_profile_secret(profile:dict[str,Any])->str:
     # OPENCODE_SERVER_PASSWORD.
     if not value and profile["provider_type"] in {"opencode","comfyui"}:return ""
     return value
+
 def resolve_profile(database:Database,capability:str,requested:str|None=None):
     if requested:return get_profile(database,requested),None
     with database.connect() as c:b=c.execute("SELECT * FROM capability_bindings WHERE capability=?",(capability,)).fetchone()
@@ -495,7 +521,7 @@ async def doctor(request:Request):
     try:import keyring; keyring_ok=not keyring.get_keyring().__class__.__module__.startswith("keyring.backends.fail")
     except Exception:keyring_ok=False
     frontend_ok = (STUDIO_DIST / "index.html").exists()
-    return {"ok":bool(find_binary("ffmpeg") and find_binary("ffprobe") and frontend_ok),"ffmpeg":find_binary("ffmpeg"),"ffprobe":find_binary("ffprobe"),"frontend_dist":str(STUDIO_DIST),"frontend_ready":frontend_ok,"resource_dir":str(RESOURCE_DIR),"data_dir":str(DATA_DIR),"generated_dir":str(GENERATED_DIR),"database":str(db(request).path),"keyring_available":keyring_ok,"disk_free_bytes":shutil.disk_usage(RESOURCE_DIR if RESOURCE_DIR.exists() else ROOT).free}
+    return {"ok":bool(find_binary("ffmpeg") and find_binary("ffprobe") and frontend_ok),"ffmpeg":find_binary("ffmpeg"),"ffprobe":find_binary("ffprobe"),"frontend_dist":str(STUDIO_DIST),"frontend_ready":frontend_ok,"resource_dir":str(RESOURCE_DIR),"data_dir":str(DATA_DIR),"project_files_root":str((DATA_DIR / "projects").resolve()),"generated_dir":str(GENERATED_DIR),"database":str(db(request).path),"prompt_registration_reconciliation":getattr(request.app.state,"prompt_registration_reconciliation",None),"project_storage_error":getattr(request.app.state,"project_storage_error",None),"keyring_available":keyring_ok,"disk_free_bytes":shutil.disk_usage(RESOURCE_DIR if RESOURCE_DIR.exists() else ROOT).free}
 
 
 @app.get("/api/v2/system/data-audit")
@@ -605,6 +631,8 @@ async def save_project(project_id:str,body:ProjectImport,request:Request):
         rev=1
         try:_insert_project_with_directory(database,project_id,body.document.name,doc,rev,body.document.createdAt or now,now,body.document.lifecycleStatus)
         except (sqlite3.IntegrityError,FileExistsError) as exc:raise HTTPException(409,"项目 ID 或项目目录已存在，未写入任何数据。") from exc
+        return {"ok":True,"revision":rev,"updated_at":now,"lifecycle_status":body.document.lifecycleStatus}
+    sync_project_files(database,DATA_DIR,project_id,document=doc,revision=rev)
     return {"ok":True,"revision":rev,"updated_at":now,"lifecycle_status":body.document.lifecycleStatus}
 @app.post("/api/projects/import/preview")
 async def preview_import(body:ProjectImport,request:Request):
@@ -652,9 +680,11 @@ async def orchestrator_model_options():return {"default":DEFAULT_ORCHESTRATOR_MO
 @app.post("/api/provider-profiles")
 async def add_profile(body:ProviderProfileCreate,request:Request):
     database=db(request); pid=body.id or f"provider-{secrets.token_hex(5)}"; now=utcnow()
+    if body.provider_type=="openai" and "tts" in body.capabilities:raise HTTPException(422,"当前工作台的 TTS 已固定使用 MiniMax；OpenAI 仅用于编排和图像能力。")
     if body.provider_type=="openai_compatible" and any(x!="orchestrator" for x in body.capabilities):raise HTTPException(422,"OpenAI-compatible 配置在当前版本只支持文本编排能力。")
     if body.provider_type=="opencode" and any(x!="orchestrator" for x in body.capabilities):raise HTTPException(422,"OpenCode 接入点仅承载文本编排 Agent；媒体能力仍由独立供应商提供。")
     if body.provider_type=="jimeng_cli" and any(x!="video" for x in body.capabilities):raise HTTPException(422,"即梦 CLI 当前只承载视频生成能力。")
+    if body.provider_type=="minimax" and any(x!="tts" for x in body.capabilities):raise HTTPException(422,"MiniMax 配置在当前工作台仅承载 TTS 能力。")
     if body.provider_type=="jimeng_cli" and (_jimeng_executable_config_error(body.model_settings) or ""):
         raise HTTPException(422,_jimeng_executable_config_error(body.model_settings))
     validate_profile_model_config({"provider_type":body.provider_type,"last_health":None},body.model_settings)
@@ -665,9 +695,11 @@ async def add_profile(body:ProviderProfileCreate,request:Request):
 @app.patch("/api/provider-profiles/{pid}")
 async def update_profile(pid:str,body:ProviderProfileUpdate,request:Request):
     database=db(request); current=get_profile(database,pid); values=body.model_dump(exclude_unset=True,by_alias=True)
+    if current["provider_type"]=="openai" and "capabilities" in values and "tts" in values["capabilities"]:raise HTTPException(422,"当前工作台的 TTS 已固定使用 MiniMax；OpenAI 仅用于编排和图像能力。")
     if current["provider_type"]=="openai_compatible" and "capabilities" in values and any(x!="orchestrator" for x in values["capabilities"]):raise HTTPException(422,"OpenAI-compatible 配置在当前版本只支持文本编排能力。")
     if current["provider_type"]=="opencode" and "capabilities" in values and any(x!="orchestrator" for x in values["capabilities"]):raise HTTPException(422,"OpenCode 接入点仅承载文本编排 Agent。")
     if current["provider_type"]=="jimeng_cli" and "capabilities" in values and any(x!="video" for x in values["capabilities"]):raise HTTPException(422,"即梦 CLI 当前只承载视频生成能力。")
+    if current["provider_type"]=="minimax" and "capabilities" in values and any(x!="tts" for x in values["capabilities"]):raise HTTPException(422,"MiniMax 配置在当前工作台仅承载 TTS 能力。")
     if current["provider_type"]=="jimeng_cli" and "model_config" in values and _jimeng_executable_config_error(values["model_config"]):raise HTTPException(422,_jimeng_executable_config_error(values["model_config"]))
     if "model_config" in values:validate_profile_model_config(current,values["model_config"])
     if "base_url" in values:ProviderProfileCreate(provider_type=current["provider_type"],display_name=current["display_name"],base_url=values["base_url"])
@@ -686,7 +718,7 @@ async def update_profile(pid:str,body:ProviderProfileUpdate,request:Request):
     return public_profile(get_profile(database,pid))
 @app.delete("/api/provider-profiles/{pid}")
 async def remove_profile(pid:str,request:Request):
-    if pid in {"openai-default","jimeng-default","opencode-default"}:raise HTTPException(409,"默认配置不能删除。")
+    if pid in {"openai-default","jimeng-default","opencode-default","minimax-default"}:raise HTTPException(409,"默认配置不能删除。")
     database=db(request); profile=get_profile(database,pid)
     with database.connect() as c:
         if c.execute("SELECT 1 FROM capability_bindings WHERE provider_profile_id=?",(pid,)).fetchone():raise HTTPException(409,"该配置仍是默认能力绑定。")
@@ -722,6 +754,7 @@ async def get_bindings(request:Request):
 @app.put("/api/settings/capability-bindings")
 async def put_binding(body:CapabilityBinding,request:Request):
     database=db(request); profile=get_profile(database,body.provider_profile_id)
+    if body.capability=="tts" and profile["provider_type"]!="minimax":raise HTTPException(409,"当前工作台的 TTS 已固定使用 MiniMax。")
     if body.capability not in profile["capabilities"]:raise HTTPException(409,"该供应商未通过所选能力探测。")
     if body.capability=="orchestrator":validate_orchestrator_model(profile,body.model)
     with database.connect() as c:c.execute("INSERT INTO capability_bindings(capability,provider_profile_id,model,updated_at) VALUES(?,?,?,?) ON CONFLICT(capability) DO UPDATE SET provider_profile_id=excluded.provider_profile_id,model=excluded.model,updated_at=excluded.updated_at",(body.capability,body.provider_profile_id,body.model,utcnow()))
@@ -802,8 +835,10 @@ def _insert_project_with_directory(database:Database,project_id:str,name:str,doc
             if audit_event:
                 audit_trail.write_event_connection(connection,database,project_id=project_id,**audit_event)
     except Exception:
-        if created_directory and project_root.is_dir() and not any(project_root.iterdir()):
-            project_root.rmdir()
+        if created_directory and project_root.is_dir():
+            # The directory was created in this transaction, so removing this
+            # exact path cannot touch a pre-existing user project.
+            shutil.rmtree(project_root)
         raise
 
 
@@ -961,6 +996,28 @@ async def read_project_v3(project_id:str,request:Request):
     return {"document": document, "revision": row["revision"], "updated_at": row["updated_at"], "lifecycle_status": row["lifecycle_status"]}
 
 
+@app.get("/api/v2/projects/{project_id}/storage")
+async def project_storage_v3(project_id: str, request: Request):
+    """Describe the external, human-readable project workspace."""
+    database = db(request)
+    with database.connect() as connection:
+        row = connection.execute("SELECT revision FROM projects WHERE id=?", (project_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, "项目不存在。")
+    return describe_project_storage(DATA_DIR, project_id, int(row["revision"]))
+
+
+@app.post("/api/v2/projects/{project_id}/storage/sync")
+async def sync_project_storage_v3(project_id: str, request: Request):
+    """Materialize all current project outputs without changing workflow state."""
+    database = db(request)
+    try:
+        result = sync_project_files(database, DATA_DIR, project_id)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return {"ok": True, "storage": result}
+
+
 @app.get("/api/v2/projects/{project_id}/audit-events")
 async def project_audit_events_v3(project_id:str,request:Request,limit:int=100):
     if limit < 1 or limit > audit_trail.MAX_QUERY_LIMIT:
@@ -1001,6 +1058,7 @@ async def update_project_metadata_v3(project_id:str,body:ProjectMetadataUpdate,r
             after={"name":document.get("name"),"brief":document.get("brief"),"ratio":document.get("ratio"),"duration":document.get("duration"),"lifecycleStatus":lifecycle_status},
             created_at=now,
         )
+        sync_project_files(database,DATA_DIR,project_id,document=document,revision=revision,connection=connection)
     document["lifecycleStatus"] = lifecycle_status
     return {"ok": True, "document": document, "revision": revision, "updated_at": now, "lifecycle_status": lifecycle_status}
 
@@ -1012,7 +1070,10 @@ async def read_graph_v3(project_id:str,request:Request):
 @app.put("/api/v2/projects/{project_id}/graph")
 async def write_graph_v3(project_id:str,body:WorkflowGraphUpdateV3,request:Request):
     ensure_graph(db(request),project_id)
-    return save_graph(db(request),project_id,body.graph,body.expected_revision)
+    database=db(request)
+    envelope=save_graph(database,project_id,body.graph,body.expected_revision)
+    sync_project_files(database,DATA_DIR,project_id)
+    return envelope
 
 
 @app.get("/api/v2/workflow-templates")
@@ -1481,6 +1542,7 @@ def _settings_system_status(database: Database) -> dict[str, Any]:
         keyring_backend = None
     providers = _settings_providers(database)
     openai = next((item for item in providers if item["provider_type"] == "openai"), None)
+    minimax = next((item for item in providers if item["provider_type"] == "minimax"), None)
     return {
         "runtime": "v3-only",
         "version": app.version,
@@ -1489,6 +1551,7 @@ def _settings_system_status(database: Database) -> dict[str, Any]:
         "keyring": {"available": keyring_available, "backend": keyring_backend},
         "media": {"ffmpeg": find_binary("ffmpeg"), "ffprobe": find_binary("ffprobe")},
         "openai": {"profile_id": openai["id"] if openai else None, "credential_configured": bool(openai and openai["credential_configured"])},
+        "minimax": {"profile_id": minimax["id"] if minimax else None, "credential_configured": bool(minimax and minimax["credential_configured"])},
         "disk_free_bytes": shutil.disk_usage(ROOT).free,
         "provider_count": len(providers),
     }
@@ -1540,7 +1603,8 @@ def _auto_match_capability_bindings(database: Database) -> list[dict[str, Any]]:
     for capability in CAPABILITIES:
         current = bindings.get(capability)
         current_profile = profile_by_id.get(current["provider_profile_id"]) if current else None
-        if current_profile and current_profile["enabled"] and capability in provider_contract(current_profile)["capabilities"]:
+        current_route_allowed = capability != "tts" or (current_profile and current_profile.get("provider_type") == "minimax")
+        if current_profile and current_profile["enabled"] and current_route_allowed and capability in provider_contract(current_profile)["capabilities"]:
             continue
         priority = AUTO_ROUTING_PROVIDER_PRIORITY.get(capability, [])
         candidates = [
@@ -1729,6 +1793,8 @@ async def settings_binding_put_v3(body: CapabilityBinding, request: Request):
     contract = provider_contract(profile)
     if not profile["enabled"]:
         raise HTTPException(409, "不能把能力绑定到已停用的 Provider。")
+    if body.capability == "tts" and profile["provider_type"] != "minimax":
+        raise HTTPException(409, "当前工作台的 TTS 已固定使用 MiniMax。")
     if body.capability not in contract["capabilities"]:
         raise HTTPException(409, "该 Provider 当前不声明所选能力，请先检查 Provider 契约或重新探测。")
     if body.capability == "orchestrator":
@@ -1905,8 +1971,11 @@ async def preflight_timeline_v3(project_id:str,request:Request):
     return _timeline_preflight(db(request),project_id,ensure_timeline(db(request),project_id))
 @app.put("/api/v2/projects/{project_id}/timeline")
 async def write_timeline_v3(project_id:str,body:TimelineUpdateV3,request:Request):
-    ensure_timeline(db(request),project_id)
-    return save_timeline(db(request),project_id,body.document,body.expected_revision)
+    database=db(request)
+    ensure_timeline(database,project_id)
+    envelope=save_timeline(database,project_id,body.document,body.expected_revision)
+    sync_project_files(database,DATA_DIR,project_id)
+    return envelope
 
 
 @app.post("/api/v2/projects/{project_id}/timeline/assemble")
@@ -3034,10 +3103,31 @@ def _asset_board_connection_ids(database:Database,project_id:str,fusion_asset_id
         if target and str(target.get("asset_id") or "")==fusion_asset_id and source and source.get("asset_id"):source_ids.append(str(source["asset_id"]))
     return int(current["revision"]),list(dict.fromkeys(source_ids))
 
-def _fusion_input_fingerprint(doc:dict[str,Any],fusion_asset_id:str,shot_id:str,source_ids:list[str],board_revision:int)->str:
+def _fusion_input_fingerprint_payload(doc:dict[str,Any],fusion_asset_id:str,shot_id:str,source_ids:list[str])->dict[str,Any]:
     assets={str(item.get("id")):item for item in doc.get("assets",[]) if isinstance(item,dict) and item.get("id")}
     source_versions={source_id:str(assets.get(source_id,{}).get("promptVersion") or "") for source_id in sorted(source_ids)}
-    payload={"fusion_asset_id":fusion_asset_id,"shot_id":shot_id,"source_asset_ids":sorted(source_ids),"source_prompt_versions":source_versions,"story_snapshot":_story_snapshot_hash(doc,shot_id),"board_revision":board_revision}
+    return {"fusion_asset_id":fusion_asset_id,"shot_id":shot_id,"source_asset_ids":sorted(source_ids),"source_prompt_versions":source_versions,"story_snapshot":_story_snapshot_hash(doc,shot_id)}
+
+def _fusion_input_fingerprint(doc:dict[str,Any],fusion_asset_id:str,shot_id:str,source_ids:list[str],board_revision:int)->str:
+    # The board revision also advances when an output artifact is uploaded,
+    # archived, or withdrawn. Those operations do not change the inputs that
+    # the Fusion Prompt describes, so they must not make a still-valid Prompt
+    # stale and hide the replacement-upload/review path. Input changes remain
+    # covered by the source IDs, source Prompt versions, story snapshot and
+    # the explicit source comparison in _fusion_prompt_state.
+    del board_revision
+    payload=_fusion_input_fingerprint_payload(doc,fusion_asset_id,shot_id,source_ids)
+    return hashlib.sha256(json.dumps(payload,ensure_ascii=False,sort_keys=True,separators=(",",":")).encode("utf-8")).hexdigest()
+
+def _legacy_fusion_input_fingerprint(doc:dict[str,Any],fusion_asset_id:str,shot_id:str,source_ids:list[str],board_revision:int)->str:
+    """Recognise fingerprints written before output images were decoupled.
+
+    Older runs included the asset-board revision in this hash. Keep a narrow
+    read-only compatibility check keyed to that run's stored revision so an
+    unchanged Prompt can recover after an image upload/withdrawal, while any
+    semantic source or story change still invalidates it.
+    """
+    payload={**_fusion_input_fingerprint_payload(doc,fusion_asset_id,shot_id,source_ids),"board_revision":int(board_revision)}
     return hashlib.sha256(json.dumps(payload,ensure_ascii=False,sort_keys=True,separators=(",",":")).encode("utf-8")).hexdigest()
 
 def _fusion_prompt_state(database:Database,project_id:str,doc:dict[str,Any],asset:dict[str,Any])->dict[str,Any]:
@@ -3051,7 +3141,15 @@ def _fusion_prompt_state(database:Database,project_id:str,doc:dict[str,Any],asse
     current_fingerprint=_fusion_input_fingerprint(doc,str(asset.get("id")),shot_id,current_sources,board_revision)
     stale=[]
     if sorted(source_ids)!=sorted(current_sources):stale.append("融合连线已变化")
-    if str(run.get("input_fingerprint") or "")!=current_fingerprint:stale.append("输入资产、剧本/分镜或画布版本已变化")
+    stored_fingerprint=str(run.get("input_fingerprint") or "")
+    fingerprint_matches=stored_fingerprint==current_fingerprint
+    if not fingerprint_matches and run.get("board_revision") is not None:
+        try:
+            legacy_fingerprint=_legacy_fusion_input_fingerprint(doc,str(asset.get("id")),shot_id,current_sources,int(run.get("board_revision")))
+        except (TypeError,ValueError):
+            legacy_fingerprint=""
+        fingerprint_matches=stored_fingerprint==legacy_fingerprint
+    if not fingerprint_matches:stale.append("输入资产、剧本/分镜或画布版本已变化")
     return {"fusionPromptState":"stale" if stale else str(asset.get("fusionPromptState") or "prompt_draft_ready"),"fusionPromptStale":bool(stale),"fusionPromptStaleReason":"；".join(stale) if stale else None}
 
 def _validate_asset_prompt_output(result:dict[str,Any],allowed_ids:set[str],expected_ids:set[str]|None=None,shot_ids:set[str]|None=None)->list[str]:
@@ -3088,6 +3186,7 @@ def _sync_asset_board_after_document(database:Database,project_id:str,doc:dict[s
     with database.connect() as connection:
         connection.execute("UPDATE asset_boards_v7 SET revision=?,board_json=?,updated_at=? WHERE project_id=?",(revision,database.encode(board),now,project_id))
         row=connection.execute("SELECT * FROM asset_boards_v7 WHERE project_id=?",(project_id,)).fetchone()
+    sync_project_files(database, DATA_DIR, project_id)
     return _asset_board_payload(database,project_id,row)
 
 def _story_version_id(kind:str,project_id:str,n:int)->str:
@@ -3678,6 +3777,8 @@ async def clone_to_25(package_id:str,project_id:str,request:Request):
 def register_artifact(database:Database,project_id:str|None,kind:str,path:Path,profile:dict|None,model:str|None,task_id:str|None,metadata:dict)->dict:
     aid=f"ART_{secrets.token_hex(8)}"; record={"id":aid,"project_id":project_id,"artifact_type":kind,"role":metadata.get("role"),"version":1,"local_path":str(path.resolve()),"sha256":sha256_file(path),"mime_type":mimetypes.guess_type(path.name)[0],"metadata":metadata,"provider_profile_id":profile["id"] if profile else None,"provider_model":model,"task_id":task_id,"qa_owner":metadata.get("qa_owner"),"qa_decision":"Pending","status":"generated_pending_qa","created_at":utcnow()}
     with database.connect() as c:c.execute("INSERT INTO artifacts(id,project_id,artifact_type,role,version,local_path,sha256,mime_type,metadata_json,provider_profile_id,provider_model,task_id,qa_owner,qa_decision,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(aid,project_id,kind,record["role"],1,record["local_path"],record["sha256"],record["mime_type"],database.encode(metadata),record["provider_profile_id"],model,task_id,record["qa_owner"],"Pending","generated_pending_qa",record["created_at"]))
+    if project_id:
+        sync_project_files(database,DATA_DIR,project_id)
     return record
 def artifact_url(project_id:str|None,path:Path)->str:
     if project_id:return f"/api/project-files/{project_id}/{path.resolve().relative_to((DATA_DIR/'projects'/project_id).resolve()).as_posix()}"
@@ -3726,6 +3827,9 @@ def _set_generation_snapshot(database:Database,snapshot_id:str,status:str,artifa
 async def generate_asset_image_v3(project_id:str,logical_asset_id:str,body:AssetImageGenerate,request:Request):
     if not body.confirmed:raise HTTPException(409,"图片生成会产生费用，请先确认。")
     database=db(request); doc,revision=await read_project_doc(request,project_id); asset=_project_asset(doc,logical_asset_id)
+    prerequisite_gate=_project_asset_prerequisite_gate(database,project_id,doc,logical_asset_id)
+    if not prerequisite_gate.get("allowed"):
+        return structured_error(409,"prerequisite_blocked","production","前置资产尚未完成审核，当前资产不能进入图片生成。",{"logical_asset_id":logical_asset_id,"prerequisite_gate":prerequisite_gate,"next_action":prerequisite_gate.get("reason")},retryable=False)
     if _asset_class(asset) not in ASSET_BOARD_VISUAL_CLASSES:raise HTTPException(409,"当前资产不是视觉图像资产，不能走图片生成流程。")
     if _asset_class(asset)=="fusion" and asset.get("fusionPromptSource")!="fusion-connection-agent":raise HTTPException(409,"融合资产必须先完成实际连线并生成正式融合 Prompt。")
     if asset.get("promptQaDecision")!="Approved":raise HTTPException(409,"请先完成 Prompt QA，Prompt 通过后才能进入图片生成。")
@@ -3770,10 +3874,22 @@ async def generate_asset_image_v3(project_id:str,logical_asset_id:str,body:Asset
 @app.post("/api/audio/speech")
 async def generate_speech(body:SpeechGenerate,request:Request):
     if not body.confirmed:raise HTTPException(409,"语音生成会产生费用，请先确认。")
-    if body.model not in ALLOWED_TTS_MODELS or body.voice not in ALLOWED_TTS_VOICES:raise HTTPException(422,"TTS 模型或声音无效。")
-    database=db(request); profile,_=resolve_profile(database,"tts",body.provider_profile_id); upstream={"model":body.model,"input":body.text,"voice":body.voice,"response_format":body.format,"speed":body.speed}
-    if body.instructions:upstream["instructions"]=body.instructions
-    audio=await openai_speech(profile,get_profile_secret(profile),upstream); safe_id=re.sub(r"[^A-Za-z0-9_-]","",body.dialogue_id)[:40] or "DLG"; target=safe_project_path(DATA_DIR,body.project_id,"artifacts/audio") if body.project_id else GENERATED_AUDIO_DIR; target.mkdir(parents=True,exist_ok=True); dest=target/f"{safe_id}-{secrets.token_hex(8)}.{body.format}"; dest.write_bytes(audio); artifact=register_artifact(database,body.project_id,"audio",dest,profile,body.model,None,{"voice":body.voice,"format":body.format,"ai_generated_disclosure":True}); return {"url":artifact_url(body.project_id,dest),"filename":dest.name,"model":body.model,"voice":body.voice,"format":body.format,"duration":audio_duration(dest),"artifact_id":artifact["id"],"disclosure":"此声音由 AI 合成。"}
+    database=db(request); profile,bound_model=resolve_profile(database,"tts",body.provider_profile_id)
+    if profile["provider_type"] != "minimax":raise HTTPException(409,"当前工作台的 TTS 已固定使用 MiniMax，请先绑定 MiniMax TTS。")
+    if not profile["enabled"]:raise HTTPException(409,"MiniMax TTS Provider 已停用。")
+    config=profile.get("model_config") if isinstance(profile.get("model_config"),dict) else {}
+    requested_model=None if body.model in ALLOWED_TTS_MODELS else body.model
+    model=str(requested_model or bound_model or config.get("tts_model") or MINIMAX_DEFAULT_TTS_MODEL)
+    requested_voice=None if body.voice in ALLOWED_TTS_VOICES else body.voice
+    voice_id=str(requested_voice or config.get("voice_id") or MINIMAX_DEFAULT_VOICE_ID)
+    if model not in MINIMAX_TTS_MODELS:raise HTTPException(422,"MiniMax TTS 模型无效，请选择最近探测到的 speech 模型。")
+    if body.format not in MINIMAX_TTS_FORMATS:raise HTTPException(422,"MiniMax TTS 只支持 mp3、wav、flac 输出。")
+    if not MINIMAX_TTS_SPEED_MIN <= body.speed <= MINIMAX_TTS_SPEED_MAX:raise HTTPException(422,"MiniMax TTS 语速必须在 0.5 到 2.0 之间。")
+    upstream=minimax_tts_payload(profile,{"model":model,"text":body.text,"voice":voice_id,"format":body.format,"speed":body.speed,"volume":body.volume,"pitch":body.pitch,"emotion":body.emotion,"language_boost":body.language_boost,"pronunciation_dict":body.pronunciation_dict,"sample_rate":body.sample_rate,"bitrate":body.bitrate,"aigc_watermark":body.aigc_watermark})
+    audio,provider_metadata=await minimax_speech(profile,get_profile_secret(profile),upstream)
+    safe_id=re.sub(r"[^A-Za-z0-9_-]","",body.dialogue_id)[:40] or "DLG"; target=safe_project_path(DATA_DIR,body.project_id,"artifacts/audio") if body.project_id else GENERATED_AUDIO_DIR; target.mkdir(parents=True,exist_ok=True); dest=target/f"{safe_id}-{secrets.token_hex(8)}.{body.format}"; dest.write_bytes(audio)
+    artifact=register_artifact(database,body.project_id,"audio",dest,profile,model,None,{"voice":voice_id,"format":body.format,"source_type":"minimax-tts","provider_type":"minimax","trace_id":provider_metadata.get("trace_id"),"extra_info":provider_metadata.get("extra_info",{}),"instructions":body.instructions,"ai_generated_disclosure":True})
+    return {"url":artifact_url(body.project_id,dest),"filename":dest.name,"model":model,"voice":voice_id,"format":body.format,"duration":audio_duration(dest),"artifact_id":artifact["id"],"provider":profile["display_name"],"provider_type":"minimax","provider_profile_id":profile["id"],"source_type":"minimax-tts","trace_id":provider_metadata.get("trace_id"),"disclosure":"此声音由 MiniMax AI 合成。"}
 
 
 def _default_audio_studio() -> dict[str, Any]:
@@ -4148,13 +4264,17 @@ async def generate_project_speech_v3(project_id: str, body: SpeechGenerate, requ
     metadata = _asset_metadata(asset)
     metadata.update({
         "audio_operation": body.operation or "tts",
-        "voice": body.voice,
+        "voice": result.get("voice") or body.voice,
         "voice_id": body.voice_id,
         "audition_id": body.audition_id,
         "emotion": body.emotion,
         "target_duration": body.target_duration,
         "shot_ids": list(body.shot_ids),
         "consent_status": voice.get("consent_status") or "not-required",
+        "provider": result.get("provider"),
+        "provider_type": result.get("provider_type"),
+        "source_type": result.get("source_type") or "minimax-tts",
+        "model": result.get("model") or body.model,
         "ai_generated_disclosure": True,
     })
     asset["assetMetadata"] = metadata
@@ -4163,8 +4283,8 @@ async def generate_project_speech_v3(project_id: str, body: SpeechGenerate, requ
     asset["status"] = "generated-pending-qa"
     with database.connect() as connection:
         connection.execute(
-            "UPDATE artifacts SET logical_asset_id=?,asset_class='audio',asset_role=?,source_type='openai-tts',collection='intake',intake_status='generated_pending_qa',qa_owner='voice-controller',metadata_json=?,updated_at=? WHERE id=? AND project_id=?",
-            (body.logical_asset_id, asset.get("assetRole") or "dialogue", database.encode(metadata), utcnow(), artifact_id, project_id),
+            "UPDATE artifacts SET logical_asset_id=?,asset_class='audio',asset_role=?,source_type=?,collection='intake',intake_status='generated_pending_qa',qa_owner='voice-controller',metadata_json=?,updated_at=? WHERE id=? AND project_id=?",
+            (body.logical_asset_id, asset.get("assetRole") or "dialogue", result.get("source_type") or "minimax-tts", database.encode(metadata), utcnow(), artifact_id, project_id),
         )
     existing_takes = [item for item in audio.get("takes", []) if isinstance(item, dict) and str(item.get("dialogue_id")) == str(body.dialogue_id) and str(item.get("voice_id")) == str(body.voice_id)]
     version = max([int(item.get("version") or 0) for item in existing_takes] or [0]) + 1
@@ -4172,7 +4292,7 @@ async def generate_project_speech_v3(project_id: str, body: SpeechGenerate, requ
     take = {
         "id": take_id, "dialogue_id": body.dialogue_id, "voice_id": body.voice_id, "version": version,
         "artifact_id": artifact_id, "logical_asset_id": body.logical_asset_id, "qa_run_id": None,
-        "provider_profile_id": body.provider_profile_id, "provider": result.get("provider"), "model": body.model,
+        "provider_profile_id": result.get("provider_profile_id") or body.provider_profile_id, "provider": result.get("provider"), "model": result.get("model") or body.model,
         "operation": body.operation or "tts", "status": "generated-pending-qa", "notes": body.instructions,
     }
     audio["takes"] = [item for item in audio.get("takes", []) if not (isinstance(item, dict) and str(item.get("id")) == str(take_id))] + [take]
@@ -4181,7 +4301,7 @@ async def generate_project_speech_v3(project_id: str, body: SpeechGenerate, requ
             audition.update({"artifact_id": artifact_id, "status": "generated-pending-qa"})
     for dialogue in audio.get("dialogues", []):
         if str(dialogue.get("id")) == str(body.dialogue_id):
-            dialogue.update({"voice_id": body.voice_id, "execution_status": "generated-pending-qa", "artifact_id": artifact_id, "qa_run_id": None, "provider_profile_id": body.provider_profile_id, "provider": result.get("provider"), "model": body.model})
+            dialogue.update({"voice_id": body.voice_id, "execution_status": "generated-pending-qa", "artifact_id": artifact_id, "qa_run_id": None, "provider_profile_id": result.get("provider_profile_id") or body.provider_profile_id, "provider": result.get("provider"), "model": result.get("model") or body.model})
     doc["audio"] = audio
     next_revision = save_project_document(request, doc, revision)
     result.update({"project_id": project_id, "revision": next_revision, "logical_asset_id": body.logical_asset_id, "take_id": take_id, "execution_status": "generated-pending-qa", "qa_required": True})
@@ -4231,6 +4351,11 @@ def save_project_document(request:Request,doc:dict[str,Any],expected_revision:in
             raise HTTPException(409,{"message":"项目已有更新。","current_revision":current["revision"]})
         rev=current["revision"]+1
         c.execute("UPDATE projects SET name=?,document_json=?,revision=?,updated_at=? WHERE id=?",(doc.get("name",""),database.encode(doc),rev,now,doc["id"]))
+        # Keep the external, human-readable project folder in the same
+        # mutation boundary as the SQLite document.  When this helper is
+        # called inside another transaction, the supplied connection is the
+        # only connection allowed to read the just-written revision.
+        sync_project_files(database,DATA_DIR,doc["id"],document=doc,revision=rev,connection=c)
         if audit_event:
             event=dict(audit_event)
             event.setdefault("project_id",doc["id"])
@@ -4308,6 +4433,56 @@ def _asset_relations(database:Database,project_id:str,logical_asset_id:str)->tup
     return ([ _dependency_payload(database,row) for row in dependencies ], [ _reference_payload(database,row) for row in references ], [ _comparison_payload(database,row) for row in comparisons ])
 
 
+def _fusion_connection_reference_roles(doc:dict[str,Any],asset:dict[str,Any])->list[dict[str,Any]]:
+    """Build the reference-role snapshot for an automatically fused asset.
+
+    Fusion Prompt generation already records the confirmed input assets and
+    their connection roles in the Prompt Pack.  Those roles are not the same
+    as manually authored ``asset_reference_roles_v4`` rows, so requiring the
+    latter at registration made every normal connection-driven fusion fail
+    with ``reference_roles_missing``.  Convert the connection snapshot to the
+    canonical reference-role vocabulary used by the registration gate.
+    """
+    if str(asset.get("fusionPromptSource") or "") != "fusion-connection-agent":
+        return []
+    metadata=_asset_metadata(asset)
+    source_ids=_normalise_id_list(asset.get("fusionSourceAssetIds") or metadata.get("fusion_source_asset_ids") or metadata.get("fusionSourceAssetIds"))
+    run=asset.get("fusionPromptRun") if isinstance(asset.get("fusionPromptRun"),dict) else {}
+    run_source_ids=_normalise_id_list(run.get("source_asset_ids") or run.get("sourceAssetIds"))
+    if not source_ids or sorted(source_ids)!=sorted(run_source_ids):
+        return []
+    assets={str(item.get("id")):item for item in doc.get("assets",[]) if isinstance(item,dict) and item.get("id")}
+    prompt_pack=asset.get("promptPack") if isinstance(asset.get("promptPack"),dict) else metadata.get("prompt_pack")
+    prompt_pack=prompt_pack if isinstance(prompt_pack,dict) else {}
+    raw_roles=prompt_pack.get("referenceRoles") or prompt_pack.get("reference_roles") or (prompt_pack.get("referenceStrategy") or {}).get("referenceRoles")
+    raw_roles=raw_roles if isinstance(raw_roles,list) else []
+    raw_by_id={
+        str(item.get("referenceId") or item.get("reference_id") or item.get("assetId") or item.get("asset_id") or ""):item
+        for item in raw_roles
+        if isinstance(item,dict) and str(item.get("referenceId") or item.get("reference_id") or item.get("assetId") or item.get("asset_id") or "").strip()
+    }
+    default_roles={"character":"identity","scene":"scene_structure","prop":"product_structure","product":"product_structure","style":"style"}
+    normalized=[]
+    for source_id in source_ids:
+        source=assets.get(source_id) or {}
+        source_class=_asset_class(source)
+        raw=raw_by_id.get(source_id) or {}
+        raw_role=str(raw.get("role") or raw.get("referenceRole") or "")
+        # Generated fusion roles use connected_character / connected_scene /
+        # connected_prop labels. Map those labels to the audited vocabulary;
+        # preserve an already-canonical role from a custom Prompt Pack.
+        role=raw_role if raw_role in asset_audit.REFERENCE_ROLES else default_roles.get(source_class,"composition")
+        normalized.append({
+            "reference_id":source_id,
+            "reference_kind":"logical_asset",
+            "artifact_id":None,
+            "role":role,
+            "source":"fusion-connection-agent",
+            "notes":str(raw.get("controls") or raw.get("mustNotControl") or "已确认融合输入资产角色"),
+        })
+    return normalized
+
+
 def _fusion_gate(doc:dict[str,Any],asset:dict[str,Any],database:Database,project_id:str,references:list[dict[str,Any]]|None=None)->dict[str,Any]:
     metadata=_asset_metadata(asset)
     source_ids=list(metadata.get("fusion_source_asset_ids") or metadata.get("fusionSourceAssetIds") or asset.get("fusionSourceAssetIds") or [])
@@ -4322,18 +4497,206 @@ def _fusion_gate(doc:dict[str,Any],asset:dict[str,Any],database:Database,project
             missing_sources.append({"asset_id":source_id,"readiness":readiness})
     if references is None:
         _,references,_=_asset_relations(database,project_id,str(asset.get("id")))
+    # A connection-driven Fusion Prompt has an authoritative, system-created
+    # role snapshot in its Prompt Pack. It is the valid reference declaration
+    # for this workflow even when no manually-authored reference rows exist.
+    if not references:
+        references=_fusion_connection_reference_roles(doc,asset)
     role_issues=[]
     for reference in references:
         if reference["role"] not in asset_audit.REFERENCE_ROLES:
             role_issues.append({"reference_id":reference["reference_id"],"reason":"invalid_role"})
     if not references:
         role_issues.append({"reason":"reference_roles_missing"})
+    reference_ids={str(reference.get("reference_id") or "") for reference in references}
+    missing_reference_ids=[source_id for source_id in source_ids if source_id not in reference_ids]
+    if missing_reference_ids:
+        role_issues.append({"reason":"reference_roles_incomplete","missing_asset_ids":missing_reference_ids})
     allowed=bool(source_ids) and not missing_sources and not role_issues
     return {
         "logical_asset_id":asset.get("id"), "asset_class":_asset_class(asset), "allowed":allowed,
         "source_asset_ids":source_ids, "missing_sources":missing_sources,
         "reference_role_issues":role_issues,
         "message":"融合基础资产和引用角色均已就绪" if allowed else "融合必须在角色/场景/道具基础资产完成登记后进行",
+    }
+
+
+def _asset_prerequisite_dependencies(
+    doc:dict[str,Any],
+    asset:dict[str,Any],
+    stored_dependencies:list[dict[str,Any]]|None=None,
+    *,
+    known_asset_ids:set[str]|None=None,
+)->list[dict[str,Any]]:
+    """Collect the production prerequisites for one logical asset.
+
+    The regulator has historically stored dependency evidence in three
+    places: explicit relation rows, the project dependency table, and the
+    Prompt Pack's explicit prerequisite fields / generation notes.  Ordinary
+    reference roles are informational: they describe what an asset must stay
+    consistent with, but do not automatically mean that the referenced asset
+    must be produced first.  This distinction prevents legitimate forward
+    references (for example P12 describing a later P08 collision) from
+    creating a circular production gate.
+    """
+    asset_id=str(asset.get("id") or "")
+    known_ids=known_asset_ids if known_asset_ids is not None else {str(item.get("id")) for item in doc.get("assets",[]) if isinstance(item,dict) and item.get("id")}
+    if not asset_id or asset_id not in known_ids:
+        return []
+    by_id:dict[str,dict[str,Any]]={}
+
+    def add(dependency_id:Any,reason:str,source:str,relation:str="prerequisite_asset")->None:
+        dependency_id=str(dependency_id or "").strip()
+        if not dependency_id or dependency_id==asset_id or dependency_id not in known_ids:
+            return
+        entry=by_id.get(dependency_id)
+        if entry:
+            reasons=[str(value) for value in entry.get("reasons",[]) if str(value).strip()]
+            if reason.strip() and reason.strip() not in reasons:reasons.append(reason.strip())
+            entry["reasons"]=reasons
+            sources=[str(value) for value in entry.get("sources",[]) if str(value).strip()]
+            if source not in sources:sources.append(source)
+            entry["sources"]=sources
+            return
+        by_id[dependency_id]={
+            "asset_id":dependency_id,
+            "relation":relation or "prerequisite_asset",
+            "required":True,
+            "reasons":[reason.strip()] if reason.strip() else [],
+            "sources":[source],
+        }
+
+    for dependency in stored_dependencies or []:
+        if not isinstance(dependency,dict):continue
+        relation=str(dependency.get("relation") or "")
+        if relation=="shot_dependency":continue
+        add(dependency.get("dependency_asset_id") or dependency.get("asset_id"),str(dependency.get("role") or ""),"asset_dependency",relation or "prerequisite_asset")
+
+    regulator=doc.get("assetRegulator") if isinstance(doc.get("assetRegulator"),dict) else {}
+    for row in regulator.get("dependencyTable",[]) if isinstance(regulator.get("dependencyTable"),list) else []:
+        if not isinstance(row,dict):continue
+        targets=row.get("to") if isinstance(row.get("to"),list) else [row.get("to")]
+        if asset_id not in {str(value).strip() for value in targets if str(value).strip()}:continue
+        sources=row.get("from") if isinstance(row.get("from"),list) else [row.get("from")]
+        for source_id in sources:
+            add(source_id,str(row.get("reason") or ""),"asset_regulator")
+
+    metadata=_asset_metadata(asset)
+    explicit_ids=(asset.get("prerequisiteAssetIds") or asset.get("prerequisite_asset_ids") or metadata.get("prerequisite_asset_ids") or metadata.get("prerequisiteAssetIds") or [])
+    for dependency_id in explicit_ids if isinstance(explicit_ids,list) else []:
+        add(dependency_id,"用户/资产元数据声明的前置资产","asset_metadata")
+
+    prompt_pack=asset.get("promptPack") if isinstance(asset.get("promptPack"),dict) else metadata.get("prompt_pack")
+    prompt_pack=prompt_pack if isinstance(prompt_pack,dict) else {}
+    reference_strategy=prompt_pack.get("referenceStrategy") if isinstance(prompt_pack.get("referenceStrategy"),dict) else {}
+    explicit_prompt_ids=(prompt_pack.get("prerequisiteAssetIds") or prompt_pack.get("prerequisite_asset_ids") or prompt_pack.get("requiredAssetIds") or prompt_pack.get("required_asset_ids") or [])
+    for dependency_id in explicit_prompt_ids if isinstance(explicit_prompt_ids,list) else []:
+        add(dependency_id,"Prompt Pack 明确声明的前置资产","prompt_prerequisite")
+    prerequisite_roles=reference_strategy.get("prerequisiteRoles") or reference_strategy.get("prerequisite_roles") or prompt_pack.get("prerequisiteRoles") or prompt_pack.get("prerequisite_roles") or []
+    for reference in prerequisite_roles if isinstance(prerequisite_roles,list) else []:
+        if not isinstance(reference,dict):continue
+        dependency_id=reference.get("assetId") or reference.get("asset_id") or reference.get("referenceId") or reference.get("reference_id")
+        role=str(reference.get("role") or reference.get("controls") or "")
+        add(dependency_id,role,"prompt_prerequisite_role")
+
+    # Generation notes are an explicit human-readable handoff.  Only parse
+    # known logical asset IDs when the note declares prerequisite/base assets;
+    # never scan the entire Prompt body, where shot IDs and examples are not
+    # dependency declarations.
+    generation_notes=str(prompt_pack.get("generationNotes") or prompt_pack.get("generation_notes") or "")
+    if re.search(r"依赖|基础资产|先锁定|先完成",generation_notes):
+        for known_id in sorted(known_ids,key=lambda value:(-len(value),value)):
+            if known_id==asset_id:continue
+            if re.search(rf"(?<![A-Za-z0-9_]){re.escape(known_id)}(?![A-Za-z0-9_])",generation_notes,flags=re.IGNORECASE):
+                add(known_id,generation_notes,"prompt_generation_note")
+
+    result=[]
+    for dependency_id,entry in by_id.items():
+        result.append({
+            **entry,
+            "asset_id":dependency_id,
+            "reasons":list(dict.fromkeys(entry.get("reasons",[]))),
+            "sources":list(dict.fromkeys(entry.get("sources",[]))),
+        })
+    return result
+
+
+def _asset_prerequisite_gate(prerequisites:list[dict[str,Any]],projected_assets:dict[str,dict[str,Any]])->dict[str,Any]:
+    """Evaluate prerequisite production readiness without mutating assets."""
+    items=[]
+    for prerequisite in prerequisites:
+        asset_id=str(prerequisite.get("asset_id") or "")
+        dependency=projected_assets.get(asset_id)
+        readiness=dependency.get("readiness") if isinstance(dependency,dict) and isinstance(dependency.get("readiness"),dict) else {}
+        production_ready=bool(dependency and (dependency.get("production_ready") is True or readiness.get("production_ready") is True))
+        items.append({
+            **prerequisite,
+            "name":(dependency or {}).get("name") or asset_id,
+            "asset_class":(dependency or {}).get("assetClass") or (dependency or {}).get("asset_class"),
+            "production_ready":production_ready,
+            "status":readiness.get("status") or (dependency or {}).get("status") or "missing",
+            "next_action":readiness.get("next_action") or (dependency or {}).get("next_action") or ("创建资产" if not dependency else "完成前置资产审核"),
+        })
+    blocked=[item for item in items if not item["production_ready"]]
+    reason=""
+    if blocked:
+        reason="前置资产未完成："+"；".join(f"{item['name']}（{item['next_action']}）" for item in blocked)
+    return {
+        "allowed":not blocked,
+        "required_asset_ids":[item["asset_id"] for item in items],
+        "blocked_asset_ids":[item["asset_id"] for item in blocked],
+        "items":items,
+        "reason":reason or "前置资产已全部完成审核，可进入当前资产生产",
+    }
+
+
+def _apply_asset_prerequisite_projection(item:dict[str,Any],prerequisites:list[dict[str,Any]],gate:dict[str,Any])->None:
+    """Attach the shared prerequisite gate and make it part of readiness.
+
+    Prompt preparation remains available when a prerequisite is missing, but
+    no asset can be reported as production-ready while one of its required
+    inputs is still pending.  Keeping this mutation in the library projection
+    makes the board, audit queue, right panel, and server-side mutation gates
+    consume the same state.
+    """
+    item["prerequisiteDependencies"]=prerequisites
+    item["prerequisiteGate"]=gate
+    if gate.get("allowed"):
+        return
+    readiness=item.setdefault("readiness",{})
+    missing=list(readiness.get("production_missing") or [])
+    if "prerequisite_assets" not in missing:
+        missing.append("prerequisite_assets")
+    readiness["production_missing"]=missing
+    readiness["production_ready"]=False
+    readiness["next_action"]=gate.get("reason") or "完成前置资产审核"
+    item["production_ready"]=False
+    item["next_action"]=readiness["next_action"]
+    workflow=item.get("workflow")
+    if isinstance(workflow,dict):
+        blockers=list(workflow.get("blockers") or [])
+        if "prerequisite_assets" not in blockers:
+            blockers.append("prerequisite_assets")
+        allowed_actions=[action for action in workflow.get("allowed_actions",[]) if action in {"view_artifact","view_qa","resolve"}]
+        if "view_prerequisites" not in allowed_actions:
+            allowed_actions.append("view_prerequisites")
+        workflow["blockers"]=blockers
+        workflow["allowed_actions"]=allowed_actions
+        workflow["next_action"]={"code":"prerequisite_assets","label":readiness["next_action"],"enabled":False}
+
+
+def _project_asset_prerequisite_gate(database:Database,project_id:str,doc:dict[str,Any],logical_asset_id:str)->dict[str,Any]:
+    """Return the current production prerequisite gate for one logical asset."""
+    library=_library_payload(database,project_id,doc)
+    target=next((item for item in library["assets"] if str(item.get("id"))==str(logical_asset_id)),None)
+    if not target:
+        raise HTTPException(404,f"逻辑资产 {logical_asset_id} 不存在于当前项目。")
+    return target.get("prerequisiteGate") or {
+        "allowed":True,
+        "required_asset_ids":[],
+        "blocked_asset_ids":[],
+        "items":[],
+        "reason":"当前资产没有未完成的前置资产",
     }
 
 
@@ -4372,11 +4735,15 @@ def _library_payload(database:Database,project_id:str,doc:dict[str,Any])->dict[s
     for row in comparison_rows:
         comparisons_by_logical.setdefault(row["logical_asset_id"],[]).append(_comparison_payload(database,row))
     result=[]; ready_count=0; production_ready_count=0; blocked_count=0
+    regulator=doc.get("assetRegulator") if isinstance(doc.get("assetRegulator"),dict) else {}
+    has_prerequisite_evidence=bool(any(str(row["relation"] or "")!="shot_dependency" for row in dependency_rows)) or bool(regulator.get("dependencyTable"))
     by_class:dict[str,int]={}; by_status:dict[str,int]={}
     for asset in doc.get("assets",[]):
         if not isinstance(asset,dict) or not asset.get("id"):continue
         logical_id=str(asset["id"])
         dependencies=dependencies_by_logical.get(logical_id,[])
+        if any(str(dependency.get("relation") or "")!="shot_dependency" for dependency in dependencies):
+            has_prerequisite_evidence=True
         references=references_by_logical.get(logical_id,[])
         comparisons=comparisons_by_logical.get(logical_id,[])
         asset_class=_asset_class(asset)
@@ -4404,6 +4771,11 @@ def _library_payload(database:Database,project_id:str,doc:dict[str,Any])->dict[s
         readiness=asset_audit.asset_readiness(readiness_asset)
         prompt_value=str(asset.get("prompt") or "").strip()
         prompt_pack=asset.get("promptPack") or _asset_metadata(asset).get("prompt_pack") or {}
+        metadata_for_prerequisites=_asset_metadata(asset)
+        if any(asset.get(key) or metadata_for_prerequisites.get(key) for key in ("prerequisiteAssetIds","prerequisite_asset_ids")):
+            has_prerequisite_evidence=True
+        if isinstance(prompt_pack,dict) and (prompt_pack.get("referenceStrategy") or prompt_pack.get("referenceRoles") or prompt_pack.get("generationNotes") or prompt_pack.get("reference_roles") or prompt_pack.get("generation_notes")):
+            has_prerequisite_evidence=True
         prompt_context=_prompt_context(doc,asset,asset.get("promptRelevantShots"))
         canonical_prompt=canonicalize_prompt_output(
             asset_class,
@@ -4437,13 +4809,45 @@ def _library_payload(database:Database,project_id:str,doc:dict[str,Any])->dict[s
         item["registered_ready"]=readiness.get("registered_ready",False)
         item["production_ready"]=readiness.get("production_ready",False)
         item["next_action"]=readiness.get("next_action")
-        if readiness["ready"]:ready_count+=1
-        if readiness.get("production_ready"):production_ready_count+=1
-        if readiness["status"]=="blocked":blocked_count+=1
-        by_class[asset_class]=by_class.get(asset_class,0)+1
-        by_status[str(readiness["status"])]=by_status.get(str(readiness["status"]),0)+1
         result.append(item)
-    return {"project_id":project_id,"assets":result,"summary":{"total":len(result),"ready":ready_count,"blocked":blocked_count,"missing_required_a":sum(1 for item in result if item["readiness"]["required"] and not item["readiness"]["ready"]),"by_class":by_class,"by_status":by_status,"registered_ready":ready_count,"production_ready":production_ready_count,"artifact_count":sum(int(item.get("artifact_count") or 0) for item in result)},"storage_integrity":{"ok":None,"status":"not_checked","message":"完整文件哈希审计仅由 /integrity 显式执行，资产库刷新不会隐式扫描媒体。"}}
+    # Evaluate prerequisites only after every logical asset has a projection,
+    # then repeat so a blocked dependency also blocks assets further down the
+    # chain.  This keeps the order independent from the document's asset list.
+    projected_by_id={str(item["id"]):item for item in result}
+    known_asset_ids=set(projected_by_id)
+    raw_assets_by_id={str(asset["id"]):asset for asset in doc.get("assets",[]) if isinstance(asset,dict) and asset.get("id")}
+    if not has_prerequisite_evidence:
+        default_gate={"allowed":True,"required_asset_ids":[],"blocked_asset_ids":[],"items":[],"reason":"当前资产没有未完成的前置资产"}
+        for item in result:
+            item["prerequisiteDependencies"]=[]
+            item["prerequisiteGate"]=default_gate.copy()
+    else:
+        for _ in range(max(1,len(result))):
+            changed=False
+            for item in result:
+                logical_id=str(item["id"])
+                raw_asset=raw_assets_by_id.get(logical_id)
+                if not raw_asset:
+                    continue
+                prerequisites=_asset_prerequisite_dependencies(doc,raw_asset,item.get("dependencies") or [],known_asset_ids=known_asset_ids)
+                gate=_asset_prerequisite_gate(prerequisites,projected_by_id)
+                previous_blocked=bool((item.get("prerequisiteGate") or {}).get("allowed") is False)
+                previous_production_ready=item.get("production_ready") is True
+                _apply_asset_prerequisite_projection(item,prerequisites,gate)
+                if previous_blocked != (gate.get("allowed") is False) or previous_production_ready != (item.get("production_ready") is True):
+                    changed=True
+            if not changed:
+                break
+    ready_count=0; production_ready_count=0; blocked_count=0; by_class={}; by_status={}
+    for item in result:
+        readiness=item["readiness"]
+        if readiness.get("ready"):ready_count+=1
+        if item.get("production_ready") is True:production_ready_count+=1
+        if readiness.get("status")=="blocked":blocked_count+=1
+        asset_class=str(item.get("assetClass") or "unknown")
+        by_class[asset_class]=by_class.get(asset_class,0)+1
+        by_status[str(readiness.get("status") or "missing")]=by_status.get(str(readiness.get("status") or "missing"),0)+1
+    return {"project_id":project_id,"assets":result,"summary":{"total":len(result),"ready":ready_count,"blocked":blocked_count,"missing_required_a":sum(1 for item in result if item["readiness"]["required"] and not item["readiness"]["ready"]),"by_class":by_class,"by_status":by_status,"registered_ready":ready_count,"production_ready":production_ready_count,"artifact_count":sum(int(item.get("artifact_count") or 0) for item in result)},"storage":{"root":str((DATA_DIR / "projects" / project_id).resolve()),"layout_version":1,"project_id":project_id},"storage_integrity":{"ok":None,"status":"not_checked","message":"完整文件哈希审计仅由 /integrity 显式执行，资产库刷新不会隐式扫描媒体。"}}
 
 
 def _asset_audit_payload(database:Database,project_id:str,doc:dict[str,Any],queue:str|None=None)->dict[str,Any]:
@@ -4597,11 +5001,19 @@ def _asset_board_from_document(database:Database,project_id:str,doc:dict[str,Any
     if artifact_rows is None:
         with database.connect() as connection:
             artifact_rows=connection.execute("SELECT * FROM artifacts WHERE project_id=? ORDER BY created_at DESC",(project_id,)).fetchall()
+    with database.connect() as connection:
+        active_version_rows=connection.execute("SELECT id,artifact_id FROM asset_versions WHERE project_id=? AND is_active=1",(project_id,)).fetchall()
+    active_version_by_artifact={str(row["artifact_id"]):str(row["id"]) for row in active_version_rows}
     artifacts_by_asset:dict[str,list[Any]]={}
     for row in artifact_rows:
         if row["logical_asset_id"]:artifacts_by_asset.setdefault(str(row["logical_asset_id"]),[]).append(row)
 
     def preview_artifact(asset_id:str):
+        current_id=str(assets_by_id.get(asset_id,{}).get("artifactId") or assets_by_id.get(asset_id,{}).get("artifact_id") or "")
+        if current_id:
+            for row in artifacts_by_asset.get(asset_id,[]):
+                if str(row["id"])==current_id and str(row["status"] or "") not in {"archived","rejected","revision_required","superseded"} and str(row["mime_type"] or "").lower().startswith("image/"):
+                    return row
         for row in artifacts_by_asset.get(asset_id,[]):
             mime=str(row["mime_type"] or "").lower()
             status=str(row["status"] or "")
@@ -4653,7 +5065,7 @@ def _asset_board_from_document(database:Database,project_id:str,doc:dict[str,Any
         if prompt or production_draft_active or (class_name=="fusion" and _is_fusion_slot(asset)):
             handoff_id=f"handoff:{asset_id}"; old_handoff=previous_nodes.get(handoff_id) or {}
             preview=preview_artifact(asset_id); preview_id=str(preview["id"]) if preview else ""; preview_url=artifact_url(project_id,Path(preview["local_path"])) if preview else ""
-            handoff_config={"asset_id":asset_id,"source_type":"chatgpt-web","group_id":f"group:{group_key}","archived":False,"artifact_id":preview_id or None,"artifact_url":preview_url or None,"artifact_status":str(preview["status"]) if preview else None,"artifact_qa_decision":str(preview["qa_decision"]) if preview else None,"artifact_source_type":str(preview["source_type"] or "upload") if preview else None}
+            handoff_config={"asset_id":asset_id,"source_type":"chatgpt-web","group_id":f"group:{group_key}","archived":False,"artifact_id":preview_id or None,"artifact_url":preview_url or None,"artifact_status":str(preview["status"]) if preview else None,"artifact_qa_decision":str(preview["qa_decision"]) if preview else None,"artifact_source_type":str(preview["source_type"] or "upload") if preview else None,"artifact_active":bool(preview and str(preview["id"]) in active_version_by_artifact),"artifact_version_id":active_version_by_artifact.get(str(preview["id"])) if preview else None}
             # Preserve user-owned layout/configuration fields, but keep the
             # candidate preview metadata authoritative. An older handoff can
             # still contain artifact_id=None after a new upload; allowing the
@@ -4802,6 +5214,7 @@ async def asset_board(project_id:str,request:Request):
     with database.connect() as connection:
         connection.execute("UPDATE asset_boards_v7 SET revision=?,board_json=?,updated_at=? WHERE project_id=?",(revision,database.encode(board),now,project_id))
         row=connection.execute("SELECT * FROM asset_boards_v7 WHERE project_id=?",(project_id,)).fetchone()
+    sync_project_files(database, DATA_DIR, project_id)
     return _asset_board_payload(database,project_id,row)
 
 
@@ -4815,6 +5228,7 @@ async def update_asset_board(project_id:str,body:AssetBoardUpdateV3,request:Requ
     with database.connect() as connection:
         connection.execute("UPDATE asset_boards_v7 SET revision=?,board_json=?,updated_at=? WHERE project_id=?",(revision,database.encode(board),now,project_id))
         row=connection.execute("SELECT * FROM asset_boards_v7 WHERE project_id=?",(project_id,)).fetchone()
+    sync_project_files(database, DATA_DIR, project_id)
     return _asset_board_payload(database,project_id,row)
 
 
@@ -4834,6 +5248,7 @@ async def sync_asset_board(project_id:str,body:AssetBoardSyncV3,request:Request)
     with database.connect() as connection:
         connection.execute("UPDATE asset_boards_v7 SET revision=?,board_json=?,updated_at=? WHERE project_id=?",(revision,database.encode(board),now,project_id))
         row=connection.execute("SELECT * FROM asset_boards_v7 WHERE project_id=?",(project_id,)).fetchone()
+    sync_project_files(database, DATA_DIR, project_id)
     envelope=_asset_board_payload(database,project_id,row)
     return {**envelope,"project_revision":project_revision,"story":story_document(doc),"library":_library_payload(database,project_id,doc)}
 
@@ -4879,6 +5294,7 @@ async def assign_asset_v3(project_id:str,body:AssetAssignmentV3,request:Request)
                 if str(requirement.get("assetId") or "") != body.asset_id:continue
                 connection.execute("INSERT INTO asset_dependencies_v4(id,project_id,logical_asset_id,dependency_asset_id,shot_id,relation,role,required,created_at) VALUES(?,?,?,?,?,?,?,?,?)",(asset_audit.new_id("DEP"),project_id,body.asset_id,body.asset_id,str(item.get("id")),"shot_dependency",requirement.get("role") or "",int(bool(requirement.get("required",True))),now))
     asset_audit.record_event(database,project_id,None,body.asset_id,None,"shot_assignment_updated",{"shot_id":body.shot_id,"mode":body.mode})
+    sync_project_files(database, DATA_DIR, project_id)
     return {"project_id":project_id,"project_revision":next_project_revision,"board_revision":next_board_revision,"story":story_document(doc),"asset_board":{"project_id":project_id,"revision":next_board_revision,"board":next_board,"updated_at":now},"library":_library_payload(database,project_id,doc)}
 
 
@@ -4944,7 +5360,7 @@ async def asset_intake(
     authorization_status:str|None=Form(None),
 ):
     database=db(request)
-    await read_project_doc(request,project_id)
+    project_doc,_=await read_project_doc(request,project_id)
     if not file.filename:raise HTTPException(422,"缺少文件名。")
     folder=safe_project_path(DATA_DIR,project_id,"artifacts/intake")
     name=asset_audit.safe_filename(file.filename); dest=folder/f"{secrets.token_hex(6)}-{name}"
@@ -4966,12 +5382,15 @@ async def asset_intake(
             cls="unknown"
         mapped=bool(logical_asset_id and logical_asset_id.strip())
         if mapped:
-            doc,_=await read_project_doc(request,project_id); logical_asset=_project_asset(doc,logical_asset_id)
+            logical_asset=_project_asset(project_doc,logical_asset_id)
             logical_class=canonical_asset_class(_asset_class(logical_asset))
             if cls=="unknown" and logical_class in asset_audit.ASSET_CLASSES:
                 cls=logical_class
             if cls=="unknown":
                 return structured_error(422,"mapping_incomplete","mapping","无法确定资产类型，请先完成资产映射。",{},retryable=False)
+            prerequisite_gate=_project_asset_prerequisite_gate(database,project_id,project_doc,logical_asset_id)
+            if not prerequisite_gate.get("allowed"):
+                return structured_error(409,"prerequisite_blocked","production","前置资产尚未完成审核，当前候选不能进入生产。",{"logical_asset_id":logical_asset_id,"prerequisite_gate":prerequisite_gate,"next_action":prerequisite_gate.get("reason")},retryable=False)
         mime_type=validation["checks"].get("mime_type")
         usage=asset_audit.infer_artifact_usage(file.filename,mime_type,cls,asset_role)
         status=("reference_pending_review" if usage["usage_scope"]=="reference" else "generated_pending_qa") if (mapped and cls!="unknown") else "mapping_required"
@@ -4988,6 +5407,7 @@ async def asset_intake(
         with database.connect() as c:
             c.execute("INSERT INTO artifacts(id,project_id,artifact_type,role,version,local_path,sha256,mime_type,metadata_json,provider_profile_id,provider_model,prompt_version,task_id,qa_owner,qa_decision,status,logical_asset_id,asset_class,asset_role,collection,intake_status,source_type,generation_id,attempt_number,qa_report_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (aid,project_id,"upload",asset_role,1,str(dest.resolve()),sha,mime_type,database.encode(metadata),None,None,prompt_version,None,qa_owner,"Pending",status,logical_asset_id or None,cls if cls!="unknown" else None,asset_role,collection,status,source_type,generation_id,1,"{}",now,now))
+            sync_project_files(database,DATA_DIR,project_id,connection=c)
         inserted=True
         asset_audit.record_event(database,project_id,aid,logical_asset_id or None,None,status,{"source_type":source_type})
         audit_trail.record_event(
@@ -4996,8 +5416,14 @@ async def asset_intake(
             after={"artifact_id":aid,"logical_asset_id":logical_asset_id,"asset_class":cls,"status":status,"sha256":sha,"size":staged.size},
             metadata={"source_type":source_type,"original_name":file.filename},
         )
+        # Candidate intake is a project mutation, not just an artifact-table
+        # mutation. Refresh the persisted board projection at the same
+        # boundary so the Prompt card immediately exposes the new preview,
+        # QA action, and replacement/remove action across every workspace.
+        synced_doc, synced_project_revision = await read_project_doc(request, project_id)
+        asset_board = _sync_asset_board_after_document(database, project_id, synced_doc, synced_project_revision)
         artifact=asset_audit.artifact_payload(database,_artifact_row(database,aid,project_id))
-        return {"artifact":artifact,"technical_validation":validation,"mapping":{"logical_asset_id":logical_asset_id,"asset_class":cls,"asset_role":asset_role,"prompt_version":prompt_version,"relevant_shots":shots,"usage":usage},"next_status":status,"audit_allowed":status in {"generated_pending_qa","reference_pending_review"},"url":artifact_url(project_id,dest),"warnings":[f"检测到与 {duplicate} 相同的文件哈希" if duplicate else None,None if run_audit else "未开启自动审计"],"duplicate_hash":bool(duplicate)}
+        return {"artifact":artifact,"technical_validation":validation,"mapping":{"logical_asset_id":logical_asset_id,"asset_class":cls,"asset_role":asset_role,"prompt_version":prompt_version,"relevant_shots":shots,"usage":usage},"next_status":status,"audit_allowed":status in {"generated_pending_qa","reference_pending_review"},"url":artifact_url(project_id,dest),"asset_board":asset_board,"warnings":[f"检测到与 {duplicate} 相同的文件哈希" if duplicate else None,None if run_audit else "未开启自动审计"],"duplicate_hash":bool(duplicate)}
     except UploadTooLarge as exc:
         raise HTTPException(413,f"文件超过大小限制（{MAX_UPLOAD} 字节）。") from exc
     except Exception:
@@ -5174,6 +5600,104 @@ async def archive_artifact_v3(project_id:str,artifact_id:str,request:Request):
     library=_library_payload(database,project_id,doc)
     return {"ok":True,"project_id":project_id,"artifact_id":artifact_id,"status":"archived","file_preserved":True,"project_revision":next_project_revision,"artifact":asset_audit.artifact_payload(database,updated_artifact),"library":library,"asset_board":board}
 
+
+@app.delete("/api/v2/projects/{project_id}/assets/{logical_asset_id}/active-version")
+async def remove_active_asset_version_v3(project_id: str, logical_asset_id: str, request: Request, expected_revision: int | None = None):
+    """Withdraw the current registered media before a replacement upload.
+
+    This is the registered-asset equivalent of removing a pending thumbnail.
+    It archives the exact artifact/version and preserves the physical file and
+    all QA history.  The logical asset, Prompt and storyboard relationships
+    remain available, but the asset is intentionally returned to the upload /
+    QA / registration path so a new image cannot silently replace the old one.
+    """
+    database = db(request)
+    doc, project_revision = await read_project_doc(request, project_id)
+    asset = _project_asset(doc, logical_asset_id)
+    if expected_revision is not None and project_revision != expected_revision:
+        raise HTTPException(409, {"message": "项目已有更新，请刷新后重试。", "current_revision": project_revision})
+    with database.connect() as connection:
+        active_version = connection.execute(
+            "SELECT * FROM asset_versions WHERE project_id=? AND logical_asset_id=? AND is_active=1 ORDER BY version DESC LIMIT 1",
+            (project_id, logical_asset_id),
+        ).fetchone()
+    if not active_version:
+        return {
+            "ok": True,
+            "project_id": project_id,
+            "logical_asset_id": logical_asset_id,
+            "active_removed": False,
+            "already_removed": True,
+            "file_preserved": True,
+            "project_revision": project_revision,
+            "library": _library_payload(database, project_id, doc),
+            "asset_board": _ensure_asset_board(database, project_id),
+            "story": story_document(doc),
+        }
+
+    artifact_id = str(active_version["artifact_id"])
+    artifact = _artifact_row(database, artifact_id, project_id)
+    old_status = str(artifact["status"] or "")
+    if old_status not in {"ready", "superseded", "archived"}:
+        raise HTTPException(409, {"message": "当前登记版本状态不允许撤下，请先完成当前审核流程。", "artifact_id": artifact_id, "status": old_status})
+    now = utcnow()
+    if old_status != "archived":
+        asset_audit.transition_artifact(database, artifact_id, "archived", {"reason": "user_removed_current_asset", "file_preserved": True})
+    registration = database.decode(active_version["registration_json"], {})
+    if not isinstance(registration, dict):
+        registration = {}
+    registration.update({"retired_at": now, "retired_reason": "user_removed_current_asset", "file_preserved": True})
+    with database.connect() as connection:
+        connection.execute(
+            "UPDATE asset_versions SET is_active=0,status='archived',registration_json=? WHERE id=?",
+            (database.encode(registration), active_version["id"]),
+        )
+        connection.execute(
+            "UPDATE asset_reference_roles_v4 SET effective_version=NULL,updated_at=? WHERE project_id=? AND logical_asset_id=? AND effective_version=?",
+            (now, project_id, logical_asset_id, active_version["id"]),
+        )
+
+    previous = {"artifact_id": asset.get("artifactId"), "active_version_id": asset.get("activeVersionId"), "status": asset.get("status"), "qa_decision": asset.get("qaDecision"), "regulator_registered": asset.get("regulatorRegistered")}
+    for key in ("artifactId", "artifact_id", "filePath", "file_path", "sha256", "activeVersionId", "active_version_id", "approvedVersion"):
+        asset.pop(key, None)
+    if str(asset.get("lastGeneratedArtifactId") or "") == artifact_id:
+        asset.pop("lastGeneratedArtifactId", None)
+    asset["qaDecision"] = "Pending"
+    asset["regulatorRegistered"] = False
+    asset["status"] = "generated-pending-qa" if str(asset.get("prompt") or "").strip() else "missing"
+    asset["generationStatus"] = "planned"
+    asset["generationChoice"] = "user-confirmation-required"
+    asset.pop("manualProductionApproval", None)
+    asset.pop("manual_production_approval", None)
+    asset["readiness"] = "missing"
+    asset["updatedAt"] = now
+    next_project_revision = save_project_document(request, doc, project_revision, audit_event={
+        "action": "active_asset_withdrawn", "target_type": "asset_version", "target_id": str(active_version["id"]),
+        "reason": "user_removed_current_asset", "before": previous,
+        "after": {"artifact_id": None, "active_version_id": None, "regulator_registered": False, "replacement_required": True},
+        "metadata": {"logical_asset_id": logical_asset_id, "withdrawn_artifact_id": artifact_id, "file_preserved": True},
+    })
+    audit_trail.record_event(
+        database, project_id=project_id, action="active_asset_withdrawn", target_type="asset_version", target_id=str(active_version["id"]),
+        reason="user_removed_current_asset", before=previous,
+        after={"artifact_id": None, "active_version_id": None, "regulator_registered": False},
+        metadata={"logical_asset_id": logical_asset_id, "withdrawn_artifact_id": artifact_id, "file_preserved": True},
+    )
+    refreshed_doc, refreshed_revision = await read_project_doc(request, project_id)
+    board = _sync_asset_board_after_document(database, project_id, refreshed_doc, refreshed_revision)
+    library = _library_payload(database, project_id, refreshed_doc)
+    with database.connect() as connection:
+        archived_version = connection.execute("SELECT * FROM asset_versions WHERE id=?", (active_version["id"],)).fetchone()
+    return {
+        "ok": True, "project_id": project_id, "logical_asset_id": logical_asset_id,
+        "active_removed": True, "artifact_id": artifact_id, "asset_version_id": active_version["id"],
+        "file_preserved": True, "replacement_required": True, "project_revision": refreshed_revision,
+        "artifact": asset_audit.artifact_payload(database, _artifact_row(database, artifact_id, project_id)),
+        "asset_version": asset_audit.asset_version_payload(database, archived_version) if archived_version else None,
+        "story": story_document(refreshed_doc), "library": library, "asset_board": board,
+        "asset_audit": _asset_audit_payload(database, project_id, refreshed_doc),
+    }
+
 @app.get("/api/assets/intake")
 async def list_intake(request:Request,project_id:str,collection:str|None=None,status:str|None=None,logical_asset_id:str|None=None,asset_class:str|None=None):
     database=db(request)
@@ -5198,6 +5722,9 @@ async def get_artifact(artifact_id:str,request:Request):
 @app.post("/api/assets/artifacts/{artifact_id}/map")
 async def map_artifact(artifact_id:str,body:ArtifactMapRequest,request:Request):
     database=db(request); row=_artifact_row(database,artifact_id); doc,_=await read_project_doc(request,row["project_id"]); _project_asset(doc,body.logical_asset_id)
+    prerequisite_gate=_project_asset_prerequisite_gate(database,row["project_id"],doc,body.logical_asset_id)
+    if not prerequisite_gate.get("allowed"):
+        return structured_error(409,"prerequisite_blocked","production","前置资产尚未完成审核，当前候选不能映射到该资产。",{"logical_asset_id":body.logical_asset_id,"prerequisite_gate":prerequisite_gate,"next_action":prerequisite_gate.get("reason")},retryable=False)
     cls=canonical_asset_class(body.asset_class)
     if cls not in asset_audit.ASSET_CLASSES:raise HTTPException(422,"资产类型无效。")
     old_metadata=database.decode(row["metadata_json"],{})
@@ -5216,6 +5743,11 @@ async def create_qa_run(artifact_id:str,body:QARunCreate,request:Request):
     if row["status"] not in {"generated_pending_qa","reference_pending_review","audit_blocked","qa_in_progress"}:raise HTTPException(409,f"当前状态 {row['status']} 不能发起 QA。")
     meta=database.decode(row["metadata_json"],{})
     expected_qa=asset_audit.qa_type_for_artifact(row["asset_class"],row["mime_type"],meta)
+    if body.qa_type != "reference" and row["logical_asset_id"]:
+        doc,_=await read_project_doc(request,project_id)
+        prerequisite_gate=_project_asset_prerequisite_gate(database,project_id,doc,row["logical_asset_id"])
+        if not prerequisite_gate.get("allowed"):
+            return structured_error(409,"prerequisite_blocked","qa","前置资产尚未完成审核，当前候选不能进入媒体 QA。",{"logical_asset_id":row["logical_asset_id"],"prerequisite_gate":prerequisite_gate,"next_action":prerequisite_gate.get("reason")},retryable=False)
     if body.qa_type == "prompt" and expected_qa in {"video", "audio", "reference"}:
         return structured_error(422, "media_qa_required", "qa", f"该候选必须先完成 {expected_qa} 媒体 QA；Prompt QA 不能替代媒体审核。", {"expected": expected_qa, "actual": body.qa_type}, retryable=False)
     if body.qa_type != expected_qa and body.qa_type != "prompt":
@@ -5315,6 +5847,11 @@ async def submit_qa_decision(qa_run_id:str,body:QADecisionSubmit,request:Request
             return structured_error(409,"qa_owner_mismatch","qa",f"QA Owner 必须是 {expected_owner}，不能由其他 Skill 代替。",{"expected":expected_owner,"actual":run["qa_owner"]},retryable=False)
     if body.decision not in asset_audit.QA_DECISIONS:
         return structured_error(422,"invalid_decision","qa","QA 决策无效。",{"allowed":sorted(asset_audit.QA_DECISIONS)},retryable=False)
+    if body.decision=="Approved" and run["qa_type"]!="reference" and artifact["logical_asset_id"]:
+        doc,_=await read_project_doc(request,project_id)
+        prerequisite_gate=_project_asset_prerequisite_gate(database,project_id,doc,artifact["logical_asset_id"])
+        if not prerequisite_gate.get("allowed"):
+            return structured_error(409,"prerequisite_blocked","qa","前置资产尚未完成审核，当前候选不能通过媒体 QA。",{"logical_asset_id":artifact["logical_asset_id"],"prerequisite_gate":prerequisite_gate,"next_action":prerequisite_gate.get("reason")},retryable=False)
     report=body.report or {}
     if body.decision!="Blocked" and not report:
         return structured_error(422,"empty_report","qa","QA 报告不能为空。",{},retryable=False)
@@ -5368,6 +5905,103 @@ async def submit_qa_decision(qa_run_id:str,body:QADecisionSubmit,request:Request
     )
     return {"qa_run":asset_audit.qa_run_payload(database,_qa_row(database,qa_run_id)),"artifact":asset_audit.artifact_payload(database,_artifact_row(database,run["artifact_id"]))}
 
+def _auto_approve_prompt_after_registration(database: Database, artifact: Any, asset: dict[str, Any], *, approval_source: str = "asset_registration") -> dict[str, Any] | None:
+    """Link an image-approved registration to its exact current Prompt.
+
+    Prompt QA remains a real authority and is never inferred from an image
+    alone.  The only automatic case is the same Prompt version explicitly
+    attached to the approved artifact, and only when neither the asset nor the
+    Prompt version carries an explicit negative decision.
+    """
+    prompt_version_id = str(artifact["prompt_version"] or "").strip()
+    current_prompt_version_id = str(asset.get("promptVersion") or "").strip()
+    if not prompt_version_id or prompt_version_id != current_prompt_version_id:
+        return None
+    if str(asset.get("promptQaDecision") or "").strip() in {"Needs revision", "Blocked", "Rejected"}:
+        return None
+    with database.connect() as connection:
+        prompt_row = connection.execute(
+            "SELECT * FROM prompt_versions WHERE id=? AND project_id=? AND logical_asset_id=?",
+            (prompt_version_id, artifact["project_id"], artifact["logical_asset_id"]),
+        ).fetchone()
+    if not prompt_row:
+        return None
+    if str(prompt_row["status"] or "") in {"prompt_qa_needs_revision", "prompt_qa_blocked", "superseded", "blocked"}:
+        return None
+    if str(prompt_row["status"] or "") == "prompt_qa_approved":
+        return {"status": "already_approved", "prompt_version": asset_audit.prompt_version_payload(database, prompt_row)}
+    if str(prompt_row["status"] or "") != "prompt_qa_pending":
+        return None
+    reason = "图片 QA 已 Approved，且该登记文件绑定当前 Prompt 版本；自动完成一次 Prompt QA 联动。"
+    approved = approve_prompt_version(
+        database,
+        prompt_version_id,
+        approval_source=approval_source,
+        approved_artifact_id=str(artifact["id"]),
+        approval_reason=reason,
+        approved_at=utcnow(),
+    )
+    return {"status": "auto_approved", "prompt_version": asset_audit.prompt_version_payload(database, approved), "reason": reason}
+
+
+def reconcile_registered_prompt_links(database: Database, data_dir: Path) -> dict[str, Any]:
+    """Repair older registrations that predate automatic Prompt linking.
+
+    This is intentionally narrow and idempotent. It only considers an active
+    asset version whose artifact is already ``ready`` and whose artifact
+    Prompt ID exactly matches the logical asset's current Prompt ID. Explicit
+    negative Prompt decisions are left untouched.
+    """
+    with database.connect() as connection:
+        rows = connection.execute(
+            "SELECT a.*, av.id AS active_version_id FROM artifacts a "
+            "JOIN asset_versions av ON av.project_id=a.project_id AND av.artifact_id=a.id "
+            "WHERE av.is_active=1 AND a.status='ready' AND a.qa_decision='Approved' "
+            "ORDER BY a.project_id,a.logical_asset_id"
+        ).fetchall()
+    changed: list[dict[str, Any]] = []
+    for artifact in rows:
+        project_id = str(artifact["project_id"] or "")
+        logical_asset_id = str(artifact["logical_asset_id"] or "")
+        if not project_id or not logical_asset_id:
+            continue
+        with database.connect() as connection:
+            project = connection.execute("SELECT document_json,revision FROM projects WHERE id=?", (project_id,)).fetchone()
+        if not project:
+            continue
+        document = database.decode(project["document_json"], {})
+        asset = next((item for item in document.get("assets", []) if isinstance(item, dict) and str(item.get("id")) == logical_asset_id), None)
+        if not asset:
+            continue
+        approval = _auto_approve_prompt_after_registration(database, artifact, asset, approval_source="asset_registration_reconciliation")
+        if not approval or approval.get("status") not in {"auto_approved", "already_approved"}:
+            continue
+        prompt_payload = approval.get("prompt_version") or {}
+        if asset.get("promptQaDecision") == "Approved" and str(asset.get("promptVersion") or "") == str(prompt_payload.get("id") or ""):
+            continue
+        before = {"prompt_qa_decision": asset.get("promptQaDecision"), "prompt_version": asset.get("promptVersion")}
+        asset["promptQaDecision"] = "Approved"
+        asset["promptVersion"] = prompt_payload.get("id") or asset.get("promptVersion")
+        for source_key, target_key in (("approval_source", "promptQaApprovalSource"), ("approved_artifact_id", "promptQaApprovedArtifactId"), ("approved_at", "promptQaApprovedAt"), ("approval_reason", "promptQaApprovalReason")):
+            if prompt_payload.get(source_key):
+                asset[target_key] = prompt_payload[source_key]
+        now = utcnow()
+        next_revision = int(project["revision"]) + 1
+        with database.connect() as connection:
+            connection.execute("UPDATE projects SET document_json=?,revision=?,updated_at=? WHERE id=?", (database.encode(document), next_revision, now, project_id))
+            audit_trail.write_event_connection(
+                connection, database, project_id=project_id, action="prompt_qa_auto_approved",
+                target_type="prompt", target_id=str(prompt_payload.get("id") or ""), reason="asset_registration_reconciliation",
+                before=before, after={"prompt_qa_decision": "Approved", "prompt_version": prompt_payload.get("id")},
+                metadata={"artifact_id": str(artifact["id"]), "source": "asset_registration_reconciliation"}, created_at=now,
+            )
+            sync_project_files(database, data_dir, project_id, document=document, revision=next_revision, connection=connection)
+        asset_audit.record_event(database, project_id, str(artifact["id"]), logical_asset_id, str(artifact["status"] or "ready"), "prompt_qa_approved", {"source": "asset_registration_reconciliation", "prompt_version": prompt_payload.get("id")})
+        _sync_asset_board_after_document(database, project_id, document, next_revision)
+        changed.append({"project_id": project_id, "logical_asset_id": logical_asset_id, "artifact_id": str(artifact["id"]), "prompt_version": prompt_payload.get("id"), "status": approval.get("status")})
+    return {"checked": len(rows), "changed": changed}
+
+
 @app.post("/api/assets/artifacts/{artifact_id}/register")
 async def register_asset(artifact_id:str,body:ArtifactRegisterRequest,request:Request):
     database=db(request); row=_artifact_row(database,artifact_id); project_id=row["project_id"]
@@ -5396,24 +6030,54 @@ async def register_asset(artifact_id:str,body:ArtifactRegisterRequest,request:Re
     expected_owner=asset_audit.QA_OWNER_BY_CLASS.get(row["asset_class"])
     if expected_owner and row["qa_owner"]!=expected_owner:return structured_error(409,"qa_owner_mismatch","registration","QA Owner 与资产类型不符。",{},retryable=False)
     if not row["logical_asset_id"]:return structured_error(409,"unmapped","registration","尚未映射到逻辑资产。",{},retryable=False)
+    doc,project_revision=await read_project_doc(request,project_id)
+    logical_asset=_project_asset(doc,row["logical_asset_id"])
+    prerequisite_gate=_project_asset_prerequisite_gate(database,project_id,doc,row["logical_asset_id"])
+    if not prerequisite_gate.get("allowed"):
+        return structured_error(409,"prerequisite_blocked","registration","前置资产尚未完成审核，当前候选不能登记为生产资产。",{"logical_asset_id":row["logical_asset_id"],"prerequisite_gate":prerequisite_gate,"next_action":prerequisite_gate.get("reason")},retryable=False)
     if row["asset_class"]=="fusion":
-        doc,_=await read_project_doc(request,project_id); fusion_asset=_project_asset(doc,row["logical_asset_id"]); gate=_fusion_gate(doc,fusion_asset,database,project_id)
+        fusion_asset=logical_asset; gate=_fusion_gate(doc,fusion_asset,database,project_id)
         if not gate["allowed"]:
             return structured_error(409,"fusion_gate_blocked","registration","融合资产尚未通过基础资产门禁。",gate,retryable=False)
     existing_active=None
     with database.connect() as c:existing_active=c.execute("SELECT * FROM asset_versions WHERE project_id=? AND logical_asset_id=? AND is_active=1",(project_id,row["logical_asset_id"])).fetchone()
     is_active=(existing_active is None) or body.replace_active
     status="active" if is_active else "candidate"
-    registration={"asset_id":row["logical_asset_id"],"asset_class":row["asset_class"],"version":row["version"],"project_path":row["local_path"],"source_generation_id":row["generation_id"],"source_prompt_version":row["prompt_version"],"generation_source":row["source_type"],"qa_owner":row["qa_owner"],"qa_decision":row["qa_decision"],"registered_by":"video-asset-regulator","registered_at":utcnow()}
+    superseded_artifact_id=str(existing_active["artifact_id"]) if is_active and existing_active else None
+    registration={"asset_id":row["logical_asset_id"],"asset_class":row["asset_class"],"version":row["version"],"project_path":row["local_path"],"source_generation_id":row["generation_id"],"source_prompt_version":row["prompt_version"],"generation_source":row["source_type"],"qa_owner":row["qa_owner"],"qa_decision":row["qa_decision"],"registered_by":"video-asset-regulator","registered_at":utcnow(),"supersedes_artifact_id":superseded_artifact_id}
     av=asset_audit.create_asset_version(database,project_id,row["logical_asset_id"],row["asset_class"] or "unknown",artifact_id,row["prompt_version"],status,is_active,registration)
+    if superseded_artifact_id:
+        old_artifact=_artifact_row(database,superseded_artifact_id,project_id)
+        if str(old_artifact["status"] or "") == "ready":
+            asset_audit.transition_artifact(database,superseded_artifact_id,"superseded",{"reason":"asset_version_replaced","replacement_artifact_id":artifact_id})
+        with database.connect() as connection:
+            connection.execute("UPDATE artifacts SET supersedes_artifact_id=?,updated_at=? WHERE id=?",(superseded_artifact_id,utcnow(),artifact_id))
     asset_audit.transition_artifact(database,artifact_id,"ready",{"asset_version_id":av["id"]})
+    prompt_approval = _auto_approve_prompt_after_registration(database,row,logical_asset) if is_active else None
     if is_active:
         def _up(a):
             a["artifactId"]=artifact_id;a["filePath"]=artifact_url(project_id,path);a["sha256"]=row["sha256"];a["version"]=av["version"];a["activeVersionId"]=av["id"];a["approvedVersion"]=av["version"];a["qaDecision"]="Approved";a["regulatorRegistered"]=True;a["status"]="ready";a["readiness"]="ready"
+            if prompt_approval and prompt_approval.get("prompt_version"):
+                prompt_payload=prompt_approval["prompt_version"]
+                a["promptQaDecision"]="Approved"
+                a["promptVersion"]=prompt_payload["id"]
+                if prompt_payload.get("approval_source"):
+                    a["promptQaApprovalSource"]=prompt_payload["approval_source"]
+                if prompt_payload.get("approved_artifact_id"):
+                    a["promptQaApprovedArtifactId"]=prompt_payload["approved_artifact_id"]
+                if prompt_payload.get("approved_at"):
+                    a["promptQaApprovedAt"]=prompt_payload["approved_at"]
+                if prompt_payload.get("approval_reason"):
+                    a["promptQaApprovalReason"]=prompt_payload["approval_reason"]
         await _update_project_asset(request,project_id,row["logical_asset_id"],_up)
+        if prompt_approval and prompt_approval.get("status")=="auto_approved":
+            asset_audit.record_event(database,project_id,artifact_id,row["logical_asset_id"],"ready","prompt_qa_approved",{"source":"asset_registration","prompt_version":prompt_approval["prompt_version"]["id"]})
     with database.connect() as c:
         c.execute("INSERT INTO approvals(id,project_id,subject_type,subject_id,decision,detail_json,created_at) VALUES(?,?,?,?,?,?,?)",(asset_audit.new_id("APR"),project_id,"asset_registration",artifact_id,"registered",database.encode(registration),utcnow()))
-    return {"ok":True,"asset_version":av,"artifact":asset_audit.artifact_payload(database,_artifact_row(database,artifact_id)),"is_active":is_active}
+    refreshed_doc,refreshed_revision=await read_project_doc(request,project_id)
+    board=_ensure_asset_board(database,project_id)
+    library=_library_payload(database,project_id,refreshed_doc)
+    return {"ok":True,"project_revision":refreshed_revision,"asset_version":av,"artifact":asset_audit.artifact_payload(database,_artifact_row(database,artifact_id)),"is_active":is_active,"superseded_artifact_id":superseded_artifact_id,"prompt_qa":prompt_approval,"story":story_document(refreshed_doc),"library":library,"asset_board":board,"asset_audit":_asset_audit_payload(database,project_id,refreshed_doc)}
 
 @app.post("/api/assets/artifacts/{artifact_id}/resolution")
 async def resolve_artifact(artifact_id:str,body:ResolutionRequest,request:Request):
@@ -5482,7 +6146,9 @@ async def prompt_qa_decision(prompt_version_id:str,body:PromptQADecision,request
     if _asset_class(asset)=="fusion" and asset.get("fusionPromptSource")!="fusion-connection-agent":raise HTTPException(409,"融合资产必须先完成实际连线并生成正式融合 Prompt。")
     status={"Approved":"prompt_qa_approved","Needs revision":"prompt_qa_needs_revision","Blocked":"prompt_qa_blocked"}[body.decision]
     if body.decision=="Approved":
-        try:row=approve_prompt_version(database,prompt_version_id)
+        report=body.report if isinstance(body.report,dict) else {}
+        approval_reason=str(report.get("note") or report.get("reviewer_note") or "用户完成 Prompt QA 审核。")
+        try:row=approve_prompt_version(database,prompt_version_id,approval_source="manual_prompt_qa",approval_reason=approval_reason)
         except PromptAuthorityError as exc:raise HTTPException(409,{"message":exc.message,"prompt_authority":exc.payload()}) from exc
     else:
         with database.connect() as c:
@@ -5490,6 +6156,14 @@ async def prompt_qa_decision(prompt_version_id:str,body:PromptQADecision,request
             row=c.execute("SELECT * FROM prompt_versions WHERE id=?",(prompt_version_id,)).fetchone()
     if body.decision=="Approved":
         asset["promptQaDecision"]="Approved"; asset["prompt"]=row["prompt"]; asset["promptVersion"]=prompt_version_id; asset["generationChoice"]="user-confirmation-required"
+        if "approval_source" in row.keys() and row["approval_source"]:
+            asset["promptQaApprovalSource"]=row["approval_source"]
+        if "approved_artifact_id" in row.keys() and row["approved_artifact_id"]:
+            asset["promptQaApprovedArtifactId"]=row["approved_artifact_id"]
+        if "approved_at" in row.keys() and row["approved_at"]:
+            asset["promptQaApprovedAt"]=row["approved_at"]
+        if "approval_reason" in row.keys() and row["approval_reason"]:
+            asset["promptQaApprovalReason"]=row["approval_reason"]
     else:
         asset["promptQaDecision"]="Needs revision" if body.decision=="Needs revision" else "Blocked"
     next_revision=save_project_document(
@@ -5779,6 +6453,7 @@ async def delete_asset_v3(project_id:str,logical_asset_id:str,request:Request,ex
             c.execute("UPDATE asset_boards_v7 SET revision=?,board_json=?,updated_at=? WHERE project_id=?",(board_revision,database.encode(board),now,project_id))
             board_row=c.execute("SELECT * FROM asset_boards_v7 WHERE project_id=?",(project_id,)).fetchone()
             board_envelope=_asset_board_payload(database,project_id,board_row)
+    sync_project_files(database, DATA_DIR, project_id)
     library=_library_payload(database,project_id,doc)
     return {"ok":True,"project_id":project_id,"asset_id":logical_asset_id,"revision":next_revision,"library":library,"asset_board":board_envelope,"story":doc}
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import unittest
 import uuid
 from pathlib import Path
@@ -8,6 +9,11 @@ from unittest import mock
 from fastapi.testclient import TestClient
 
 import server
+
+
+PNG_1X1 = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+)
 
 
 def fusion_project(project_id: str = "PRJ_FUSION") -> dict:
@@ -109,6 +115,58 @@ class FusionPromptFlowTests(unittest.TestCase):
         self.assertTrue(ready["allowed"])
         self.assertEqual(ready["blocked_source_ids"], [])
         self.assertEqual(ready["reason"], "前置基础资产已全部就绪，可生成 Fusion Prompt")
+
+    def test_prerequisite_gate_derives_prompt_pack_dependencies_and_blocks_intake(self) -> None:
+        project = fusion_project("PRJ_PREREQUISITE")
+        project["assets"] = [
+            {"id": "P01", "name": "P01", "assetClass": "character", "prompt": "P01 Prompt", **{
+                "artifactId": "ART_P01", "qaDecision": "Approved", "regulatorRegistered": True,
+                "status": "ready", "promptQaDecision": "Approved",
+            }},
+            {"id": "ENV01", "name": "ENV01", "assetClass": "scene", "prompt": "ENV01 Prompt", **{
+                "artifactId": "ART_ENV01", "qaDecision": "Approved", "regulatorRegistered": True,
+                "status": "ready", "promptQaDecision": "Approved",
+            }},
+            {"id": "P12", "name": "P12", "assetClass": "prop", "prompt": "P12 Prompt"},
+            {
+                "id": "P08", "name": "P08", "assetClass": "prop", "prompt": "P08 Prompt",
+                "promptQaDecision": "Approved",
+                "promptPack": {
+                    "referenceStrategy": {"referenceRoles": [
+                        {"assetId": "P01", "role": "发射者身份与接口"},
+                        {"assetId": "P12", "role": "实体命中承载物"},
+                    ]},
+                    "generationNotes": "先依赖P01、ENV01和P12基础资产。",
+                },
+            },
+        ]
+        project["assetRegulator"] = {"dependencyTable": [{
+            "from": "P01", "to": ["P08"], "reason": "沿用 P01 的身份与接口连续性",
+        }]}
+        created = self.client.put("/api/v2/projects/PRJ_PREREQUISITE", json={"document": project})
+        self.assertEqual(created.status_code, 200, created.text)
+
+        library_response = self.client.get("/api/v2/projects/PRJ_PREREQUISITE/assets")
+        self.assertEqual(library_response.status_code, 200, library_response.text)
+        library = {item["id"]: item for item in library_response.json()["assets"]}
+        p08 = library["P08"]
+        self.assertEqual(set(item["asset_id"] for item in p08["prerequisiteDependencies"]), {"P01", "ENV01", "P12"})
+        self.assertFalse(p08["prerequisiteGate"]["allowed"])
+        self.assertEqual(p08["prerequisiteGate"]["blocked_asset_ids"], ["P12"])
+        self.assertIn("P12", p08["prerequisiteGate"]["reason"])
+        self.assertIn("prerequisite_assets", p08["readiness"]["production_missing"])
+        self.assertFalse(p08["production_ready"])
+        self.assertTrue(library["P01"]["prerequisiteGate"]["allowed"])
+        self.assertTrue(library["ENV01"]["prerequisiteGate"]["allowed"])
+
+        intake = self.client.post(
+            "/api/v2/projects/PRJ_PREREQUISITE/asset-intake",
+            data={"logical_asset_id": "P08", "asset_class": "prop", "asset_role": "prop", "source_type": "chatgpt-web"},
+            files={"file": ("p08.png", PNG_1X1, "image/png")},
+        )
+        self.assertEqual(intake.status_code, 409, intake.text)
+        self.assertEqual(intake.json()["code"], "prerequisite_blocked")
+        self.assertEqual(intake.json()["details"]["prerequisite_gate"]["blocked_asset_ids"], ["P12"])
 
     def test_initial_run_only_persists_fusion_plan(self) -> None:
         regulator = {
@@ -246,6 +304,12 @@ class FusionPromptFlowTests(unittest.TestCase):
             })
         self.assertEqual(generated.status_code, 200, generated.text)
         self.assertEqual(generated.json()["run"]["source_asset_ids"], ["C001", "C002", "S001"])
+        # The connection-driven Prompt Pack is the authoritative reference
+        # snapshot for a fusion asset. Registration must not require a second
+        # manual asset_reference_roles_v4 entry for the same inputs.
+        gate = self.client.post("/api/v2/projects/PRJ_FUSION/assets/BLEND_SH001/fusion-gate")
+        self.assertEqual(gate.status_code, 200, gate.text)
+        self.assertEqual(gate.json()["status"], "allowed")
 
     def test_board_sync_upgrades_existing_prompt_project_and_returns_all_projections(self) -> None:
         project = fusion_project("PRJ_FUSION_SYNC")
@@ -316,15 +380,18 @@ class FusionPromptFlowTests(unittest.TestCase):
         self.assertEqual(fusion["fusionPromptRun"]["source_prompt_versions"], {"C001": "", "C002": "", "S001": ""})
         self.assertEqual(fusion["promptQaDecision"], "Pending")
 
-        board_changed = self.client.put("/api/v2/projects/PRJ_FUSION/asset-board", json={
+        board_resaved = self.client.put("/api/v2/projects/PRJ_FUSION/asset-board", json={
             "expected_revision": payload["asset_board"]["revision"],
             "board": payload["asset_board"]["board"],
         })
-        self.assertEqual(board_changed.status_code, 200, board_changed.text)
+        self.assertEqual(board_resaved.status_code, 200, board_resaved.text)
         library_after_board_change = self.client.get("/api/v2/projects/PRJ_FUSION/assets").json()
         fusion_after_board_change = next(item for item in library_after_board_change["assets"] if item["id"] == "BLEND_SH001")
-        self.assertEqual(fusion_after_board_change["fusionPromptState"], "stale")
-        self.assertIn("画布", fusion_after_board_change["fusionPromptStaleReason"])
+        # Re-saving the same board (including a layout-only revision) must not
+        # invalidate a Prompt whose semantic inputs are unchanged. Artifact
+        # upload/withdrawal uses this same board refresh path.
+        self.assertEqual(fusion_after_board_change["fusionPromptState"], "prompt_draft_ready")
+        self.assertFalse(fusion_after_board_change["fusionPromptStale"])
 
         patched = self.client.patch("/api/v2/projects/PRJ_FUSION/assets/C001", json={
             "expected_revision": payload["revision"],
@@ -340,6 +407,98 @@ class FusionPromptFlowTests(unittest.TestCase):
         versions = self.client.get("/api/v2/projects/PRJ_FUSION/assets/BLEND_SH001/prompt-versions")
         self.assertEqual(versions.status_code, 200, versions.text)
         self.assertEqual(len(versions.json()["prompt_versions"]), 1)
+
+    def test_fusion_prompt_stays_usable_when_output_image_is_replaced(self) -> None:
+        board = self._connect_sources()
+        with mock.patch.object(server, "_run_fusion_prompt_agent", new=mock.AsyncMock(return_value={
+            "fusionAssetId": "BLEND_SH001",
+            "shotId": "SH001",
+            "sourceAssetIds": ["C001", "C002", "S001"],
+            "prompt": "正式融合：三人沿山路押解，保持空间连续。",
+            "promptPack": {"composition": "前中后景"},
+            "mustPreserve": ["角色身份", "山路轴线"],
+            "mustAvoid": ["重复人物"],
+            "warnings": [],
+        })):
+            generated = self.client.post("/api/v2/projects/PRJ_FUSION/fusion-prompt-runs", json={
+                "expected_project_revision": 1,
+                "expected_board_revision": board["revision"],
+                "fusion_asset_id": "BLEND_SH001",
+                "shot_id": "SH001",
+                "source_asset_ids": ["C001", "C002", "S001"],
+                "confirmed": True,
+            })
+        self.assertEqual(generated.status_code, 200, generated.text)
+        generated_payload = generated.json()
+        prompt_version = generated_payload["prompt_version"]["id"]
+
+        intake = self.client.post(
+            "/api/v2/projects/PRJ_FUSION/asset-intake",
+            data={
+                "logical_asset_id": "BLEND_SH001",
+                "asset_class": "fusion",
+                "asset_role": "shot-fusion",
+                "source_type": "chatgpt-web",
+                "prompt_version": prompt_version,
+                "relevant_shots_json": '["SH001"]',
+            },
+            files={"file": ("fusion-first.png", PNG_1X1, "image/png")},
+        )
+        self.assertEqual(intake.status_code, 200, intake.text)
+        intake_payload = intake.json()
+        first_artifact_id = intake_payload["artifact"]["id"]
+        self.assertIn("asset_board", intake_payload)
+        library_after_intake = self.client.get("/api/v2/projects/PRJ_FUSION/assets").json()
+        fusion_after_intake = next(item for item in library_after_intake["assets"] if item["id"] == "BLEND_SH001")
+        self.assertFalse(fusion_after_intake["fusionPromptStale"])
+        handoff_after_intake = next(node for node in intake_payload["asset_board"]["board"]["nodes"] if node["id"] == "handoff:BLEND_SH001")
+        self.assertEqual(handoff_after_intake["config"]["artifact_id"], first_artifact_id)
+
+        qa = self.client.post(f"/api/v2/projects/PRJ_FUSION/artifacts/{first_artifact_id}/qa-runs", json={"qa_type": "image", "manual_review": True})
+        self.assertEqual(qa.status_code, 200, qa.text)
+        qa_run_id = qa.json()["qa_run"]["id"]
+        approved = self.client.post(f"/api/v2/projects/PRJ_FUSION/qa-runs/{qa_run_id}/submit", json={"decision": "Approved", "report": {"manual_review": True}})
+        self.assertEqual(approved.status_code, 200, approved.text)
+        self.assertEqual(approved.json()["artifact"]["status"], "approved_pending_registration")
+        board_after_qa = self.client.get("/api/v2/projects/PRJ_FUSION/asset-board").json()
+
+        synced_after_qa = self.client.post(
+            "/api/v2/projects/PRJ_FUSION/asset-board/sync",
+            json={"expected_revision": board_after_qa["revision"], "preserve_layout": True},
+        )
+        self.assertEqual(synced_after_qa.status_code, 200, synced_after_qa.text)
+        handoff_after_qa = next(node for node in synced_after_qa.json()["board"]["nodes"] if node["id"] == "handoff:BLEND_SH001")
+        self.assertEqual(handoff_after_qa["config"]["artifact_status"], "approved_pending_registration")
+        self.assertEqual(handoff_after_qa["config"]["artifact_qa_decision"], "Approved")
+
+        archived = self.client.delete(f"/api/v2/projects/PRJ_FUSION/artifacts/{first_artifact_id}")
+        self.assertEqual(archived.status_code, 200, archived.text)
+        library_after_archive = self.client.get("/api/v2/projects/PRJ_FUSION/assets").json()
+        fusion_after_archive = next(item for item in library_after_archive["assets"] if item["id"] == "BLEND_SH001")
+        self.assertFalse(fusion_after_archive["fusionPromptStale"])
+        archived_handoff = next(node for node in archived.json()["asset_board"]["board"]["nodes"] if node["id"] == "handoff:BLEND_SH001")
+        self.assertIsNone(archived_handoff["config"]["artifact_id"])
+
+        replacement = self.client.post(
+            "/api/v2/projects/PRJ_FUSION/asset-intake",
+            data={
+                "logical_asset_id": "BLEND_SH001",
+                "asset_class": "fusion",
+                "asset_role": "shot-fusion",
+                "source_type": "chatgpt-web",
+                "prompt_version": prompt_version,
+                "relevant_shots_json": '["SH001"]',
+            },
+            files={"file": ("fusion-replacement.png", PNG_1X1, "image/png")},
+        )
+        self.assertEqual(replacement.status_code, 200, replacement.text)
+        replacement_payload = replacement.json()
+        self.assertNotEqual(replacement_payload["artifact"]["id"], first_artifact_id)
+        replacement_handoff = next(node for node in replacement_payload["asset_board"]["board"]["nodes"] if node["id"] == "handoff:BLEND_SH001")
+        self.assertEqual(replacement_handoff["config"]["artifact_id"], replacement_payload["artifact"]["id"])
+        library_after_replacement = self.client.get("/api/v2/projects/PRJ_FUSION/assets").json()
+        fusion_after_replacement = next(item for item in library_after_replacement["assets"] if item["id"] == "BLEND_SH001")
+        self.assertFalse(fusion_after_replacement["fusionPromptStale"])
 
     def test_targeted_generation_blocks_unconfirmed_or_unsaved_connection(self) -> None:
         board = self.client.get("/api/v2/projects/PRJ_FUSION/asset-board").json()

@@ -316,23 +316,39 @@ def _tasks(
 
     for item in items:
         readiness = item.get("readiness") or {}
-        if not readiness.get("required") or readiness.get("ready"):
+        production_ready = readiness.get("production_ready")
+        # A registered asset may still be blocked by the production gates
+        # (for example Prompt QA, authorization or a fusion gate). Optional
+        # assets with an actual partial/candidate state also need an actionable
+        # queue entry; otherwise the home page can show 29% progress while
+        # incorrectly claiming that the project is finished.
+        needs_production_work = production_ready is False and bool(readiness.get("production_missing"))
+        needs_asset_work = bool(readiness.get("required")) or needs_production_work or _text(readiness.get("status")) in {"partial", "provisional"}
+        if not needs_asset_work or production_ready is True:
             continue
         asset_id = _text(item.get("id")) or "asset"
         item_status = _text(readiness.get("status")) or "missing"
-        if item_status == "blocked":
+        if needs_production_work and readiness.get("ready"):
+            title = f"完成 {asset_id} 入镜门禁"
+            action = "complete_asset"
+            priority = "high"
+            reason = ", ".join(readiness.get("production_missing", [])) or "资产已登记但尚未满足全部入镜门禁"
+        elif item_status == "blocked":
             title = f"处理 {asset_id} 阻塞"
             action = "fix_block"
             priority = "critical"
+            reason = ", ".join(readiness.get("missing", [])) or "资产审核或文件门禁已阻塞"
         elif item_status == "partial":
             title = f"补齐 {asset_id} 资产"
             action = "complete_asset"
             priority = "high"
+            reason = ", ".join(readiness.get("missing", []) or readiness.get("production_missing", [])) or "候选资产尚未完成 QA、登记或入镜门禁"
         else:
             title = f"制作 {asset_id} 资产"
             action = "prepare_asset"
             priority = "high"
-        out.append(_task(f"TASK_ASSET_{asset_id}", "asset", title, ", ".join(readiness.get("missing", [])) or "必需资产尚未生产就绪", priority, "blocked", "assets", action, asset_id))
+            reason = ", ".join(readiness.get("missing", []) or readiness.get("production_missing", [])) or "必需资产尚未生产就绪"
+        out.append(_task(f"TASK_ASSET_{asset_id}", "asset", title, reason, priority, "blocked", "assets", action, asset_id))
 
     if story["status"] == "completed" and stages["director"]["status"] != "completed" and stages["director"]["status"] != "skipped" and stages["assets"]["status"] not in {"not_started", "blocked"} and stages["fusion"]["status"] not in {"not_started", "blocked"}:
         out.append(_task("TASK_DIRECTOR", "process", "完成镜头导演包", stages["director"]["reason"], "high", stages["director"]["status"], "canvas", "direct_shots"))

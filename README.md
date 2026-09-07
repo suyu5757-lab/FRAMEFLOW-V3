@@ -52,10 +52,16 @@ Pop-Location
 - `FRAMEFLOW_DB_PATH`：可选的 SQLite 路径；默认使用运行时数据目录。
 - `JIMENG_CLI_HOME`、`JIMENG_CLI_PATH`：即梦 CLI 的本地登录目录和可执行文件配置。
 - `FRAMEFLOW_FFMPEG_PATH`、`FRAMEFLOW_FFPROBE_PATH`：可选的 FFmpeg/FFprobe 完整路径；未设置时从系统 PATH 查找。
-- `OPENAI_API_KEY`、`DEEPSEEK_API_KEY`、`COMFYUI_API_KEY`：仅用于从环境变量导入凭据；运行时优先使用系统凭据库。
+- `OPENAI_API_KEY`、`DEEPSEEK_API_KEY`、`COMFYUI_API_KEY`、`MINIMAX_API_KEY`：仅用于从环境变量导入凭据；运行时优先使用系统凭据库。当前工作台的 TTS 路由固定使用 MiniMax，OpenAI 仍可承担编排和图片能力。
 - `OPENCODE_SERVER_PASSWORD`：OpenCode Server 的可选 Basic Auth 密码。
 
 应用不会把凭据写入项目 JSON、运行快照、前端存储或日志。不要把真实密钥写进源代码、测试夹具或文档。
+
+### MiniMax TTS
+
+当前工作台的 TTS 能力固定走 MiniMax。启动后在“设置与 Provider 控制面”中选择 `MiniMax TTS`，将 `MINIMAX_API_KEY` 写入系统凭据库，点击“连接探测”，再把探测返回的 `voice_id` 填入声音 profile 的 Provider voice ID。对白和 audition 生成仍会先进入 `generated-pending-qa`，完成声音 QA 和登记后才可用于下游制作。
+
+当前接入的是 MiniMax 的同步 T2A v2 接口，支持 `speech-2.8-hd` / Turbo 等模型、中文语言增强、停顿标记、发音覆盖和 `mp3` / `wav` / `flac` 输出；请求格式以 [MiniMax 同步语音合成 HTTP 文档](https://platform.minimaxi.com/docs/api-reference/speech-t2a-http) 为准。工作台不会在前端发送密钥，也不会在没有明确费用确认时发起生成。
 
 macOS 示例：
 
@@ -70,6 +76,16 @@ FRAMEFLOW_RESOURCE_DIR="/Users/yusu/Desktop/framflow v3 resource"
 ├── data/
 │   ├── frameflow.db
 │   ├── projects/
+│   │   └── PRJ_.../
+│   │       ├── project.json
+│   │       ├── story/                  # script.md / storyboard.md / versions/
+│   │       ├── assets/                 # Prompt、规格、登记索引，按类型分类
+│   │       ├── qa/                     # QA 快照
+│   │       ├── board/                  # 资产画布布局与镜头依赖快照
+│   │       ├── timeline/               # 时间线 JSON
+│   │       ├── workflow/               # 工作流图 JSON
+│   │       ├── outputs/                # 其他项目输出
+│   │       └── artifacts/              # 原始上传和生成媒体
 │   ├── exports/
 │   ├── safety-backups/
 │   └── dreamina-home/
@@ -79,6 +95,10 @@ FRAMEFLOW_RESOURCE_DIR="/Users/yusu/Desktop/framflow v3 resource"
 ```
 
 代码目录仍然保留在当前项目目录，前端构建目录也仍然是 `web/dist/`。
+
+项目保存边界：项目数据库、上传媒体和可读项目文件都以 `FRAMEFLOW_RESOURCE_DIR` 为根，项目级文件位于 `data/projects/<PROJECT_ID>/`。保存剧本、分镜、Prompt、资产规格、QA 或时间线时，工作台会自动更新对应分类文件；同步只会新增或更新工作台生成的镜像文件，不会删除原始上传媒体或历史版本。资产生产工作区是资产、Prompt、候选、QA 和镜头依赖的统一操作入口。
+
+工作台的流程图、故事/分镜、资产画布、资产 Prompt/规格草稿、声音工作区和时间线采用约 900ms 防抖自动保存；连续编辑会合并为一次 revision 写入，顶部状态会显示“修改将自动保存”“自动保存中”或“已自动保存”。顶部“保存”和各页面的手动保存按钮仍保留为立即保存入口。Prompt / 规格输入会先保存为可恢复草稿；点击“保存 Prompt / 规格”仍是显式版本提交，因为该动作会创建新的 Prompt 版本并重置 Prompt QA。
 
 ## 启动
 

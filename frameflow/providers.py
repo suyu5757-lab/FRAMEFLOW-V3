@@ -17,6 +17,172 @@ class ProviderError(RuntimeError):
         self.status_code = status_code
 
 
+MINIMAX_TTS_MODELS = (
+    "speech-2.8-hd",
+    "speech-2.8-turbo",
+    "speech-2.6-hd",
+    "speech-2.6-turbo",
+    "speech-02-hd",
+    "speech-02-turbo",
+    "speech-01-hd",
+    "speech-01-turbo",
+)
+MINIMAX_DEFAULT_TTS_MODEL = "speech-2.8-hd"
+MINIMAX_TTS_FORMATS = frozenset({"mp3", "wav", "flac"})
+MINIMAX_DEFAULT_VOICE_ID = "male-qn-qingse"
+MINIMAX_TTS_SPEED_MIN = 0.5
+MINIMAX_TTS_SPEED_MAX = 2.0
+MINIMAX_TTS_EMOTIONS = frozenset({"happy", "sad", "angry", "fearful", "disgusted", "surprised", "calm", "whisper", "whipser"})
+MINIMAX_TTS_EMOTION_ALIASES = {
+    "restrained": "calm",
+    "restrained-emotional": "calm",
+    "pronunciation-stress": "calm",
+    "neutral": "calm",
+}
+
+
+def minimax_api_url(profile: dict[str, Any], path: str) -> str:
+    """Build a MiniMax endpoint from either a root URL or a /v1 base URL."""
+    base_url = str(profile.get("base_url") or "").rstrip("/")
+    clean_path = path.lstrip("/")
+    if base_url.endswith("/v1"):
+        return f"{base_url}/{clean_path}"
+    return f"{base_url}/v1/{clean_path}"
+
+
+def _minimax_base_response_error(payload: dict[str, Any]) -> None:
+    base_resp = payload.get("base_resp")
+    if not isinstance(base_resp, dict):
+        return
+    status_code = base_resp.get("status_code")
+    if status_code in (None, "", 0, "0"):
+        return
+    message = str(base_resp.get("status_msg") or base_resp.get("status_message") or "MiniMax API 请求失败")
+    # MiniMax may report an application error in a HTTP 200 response. Keep the
+    # error safe for the UI and let the normal Provider error contract classify it.
+    raise ProviderError(f"MiniMax API：{message}", "validation", 502)
+
+
+def _minimax_voice_catalog(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    catalog: list[dict[str, Any]] = []
+    for source, group in (
+        ("system", payload.get("system_voice")),
+        ("cloning", payload.get("voice_cloning")),
+        ("generation", payload.get("voice_generation")),
+    ):
+        if not isinstance(group, list):
+            continue
+        for item in group:
+            if isinstance(item, str) and item.strip():
+                catalog.append({"voice_id": item.strip(), "source": source, "name": item.strip()})
+                continue
+            if not isinstance(item, dict):
+                continue
+            voice_id = item.get("voice_id") or item.get("id")
+            if not voice_id:
+                continue
+            # Return only voice-directory fields. This avoids accidentally
+            # carrying provider metadata into the project or browser payload.
+            entry = {
+                "voice_id": str(voice_id),
+                "source": source,
+                "name": str(item.get("voice_name") or item.get("name") or voice_id),
+            }
+            for key in ("description", "language", "gender", "age", "supported_emotion", "created_at"):
+                if item.get(key) is not None:
+                    entry[key] = item[key]
+            catalog.append(entry)
+    return catalog[:1000]
+
+
+def minimax_tts_payload(profile: dict[str, Any], request: dict[str, Any]) -> dict[str, Any]:
+    """Translate the provider-neutral speech request into MiniMax T2A v2."""
+    config = profile.get("model_config") if isinstance(profile.get("model_config"), dict) else {}
+    configured_audio = config.get("audio_setting") if isinstance(config.get("audio_setting"), dict) else {}
+    model = str(request.get("model") or config.get("tts_model") or MINIMAX_DEFAULT_TTS_MODEL)
+    voice_id = str(request.get("voice") or request.get("voice_id") or config.get("voice_id") or MINIMAX_DEFAULT_VOICE_ID)
+    output_format = str(request.get("format") or configured_audio.get("format") or "wav").lower()
+    voice_setting: dict[str, Any] = {
+        "voice_id": voice_id,
+        "speed": request.get("speed", 1.0),
+        "vol": request.get("volume", config.get("volume", 1.0)),
+        "pitch": request.get("pitch", config.get("pitch", 0)),
+    }
+    emotion = str(request.get("emotion") or config.get("emotion") or "").strip().lower()
+    emotion = MINIMAX_TTS_EMOTION_ALIASES.get(emotion, emotion)
+    if emotion in MINIMAX_TTS_EMOTIONS:
+        voice_setting["emotion"] = emotion
+    audio_setting = {
+        "sample_rate": request.get("sample_rate") or configured_audio.get("sample_rate") or 32000,
+        "bitrate": request.get("bitrate") or configured_audio.get("bitrate") or 128000,
+        "format": output_format,
+        "channel": configured_audio.get("channel") or 1,
+    }
+    payload: dict[str, Any] = {
+        "model": model,
+        "text": str(request.get("text") or ""),
+        "stream": False,
+        "voice_setting": voice_setting,
+        "audio_setting": audio_setting,
+        "output_format": "hex",
+        "subtitle_enable": False,
+        "aigc_watermark": bool(request.get("aigc_watermark", config.get("aigc_watermark", False))),
+    }
+    language_boost = str(request.get("language_boost") or config.get("language_boost") or "").strip()
+    if language_boost:
+        payload["language_boost"] = language_boost
+    pronunciation_dict = request.get("pronunciation_dict") or config.get("pronunciation_dict")
+    if isinstance(pronunciation_dict, dict) and pronunciation_dict:
+        payload["pronunciation_dict"] = pronunciation_dict
+    if "subtitle_enable" in config:
+        payload["subtitle_enable"] = bool(config["subtitle_enable"])
+    return payload
+
+
+async def minimax_speech(profile: dict[str, Any], api_key: str, request: dict[str, Any]) -> tuple[bytes, dict[str, Any]]:
+    payload = await request_json("POST", minimax_api_url(profile, "t2a_v2"), api_key, json=request)
+    _minimax_base_response_error(payload)
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    audio_hex = data.get("audio")
+    if not isinstance(audio_hex, str) or not audio_hex:
+        raise ProviderError("MiniMax TTS 未返回音频数据。", "retryable", 502)
+    try:
+        audio = bytes.fromhex(audio_hex)
+    except ValueError as exc:
+        raise ProviderError("MiniMax TTS 返回的音频数据无效。", "validation", 502) from exc
+    return audio, {
+        "trace_id": payload.get("trace_id"),
+        "extra_info": payload.get("extra_info") if isinstance(payload.get("extra_info"), dict) else {},
+        "status": data.get("status"),
+    }
+
+
+async def minimax_probe(profile: dict[str, Any], api_key: str) -> dict[str, Any]:
+    started = time.perf_counter()
+    payload = await request_json("POST", minimax_api_url(profile, "get_voice"), api_key, json={"voice_type": "all"})
+    _minimax_base_response_error(payload)
+    models = list(MINIMAX_TTS_MODELS)
+    model_config = profile.get("model_config") if isinstance(profile.get("model_config"), dict) else {}
+    model_catalog = [
+        {"id": model, "label": model, "description": "MiniMax 同步 TTS 模型"}
+        for model in models
+    ]
+    configured_model = str(model_config.get("tts_model") or "")
+    model_readiness = {model: not configured_model or model == configured_model for model in models}
+    return {
+        "ok": True,
+        "latency_ms": round((time.perf_counter() - started) * 1000),
+        "models": models,
+        "model_catalog": model_catalog,
+        "model_readiness": model_readiness,
+        "voices": _minimax_voice_catalog(payload),
+        "capabilities": ["tts"],
+        "server_version": None,
+        "error": None,
+        "checked_at": time.time(),
+    }
+
+
 def error_from_response(response: httpx.Response) -> ProviderError:
     try:
         payload = response.json()
@@ -63,6 +229,8 @@ async def probe_profile(profile: dict[str, Any], api_key: str) -> dict[str, Any]
     if profile["provider_type"] == "jimeng_cli":
         from frameflow.jimeng_cli import probe_jimeng_cli
         return await probe_jimeng_cli(profile, api_key)
+    if profile["provider_type"] == "minimax":
+        return await minimax_probe(profile, api_key)
     started = time.perf_counter()
     base_url = profile["base_url"].rstrip("/")
     provider_type = profile["provider_type"]

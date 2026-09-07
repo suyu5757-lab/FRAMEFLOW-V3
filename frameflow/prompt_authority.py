@@ -26,8 +26,18 @@ def prompt_sha256(prompt: str) -> str:
     return hashlib.sha256(prompt.encode("utf-8")).hexdigest()
 
 
-def approve_prompt_version(database: Any, prompt_version_id: str) -> Any:
+def approve_prompt_version(
+    database: Any,
+    prompt_version_id: str,
+    *,
+    approval_source: str | None = None,
+    approved_artifact_id: str | None = None,
+    approval_reason: str | None = None,
+    approved_at: str | None = None,
+) -> Any:
     """Atomically make one Prompt the only approved authority for its asset."""
+    from .database import utcnow
+
     with database.connect() as connection:
         connection.execute("BEGIN IMMEDIATE")
         row = connection.execute("SELECT * FROM prompt_versions WHERE id=?", (prompt_version_id,)).fetchone()
@@ -38,7 +48,24 @@ def approve_prompt_version(database: Any, prompt_version_id: str) -> Any:
             "WHERE project_id=? AND logical_asset_id=? AND id<>? AND status=?",
             (SUPERSEDED_STATUS, row["project_id"], row["logical_asset_id"], prompt_version_id, APPROVED_STATUS),
         )
-        connection.execute("UPDATE prompt_versions SET status=? WHERE id=?", (APPROVED_STATUS, prompt_version_id))
+        updates = ["status=?"]
+        parameters: list[Any] = [APPROVED_STATUS]
+        if approval_source is not None:
+            updates.append("approval_source=?")
+            parameters.append(approval_source)
+        if approved_artifact_id is not None:
+            updates.append("approved_artifact_id=?")
+            parameters.append(approved_artifact_id)
+        if approval_reason is not None:
+            updates.append("approval_reason=?")
+            parameters.append(approval_reason)
+        # A manually approved or registration-linked Prompt always gets a
+        # durable approval timestamp.  Existing timestamps remain stable when
+        # the same approval is submitted idempotently.
+        updates.append("approved_at=COALESCE(approved_at,?)")
+        parameters.append(approved_at or utcnow())
+        parameters.append(prompt_version_id)
+        connection.execute(f"UPDATE prompt_versions SET {', '.join(updates)} WHERE id=?", tuple(parameters))
         approved_count = int(connection.execute(
             "SELECT COUNT(*) FROM prompt_versions WHERE project_id=? AND logical_asset_id=? AND status=?",
             (row["project_id"], row["logical_asset_id"], APPROVED_STATUS),

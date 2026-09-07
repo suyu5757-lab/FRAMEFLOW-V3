@@ -66,7 +66,13 @@ def media_manifest(data_dir: Path, project_id: str | None = None) -> dict[str, A
     for root in roots:
         if not root.is_dir():
             continue
-        for path in sorted((item for item in root.rglob("*") if item.is_file()), key=lambda item: str(item)):
+        # Keep media first for backwards-compatible manifests and exports;
+        # human-readable project files are also included after the media so
+        # the external workspace can be recovered as a complete package.
+        for path in sorted(
+            (item for item in root.rglob("*") if item.is_file()),
+            key=lambda item: (item.suffix.lower() not in _MEDIA_SUFFIXES, str(item)),
+        ):
             relative = path.relative_to(projects_root).as_posix()
             entries.append({
                 "project_id": root.name,

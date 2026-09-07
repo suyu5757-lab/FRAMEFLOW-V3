@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent } from 'react';
 import { studioApi } from './api';
 import { auditionConditions, auditionReady, buildProviderNeutralPackage, extractAudioBrief, normalizeSpeaker } from './audio-state';
@@ -22,7 +22,7 @@ type AudioStudioProps = {
   settings: SettingsEnvelope | null; story: StoryEnvelope | null; busy: boolean;
   onSave: (document: AudioStudioDocument) => Promise<AudioStudioEnvelope | null>; onRefresh: () => Promise<void>;
   onCreateAsset: (assetClass: 'audio' | 'music' | 'sfx', name: string, role: string) => Promise<string | null>;
-  onNotice: (message: string) => void; onDirtyChange?: (dirty: boolean) => void; onOpenStory?: () => void;
+  onNotice: (message: string) => void; onDirtyChange?: (dirty: boolean) => void; onDocumentChange?: (document: AudioStudioDocument, dirty: boolean) => void; onOpenStory?: () => void;
 };
 
 const modeLabels: Record<AudioMode, string> = { overview: '总览', voices: '人物声音', music: '背景音乐', sound: '音效与氛围', handoff: '交接与 QA' };
@@ -41,7 +41,7 @@ function audioUrl(asset: LibraryAsset): string { const item = (asset.artifacts |
 function gateClass(gate: { status?: string } | undefined): string { return gate?.status === 'ready' ? 'passed' : gate?.status === 'external-execution-pending' ? 'neutral' : 'blocked'; }
 function defaultQaForm(): QaForm { return { format: 'wav', sample_rate: '48000 Hz', channels: 'mono', duration: '', no_clipping: true, noise_ok: true, text_accuracy: 'pass', pronunciation: 'pass', language_dialect: 'pass', emotion: 'pass', rhythm: 'pass', continuity: 'pass', handles: 'present', authorization: 'not-required' }; }
 
-export function AudioStudioView({ projectId, projectName, envelope, assetLibrary, settings, story, busy, onSave, onRefresh, onCreateAsset, onNotice, onDirtyChange, onOpenStory }: AudioStudioProps) {
+export function AudioStudioView({ projectId, projectName, envelope, assetLibrary, settings, story, busy, onSave, onRefresh, onCreateAsset, onNotice, onDirtyChange, onDocumentChange, onOpenStory }: AudioStudioProps) {
   const [draft, setDraft] = useState<AudioStudioDocument>(emptyDocument);
   const [mode, setMode] = useState<AudioMode>('overview');
   const [dirty, setDirty] = useState(false);
@@ -58,9 +58,23 @@ export function AudioStudioView({ projectId, projectName, envelope, assetLibrary
   const [qaDecision, setQaDecision] = useState('Approved');
   const [qaForm, setQaForm] = useState<QaForm>(defaultQaForm);
   const [saving, setSaving] = useState(false);
+  const lastEnvelopeProjectRef = useRef('');
 
-  useEffect(() => { const next = envelope?.document || emptyDocument(); setDraft(next); setMode((next.selected_mode as AudioMode) || 'overview'); setDirty(false); onDirtyChange?.(false); }, [envelope?.revision]);
+  useEffect(() => {
+    const incomingProjectId = String(envelope?.project_id || '');
+    const projectChanged = Boolean(lastEnvelopeProjectRef.current && incomingProjectId !== lastEnvelopeProjectRef.current);
+    const sameDocument = Boolean(envelope && JSON.stringify(envelope.document) === JSON.stringify(draft));
+    // A project-level mutation (for example creating an audio asset) can
+    // refresh the envelope while the user is still editing the local draft.
+    // Keep that draft unless the server now contains the same document or the
+    // selected project has actually changed.
+    if (dirty && !projectChanged && !sameDocument) return;
+    const next = envelope?.document || emptyDocument();
+    lastEnvelopeProjectRef.current = incomingProjectId;
+    setDraft(next); setMode((next.selected_mode as AudioMode) || 'overview'); setDirty(false); onDirtyChange?.(false);
+  }, [envelope?.project_id, envelope?.revision]);
   useEffect(() => { setBriefEntries(extractAudioBrief(story?.story)); }, [story?.revision]);
+  useEffect(() => { onDocumentChange?.(draft, dirty); }, [draft, dirty, onDocumentChange]);
   const assets = useMemo(() => audioAssets(assetLibrary), [assetLibrary]);
   const voices = draft.voices || [], auditions = draft.auditions || [], takes = draft.takes || [], dialogueTasks = draft.dialogues || [], cues = draft.music_cues || [], soundItems = draft.sound_design || [];
   const ttsCapability = envelope?.capabilities?.tts, musicCapability = envelope?.capabilities?.music, audioGates = envelope?.audio_gates || {};

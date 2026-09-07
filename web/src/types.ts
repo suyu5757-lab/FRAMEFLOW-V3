@@ -181,6 +181,13 @@ export type SpeechGenerateInput = {
   format?: 'mp3' | 'opus' | 'aac' | 'flac' | 'wav' | 'pcm';
   instructions?: string;
   speed?: number;
+  volume?: number;
+  pitch?: number;
+  language_boost?: string | null;
+  pronunciation_dict?: Record<string, unknown>;
+  sample_rate?: number;
+  bitrate?: number;
+  aigc_watermark?: boolean;
   dialogue_id?: string;
   logical_asset_id?: string | null;
   shot_ids?: string[];
@@ -350,6 +357,7 @@ export type SettingsEnvelope = {
     keyring: { available: boolean; backend?: string | null };
     media: { ffmpeg?: string | null; ffprobe?: string | null };
     openai: { profile_id?: string | null; credential_configured: boolean };
+    minimax?: { profile_id?: string | null; credential_configured: boolean };
     disk_free_bytes: number;
     provider_count: number;
   };
@@ -851,6 +859,15 @@ export type LibraryAsset = Record<string, any> & {
   artifact_count?: number;
   references: AssetReference[];
   dependencies: Array<{ dependency_asset_id: string; shot_id?: string | null; relation: string; role?: string; required: boolean }>;
+  prerequisiteDependencies?: Array<Record<string, any>>;
+  prerequisiteGate?: {
+    allowed: boolean;
+    required_asset_ids?: string[];
+    blocked_asset_ids?: string[];
+    items?: Array<Record<string, any>>;
+    reason?: string;
+    [key: string]: any;
+  };
   comparisons: AssetComparison[];
   fusionGate?: { allowed: boolean; source_asset_ids: string[]; missing_sources: Array<Record<string, any>>; reference_role_issues: Array<Record<string, any>>; message: string };
   fusionPromptState?: 'awaiting_connection' | 'prompt_draft_ready' | 'stale' | string;
@@ -869,6 +886,7 @@ export type LibraryAsset = Record<string, any> & {
 export type AssetLibraryEnvelope = {
   project_id: string;
   assets: LibraryAsset[];
+  storage?: { project_id?: string; root?: string; layout_version?: number; exists?: boolean; [key: string]: unknown };
   storage_integrity?: { ok: boolean; orphan_directories?: string[]; missing_project_records?: string[]; artifact_mismatches?: Array<Record<string, any>>; recovery_policy?: string };
   summary: {
     total: number;

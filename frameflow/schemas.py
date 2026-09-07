@@ -5,7 +5,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
-ProviderType = Literal["openai", "openai_compatible", "jimeng_cli", "opencode", "comfyui"]
+ProviderType = Literal["openai", "openai_compatible", "jimeng_cli", "opencode", "comfyui", "minimax"]
 TaskStatus = Literal[
     "draft", "validated", "awaiting_confirmation", "queued", "running",
     "succeeded", "generated_pending_qa", "approved", "revision_required",
@@ -97,7 +97,7 @@ class CredentialWrite(StrictModel):
 class CredentialImport(StrictModel):
     environment_variable: Literal[
         "OPENAI_API_KEY", "DEEPSEEK_API_KEY",
-        "OPENCODE_SERVER_PASSWORD", "COMFYUI_API_KEY",
+        "OPENCODE_SERVER_PASSWORD", "COMFYUI_API_KEY", "MINIMAX_API_KEY",
     ]
 
 
@@ -186,6 +186,13 @@ class SpeechGenerate(StrictModel):
     format: Literal["mp3", "opus", "aac", "flac", "wav", "pcm"] = "wav"
     instructions: str = ""
     speed: float = Field(default=1.0, ge=0.25, le=4.0)
+    volume: float = Field(default=1.0, ge=0, le=10)
+    pitch: int = Field(default=0, ge=-12, le=12)
+    language_boost: str | None = Field(default=None, max_length=80)
+    pronunciation_dict: dict[str, Any] = Field(default_factory=dict)
+    sample_rate: int | None = Field(default=None, ge=8000, le=96000)
+    bitrate: int | None = Field(default=None, ge=8000, le=512000)
+    aigc_watermark: bool = False
     dialogue_id: str = "DLG"
     project_id: str | None = None
     logical_asset_id: str | None = Field(default=None, max_length=120)

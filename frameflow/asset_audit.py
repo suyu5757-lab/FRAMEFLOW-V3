@@ -495,9 +495,16 @@ def safe_filename(filename: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]", "_", name)
 
 def _default_project_root(project_id: str, database_path: Path | None = None) -> Path:
-    # Production media lives under <repo-root>/data. Test and isolated runtime
-    # databases use the same deterministic temp root as server.lifespan.
+    # Production media lives under the directory that contains the configured
+    # database when that database is in a ``data`` folder.  This matters for a
+    # user-selected external resource directory such as
+    # ``/Users/yusu/Desktop/framflow v3 resource``; treating every non-repo DB
+    # as a test DB would make valid external media lose its browser URL. Test
+    # and isolated runtime databases keep the deterministic temp root used by
+    # server.lifespan.
     root = Path(__file__).resolve().parents[1]
+    if database_path is not None and database_path.parent.name == "data":
+        return (database_path.parent / "projects" / project_id).resolve()
     if database_path is not None and database_path.resolve() != (root / "data" / "frameflow.db").resolve():
         return (Path(tempfile.gettempdir()) / f"frameflow-runtime-{database_path.stem}" / "projects" / project_id).resolve()
     return (root / "data" / "projects" / project_id).resolve()
@@ -728,6 +735,10 @@ def prompt_version_payload(database: Any, row: Any) -> dict[str, Any]:
         "change_reason": row["change_reason"],
         "source_qa_run_id": row["source_qa_run_id"],
         "rebuilt_from_failure_ids": database.decode(row["rebuilt_from_failure_ids"], []),
+        "approval_source": row["approval_source"] if "approval_source" in row.keys() else None,
+        "approved_artifact_id": row["approved_artifact_id"] if "approved_artifact_id" in row.keys() else None,
+        "approved_at": row["approved_at"] if "approved_at" in row.keys() else None,
+        "approval_reason": row["approval_reason"] if "approval_reason" in row.keys() else None,
         "created_at": row["created_at"],
     }
 
