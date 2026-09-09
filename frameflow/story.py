@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+import math
 import re
 from typing import Any
 
@@ -9,13 +10,49 @@ SHOT_REQUIRED_FIELDS = ("id", "scene", "duration", "purpose", "size", "camera", 
 SHOT_DETAIL_FIELDS = ("composition", "movement", "performance", "dialogue", "narration", "lighting", "color", "style", "firstFrame", "lastFrame", "sound", "continuity")
 
 
+def shot_budget(duration: int, current: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Return the conservative production budget used by the desktop story desk.
+
+    The count is deliberately tied to editability rather than a model's maximum
+    duration.  A 60 second project therefore defaults to six-to-eight strong,
+    independently reviewable shots instead of a large list of fragile cuts.
+    """
+    current = current or {}
+    duration = max(1, int(duration or 30))
+    automatic_min = max(3, math.ceil(duration / 10))
+    automatic_max = max(3, math.ceil(duration / 7.5))
+    manual_values = any(current.get(key) not in (None, "") for key in ("shot_count_min", "shot_count_target", "shot_count_max"))
+    minimum = int(current.get("shot_count_min") or automatic_min)
+    maximum = int(current.get("shot_count_max") or automatic_max)
+    if maximum < minimum:
+        maximum = minimum
+    target = int(current.get("shot_count_target") or round((minimum + maximum) / 2))
+    target = max(minimum, min(target, maximum))
+    source = str(current.get("shot_budget_source") or ("manual" if manual_values else "automatic"))
+    mode = str(current.get("shot_budget_mode") or "controlled")
+    if maximum > automatic_max:
+        mode = "high_tempo"
+    return {
+        "shot_count_min": minimum,
+        "shot_count_target": target,
+        "shot_count_max": maximum,
+        "automatic_shot_count_min": automatic_min,
+        "automatic_shot_count_max": automatic_max,
+        "shot_budget_mode": mode,
+        "shot_budget_source": source,
+    }
+
+
 def story_spec(document: dict[str, Any]) -> dict[str, Any]:
     current = document.get("storySpec") if isinstance(document.get("storySpec"), dict) else {}
+    duration = int(current.get("duration") or document.get("duration") or 30)
+    budget = shot_budget(duration, current)
     return {
+        "workflow_mode": str(current.get("workflow_mode") or "optimize_script_and_storyboard"),
         "creative_goal": str(current.get("creative_goal") or document.get("brief") or ""),
         "audience": str(current.get("audience") or ""),
         "platform": str(current.get("platform") or ""),
-        "duration": int(current.get("duration") or document.get("duration") or 30),
+        "duration": duration,
         "ratio": str(current.get("ratio") or document.get("ratio") or "9:16"),
         "language": str(current.get("language") or "中文"),
         "brand_requirements": list(current.get("brand_requirements") or []),
@@ -23,6 +60,8 @@ def story_spec(document: dict[str, Any]) -> dict[str, Any]:
         "must_avoid": list(current.get("must_avoid") or []),
         "structure": list(current.get("structure") or []),
         "beats": list(current.get("beats") or []),
+        "generator_profile": str(current.get("generator_profile") or document.get("generator") or ""),
+        **budget,
     }
 
 
@@ -42,6 +81,7 @@ def story_document(document: dict[str, Any]) -> dict[str, Any]:
         "script": str(document.get("script") or ""),
         "scenes": scenes,
         "shots": shots,
+        "asset_handoff_receipt": document.get("assetHandoffReceipt") or document.get("asset_handoff_receipt"),
         "script_versions": list(document.get("scriptVersions") or []),
         "storyboard_versions": list(document.get("storyboardVersions") or []),
     }
@@ -105,6 +145,16 @@ def story_checks(document: dict[str, Any]) -> dict[str, Any]:
         for field in SHOT_DETAIL_FIELDS:
             if shot.get(field) in (None, "", []):
                 issue("shot_detail_missing", "warning", f"镜头缺少连续性/生成细节 {field}。", shot_id, {"field": field})
+        if shot.get("visibleEvent") in (None, "", []):
+            issue("visible_event_missing", "warning", "镜头缺少一个明确的主可见事件。", shot_id)
+        if shot.get("eventConsequence") in (None, "", []):
+            issue("event_consequence_missing", "warning", "镜头缺少动作、接触、材质、光线或空间的可见后果。", shot_id)
+        seedance_plan = shot.get("seedancePlan") or shot.get("seedance_plan")
+        if not isinstance(seedance_plan, dict) or not seedance_plan.get("model") or not seedance_plan.get("generationMode"):
+            issue("seedance_plan_missing", "warning", "镜头缺少完整 Seedance 生成计划。", shot_id)
+        continuity = shot.get("continuity")
+        if not isinstance(continuity, dict) or not any(continuity.get(field) for field in ("cutIn", "cutOut", "firstFrame", "lastFrame", "editBridge")):
+            issue("continuity_incomplete", "warning", "镜头缺少可审阅的剪辑进出点或首尾帧连续性。", shot_id)
         dialogue = str(shot.get("dialogue") or shot.get("narration") or "").strip()
         if dialogue:
             tokens = len(dialogue.split()) if re.search(r"\s", dialogue) else len(dialogue)
@@ -122,11 +172,16 @@ def story_checks(document: dict[str, Any]) -> dict[str, Any]:
                 current_value = shot.get(field)
                 if previous_value not in (None, "", []) and current_value not in (None, "", []) and previous_value != current_value and not shot.get("continuity"):
                     issue("state_continuity", "warning", f"同场次镜头的{label}状态发生变化但未说明衔接。", shot_id, {"field": field})
-            previous_last = str(previous_shot.get("lastFrame") or "").strip()
-            current_first = str(shot.get("firstFrame") or "").strip()
+            previous_continuity = previous_shot.get("continuity") if isinstance(previous_shot.get("continuity"), dict) else {}
+            current_continuity = shot.get("continuity") if isinstance(shot.get("continuity"), dict) else {}
+            previous_last = str(previous_shot.get("lastFrame") or previous_continuity.get("lastFrame") or "").strip()
+            current_first = str(shot.get("firstFrame") or current_continuity.get("firstFrame") or "").strip()
             if previous_last and current_first and previous_last != current_first and not shot.get("continuity"):
                 issue("frame_continuity", "warning", "相邻镜头首帧与前一镜头尾帧描述不一致，需人工确认衔接。", shot_id)
-        if shot.get("firstFrame") and shot.get("lastFrame") and shot.get("firstFrame") == shot.get("lastFrame"):
+        continuity_for_frame = shot.get("continuity") if isinstance(shot.get("continuity"), dict) else {}
+        first_frame = shot.get("firstFrame") or continuity_for_frame.get("firstFrame")
+        last_frame = shot.get("lastFrame") or continuity_for_frame.get("lastFrame")
+        if first_frame and last_frame and first_frame == last_frame:
             issue("frame_transition_unclear", "warning", "首帧与尾帧完全相同，无法确认镜头衔接意图。", shot_id)
         requirements = shot.get("assetRequirements") or shot.get("asset_requirements") or []
         if not requirements:
@@ -148,13 +203,16 @@ def story_checks(document: dict[str, Any]) -> dict[str, Any]:
             asset_key = str(asset_id)
             if asset_key and asset_key not in assets and not any(item["shot_id"] == shot_id and item["asset_id"] == asset_key for item in missing_assets):
                 missing_assets.append({"shot_id": shot_id, "asset_id": asset_key})
-        generator = str(shot.get("generator") or shot.get("videoGenerator") or document.get("generator") or "").lower()
+        plan_model = seedance_plan.get("model") if isinstance(seedance_plan, dict) else ""
+        generator = str(shot.get("generator") or shot.get("videoGenerator") or plan_model or document.get("generator") or "").lower()
         try:
             shot_duration = float(shot.get("duration") or 0)
         except (TypeError, ValueError):
             shot_duration = 0
         if "2.0" in generator and shot_duration > 15:
             issue("generator_duration_limit", "error", "当前镜头超过 Seedance 2.0 的 15 秒单镜头限制。", shot_id, {"generator": generator, "duration": shot_duration, "max_duration": 15})
+        if "2.5" in generator and shot_duration > 30:
+            issue("generator_duration_limit", "error", "当前镜头超过 Seedance 2.5 的 30 秒单次叙事规划上限。", shot_id, {"generator": generator, "duration": shot_duration, "max_duration": 30})
         if shot.get("requiredGenerator") and str(shot.get("requiredGenerator")).lower() not in generator:
             issue("generator_capability_mismatch", "warning", "镜头要求的生成器与项目当前生成器不一致。", shot_id, {"required": shot.get("requiredGenerator"), "actual": generator})
         previous_shot = shot
@@ -166,6 +224,11 @@ def story_checks(document: dict[str, Any]) -> dict[str, Any]:
         issue("asset_gap", "warning", "镜头引用了待资产生产登记的资产。", details={"missing_assets": missing_assets})
 
     target_duration = float(payload["spec"].get("duration") or document.get("duration") or 0)
+    budget = shot_budget(int(target_duration or 30), payload["spec"])
+    if len(shots) > budget["shot_count_max"]:
+        issue("shot_budget_exceeded", "error", f"当前 {len(shots)} 个镜头超过稳定制作上限 {budget['shot_count_max']} 个。请合并同场重复建立/反应镜头，或在制作设置中主动提高上限。", details={"actual": len(shots), **budget})
+    elif len(shots) >= budget["shot_count_max"]:
+        issue("shot_budget_near_limit", "warning", f"当前镜头数量已达到稳定制作上限 {budget['shot_count_max']} 个。后续新增镜头会阻塞资产生产。", details={"actual": len(shots), **budget})
     if shots and target_duration > 0 and abs(total_duration - target_duration) > max(1.0, target_duration * 0.1):
         issue("duration_mismatch", "warning", "镜头总时长与项目目标时长偏差超过 10%。", details={"target": target_duration, "actual": round(total_duration, 3)})
 
@@ -176,5 +239,5 @@ def story_checks(document: dict[str, Any]) -> dict[str, Any]:
         "errors": errors,
         "warnings": warnings,
         "issues": issues,
-        "metrics": {"scene_count": len(scenes), "shot_count": len(shots), "total_duration": round(total_duration, 3), "target_duration": target_duration, "estimated_dialogue_duration": round(dialogue_duration, 3)},
+        "metrics": {"scene_count": len(scenes), "shot_count": len(shots), "total_duration": round(total_duration, 3), "target_duration": target_duration, "estimated_dialogue_duration": round(dialogue_duration, 3), "shot_budget": budget},
     }

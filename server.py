@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio, base64, difflib, hashlib, ipaddress, json, mimetypes, os, re, secrets, shutil, sqlite3, sys, tempfile, threading, time, urllib.request, wave, webbrowser
 from copy import deepcopy
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
@@ -40,14 +40,14 @@ from frameflow.prompt_design import PROMPT_CONTRACT_VERSION, PROMPT_WORKFLOW_ID,
 from frameflow.project_storage import describe_project_storage, sync_all_project_files, sync_project_files
 from frameflow.reference_authority import normalize_reference_authority, ordered_reference_snapshot
 from frameflow.recovery import RecoveryError, apply_recovery_plan, create_recovery_preview, create_verified_backup, export_project, recovery_scan
-from frameflow.providers import ASSET_PROMPT_OUTPUT_SCHEMA, FUSION_PROMPT_OUTPUT_SCHEMA, MINIMAX_DEFAULT_REGION, MINIMAX_DEFAULT_TTS_MODEL, MINIMAX_DEFAULT_VOICE_ID, MINIMAX_REGION_BASE_URLS, MINIMAX_REGIONS, MINIMAX_TTS_FORMATS, MINIMAX_TTS_MODELS, MINIMAX_TTS_SPEED_MAX, MINIMAX_TTS_SPEED_MIN, PROJECT_PATCH_SCHEMA, REGULATOR_OUTPUT_SCHEMA, STORYBOARD_OUTPUT_SCHEMA, ProviderError, language_boost_for_locale, minimax_documented_voice_catalog, minimax_region, minimax_speech, minimax_tts_payload, openai_assistant, openai_image, openai_image_edit, openai_speech, openai_structured, probe_profile, validate_minimax_tts_text
+from frameflow.providers import ASSET_PROMPT_OUTPUT_SCHEMA, FUSION_PROMPT_OUTPUT_SCHEMA, MINIMAX_DEFAULT_REGION, MINIMAX_DEFAULT_TTS_MODEL, MINIMAX_DEFAULT_VOICE_ID, MINIMAX_REGION_BASE_URLS, MINIMAX_REGIONS, MINIMAX_TTS_FORMATS, MINIMAX_TTS_MODELS, MINIMAX_TTS_SPEED_MAX, MINIMAX_TTS_SPEED_MIN, PROJECT_PATCH_SCHEMA, REGULATOR_OUTPUT_SCHEMA, STORYBOARD_OUTPUT_SCHEMA, ProviderError, language_boost_for_locale, minimax_documented_voice_catalog, minimax_region, minimax_speech, minimax_tts_payload, minimax_voice_design, openai_assistant, openai_image, openai_image_edit, openai_speech, openai_structured, probe_profile, validate_minimax_tts_text
 from frameflow.runtime import execute_v3_run
-from frameflow.schemas import AgentPatchPreviewV3, AgentPlanCreateV3, AgentPlanDecisionV3, AgentPatchV3, AgentWorkspaceOperationV3, ArtifactLineageCreateV3, ArtifactMapRequest, ArtifactRegisterRequest, AssetAssignmentV3, AssetBoardSyncV3, AssetBoardUpdateV3, AssetComparisonCreate, AssetComparisonReview, AssetCreateV3, AssetDuplicateV3, AssetImageGenerate, AssetManualProductionApproval, AssetMetadataUpdate, AssetPromptRunCreate, AssetReferenceRole, AssistantApplyV3, AssistantConversationCreateV3, AssistantConversationUpdateV3, AssistantExternalConfirmationV3, AssistantRejectV3, AssistantRunCreateV3, AssistantRequest, AudioAssistantDraftApplyV3, AudioTextConfirmationV3, BackupCreateV3, CapabilityBinding, CredentialImport, CredentialWrite, FusionPromptRunCreate, ImageEdit, ImageGenerate, ProjectCreateV3, ProjectImport, ProjectMetadataUpdate, PromptCreateRequest, PromptQADecision, PromptRebuildRequest, PromptReviseRequest, ProviderProfileCreate, ProviderProfileUpdate, ProviderRoutePreviewV3, ProxyCreateV3, QADecisionSubmit, QARunCreate, RecoveryApplyV3, RecoveryPreviewV3, RenderCreateV3, RenderDecisionV3, RenderEstimateV3, RenderRequest, ResolutionRequest, RunDecisionV3, SeedancePackageCreate, SpeechGenerate, StoryDocumentUpdateV3, StoryOptimizationCreate, StoryRollbackV3, StoryboardAcceptRequest, TaskCreate, TimelineAssemblyRequestV3, TimelinePreviewRequestV3, WorkflowGraphUpdateV3, WorkflowRunCreate, WorkflowRunCreateV3, WorkflowRunEstimateV3, WorkflowTemplateApplyV3, WorkflowTemplateCreateV3
+from frameflow.schemas import AgentPatchPreviewV3, AgentPlanCreateV3, AgentPlanDecisionV3, AgentPatchV3, AgentWorkspaceOperationV3, ArtifactLineageCreateV3, ArtifactMapRequest, ArtifactRegisterRequest, AssetAssignmentV3, AssetBoardSyncV3, AssetBoardUpdateV3, AssetComparisonCreate, AssetComparisonReview, AssetCreateV3, AssetDuplicateV3, AssetImageGenerate, AssetManualProductionApproval, AssetMetadataUpdate, AssetPromptRunCreate, AssetReferenceRole, AssistantApplyV3, AssistantConversationCreateV3, AssistantConversationUpdateV3, AssistantExternalConfirmationV3, AssistantRejectV3, AssistantRunCreateV3, AssistantRequest, AudioAssistantDraftApplyV3, AudioTextConfirmationV3, BackupCreateV3, CapabilityBinding, CredentialImport, CredentialWrite, FusionPromptRunCreate, ImageEdit, ImageGenerate, ProjectCreateV3, ProjectImport, ProjectMetadataUpdate, PromptCreateRequest, PromptQADecision, PromptRebuildRequest, PromptReviseRequest, ProviderProfileCreate, ProviderProfileUpdate, ProviderRoutePreviewV3, ProxyCreateV3, QADecisionSubmit, QARunCreate, RecoveryApplyV3, RecoveryPreviewV3, RenderCreateV3, RenderDecisionV3, RenderEstimateV3, RenderRequest, ResolutionRequest, RunDecisionV3, SeedancePackageCreate, SpeechGenerate, StoryDocumentUpdateV3, StoryOptimizationCreate, StoryRollbackV3, StoryboardAcceptRequest, TaskCreate, TimelineAssemblyRequestV3, TimelinePreviewRequestV3, VoiceDesignGenerate, WorkflowGraphUpdateV3, WorkflowRunCreate, WorkflowRunCreateV3, WorkflowRunEstimateV3, WorkflowTemplateApplyV3, WorkflowTemplateCreateV3
 from frameflow.schemas import TimelineUpdateV3
 from frameflow.secrets_store import SecretStoreError, delete_secret, get_secret, mask_secret, set_secret
 from frameflow.v3 import assemble_approved_timeline, default_graph, ensure_graph, ensure_timeline, estimate_graph, save_graph, save_timeline, select_graph_node_ids, validate_graph, validate_timeline
 from frameflow.workflows import WORKFLOWS, evaluate_project_gates, workflow_manifest
-from frameflow.story import story_checks, story_document
+from frameflow.story import shot_budget, story_checks, story_document
 from frameflow.upload_storage import UploadTooLarge, cleanup_file, cleanup_staged_upload, finalize_staged_upload, stage_upload
 
 ROOT=Path(__file__).resolve().parent
@@ -102,6 +102,7 @@ PROVIDER_PRESETS={
     "jimeng":{"id":"jimeng-default","provider_type":"jimeng_cli","display_name":"即梦 CLI（本机）","base_url":"cli://dreamina","model_config":{"executable":"dreamina","model_version":"seedance2.0fast","models":JIMENG_VIDEO_MODEL_IDS},"capabilities":["video"],"enabled":True,"model_options":JIMENG_VIDEO_MODEL_OPTIONS},
     "minimax":{"id":"minimax-default","provider_type":"minimax","display_name":"MiniMax TTS","base_url":MINIMAX_REGION_BASE_URLS[MINIMAX_DEFAULT_REGION],"model_config":{"region":MINIMAX_DEFAULT_REGION,"tts_model":MINIMAX_DEFAULT_TTS_MODEL,"voice_id":MINIMAX_DEFAULT_VOICE_ID,"language_boost":None,"audio_setting":{"sample_rate":32000,"bitrate":128000,"format":"wav","channel":1}},"capabilities":["tts"],"enabled":True,"model_options":[{"id":model,"label":model,"description":"MiniMax 同步 TTS 模型"} for model in MINIMAX_TTS_MODELS]},
 }
+SEEDED_PROVIDER_IDS=frozenset({"openai-default","jimeng-default","opencode-default","minimax-default"})
 AUTO_ROUTING_PROVIDER_PRIORITY={
     "orchestrator": ["opencode", "openai", "openai_compatible"],
     "vision": ["openai", "openai_compatible", "opencode", "comfyui"],
@@ -168,9 +169,13 @@ def _migrate_legacy_video_profiles(database:Database, now:str) -> None:
     """
     cli_config = {"executable": "dreamina", "model_version": "seedance2.0fast", "models": JIMENG_VIDEO_MODEL_IDS}
     with database.connect() as c:
+        deleted_seeded = {str(row["provider_id"]) for row in c.execute("SELECT provider_id FROM provider_profile_tombstones").fetchall()}
         legacy = c.execute("SELECT * FROM provider_profiles WHERE provider_type='volcengine_ark'").fetchall()
         for row in legacy:
             target_id = "jimeng-default" if row["id"] == "ark-default" else row["id"]
+            if target_id in deleted_seeded:
+                c.execute("DELETE FROM provider_profiles WHERE id=?", (row["id"],))
+                continue
             target = c.execute("SELECT id FROM provider_profiles WHERE id=?", (target_id,)).fetchone()
             if row["id"] == "ark-default" and not target:
                 c.execute("INSERT INTO provider_profiles(id,provider_type,display_name,base_url,credential_ref,model_config_json,capabilities_json,enabled,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)", ("jimeng-default", "jimeng_cli", "即梦 CLI（本机）", "cli://dreamina", "provider:jimeng-default", database.encode(cli_config), database.encode(["video"]), row["enabled"], row["created_at"], now))
@@ -199,7 +204,10 @@ def seed_defaults(database:Database)->None:
         ("minimax-default","minimax","MiniMax TTS","https://api.minimax.cn/v1","provider:minimax-default",minimax_config,["tts"]),
     ]
     with database.connect() as c:
-        for p in profiles:c.execute("INSERT OR IGNORE INTO provider_profiles(id,provider_type,display_name,base_url,credential_ref,model_config_json,capabilities_json,enabled,created_at,updated_at) VALUES(?,?,?,?,?,?,?,1,?,?)",(*p[:5],database.encode(p[5]),database.encode(p[6]),now,now))
+        deleted_seeded = {str(row["provider_id"]) for row in c.execute("SELECT provider_id FROM provider_profile_tombstones").fetchall()}
+        active_profiles = [profile for profile in profiles if profile[0] not in deleted_seeded]
+        active_seeded = {profile[0] for profile in active_profiles}
+        for p in active_profiles:c.execute("INSERT OR IGNORE INTO provider_profiles(id,provider_type,display_name,base_url,credential_ref,model_config_json,capabilities_json,enabled,created_at,updated_at) VALUES(?,?,?,?,?,?,?,1,?,?)",(*p[:5],database.encode(p[5]),database.encode(p[6]),now,now))
         # Existing workspaces used OpenAI as the default TTS route. Migrate
         # only that capability; OpenAI remains available for image/orchestration.
         for row in c.execute("SELECT id,capabilities_json FROM provider_profiles WHERE provider_type='openai'").fetchall():
@@ -210,7 +218,8 @@ def seed_defaults(database:Database)->None:
                 capabilities.append("vision")
             if isinstance(capabilities,list):
                 c.execute("UPDATE provider_profiles SET capabilities_json=?,updated_at=? WHERE id=?",(database.encode(sorted(set(capabilities))),now,row["id"]))
-        c.execute("UPDATE capability_bindings SET provider_profile_id=?,model=?,updated_at=? WHERE capability='tts' AND provider_profile_id!=?",("minimax-default",MINIMAX_DEFAULT_TTS_MODEL,now,"minimax-default"))
+        if "minimax-default" in active_seeded:
+            c.execute("UPDATE capability_bindings SET provider_profile_id=?,model=?,updated_at=? WHERE capability='tts' AND provider_profile_id!=?",("minimax-default",MINIMAX_DEFAULT_TTS_MODEL,now,"minimax-default"))
         for row in c.execute("SELECT id,model_config_json FROM provider_profiles WHERE provider_type='jimeng_cli'").fetchall():
             config=database.decode(row["model_config_json"],{})
             if isinstance(config,dict) and _jimeng_executable_config_error(config):
@@ -238,8 +247,11 @@ def seed_defaults(database:Database)->None:
             config["region"] = str(config.get("region") or MINIMAX_DEFAULT_REGION).lower() if str(config.get("region") or MINIMAX_DEFAULT_REGION).lower() in MINIMAX_REGIONS else MINIMAX_DEFAULT_REGION
             config.setdefault("tts_model", MINIMAX_DEFAULT_TTS_MODEL)
             c.execute("UPDATE provider_profiles SET model_config_json=?,updated_at=? WHERE id=?", (database.encode(config), now, minimax_row["id"]))
-        for cap,pid,model in [("orchestrator","openai-default",DEFAULT_ORCHESTRATOR_MODEL),("image","openai-default","gpt-image-2"),("tts","minimax-default",MINIMAX_DEFAULT_TTS_MODEL),("video","jimeng-default",DEFAULT_VIDEO_MODEL)]:c.execute("INSERT OR IGNORE INTO capability_bindings(capability,provider_profile_id,model,updated_at) VALUES(?,?,?,?)",(cap,pid,model,now))
-        c.execute("UPDATE capability_bindings SET model=?,updated_at=? WHERE capability='video' AND provider_profile_id='jimeng-default'",(DEFAULT_VIDEO_MODEL,now))
+        for cap,pid,model in [("orchestrator","openai-default",DEFAULT_ORCHESTRATOR_MODEL),("image","openai-default","gpt-image-2"),("tts","minimax-default",MINIMAX_DEFAULT_TTS_MODEL),("video","jimeng-default",DEFAULT_VIDEO_MODEL)]:
+            if pid in active_seeded:
+                c.execute("INSERT OR IGNORE INTO capability_bindings(capability,provider_profile_id,model,updated_at) VALUES(?,?,?,?)",(cap,pid,model,now))
+        if "jimeng-default" in active_seeded:
+            c.execute("UPDATE capability_bindings SET model=?,updated_at=? WHERE capability='video' AND provider_profile_id='jimeng-default'",(DEFAULT_VIDEO_MODEL,now))
 
 
 def ensure_daily_startup_backup(database:Database)->dict[str,Any]|None:
@@ -923,7 +935,11 @@ async def add_profile(body:ProviderProfileCreate,request:Request):
     model_settings = _normalize_minimax_config(body.base_url, body.model_settings) if body.provider_type == "minimax" else body.model_settings
     validate_profile_model_config({"provider_type":body.provider_type,"last_health":None},model_settings)
     try:
-        with database.connect() as c:c.execute("INSERT INTO provider_profiles(id,provider_type,display_name,base_url,credential_ref,model_config_json,capabilities_json,enabled,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",(pid,body.provider_type,body.display_name,body.base_url,f"provider:{pid}",database.encode(model_settings),database.encode(body.capabilities),int(body.enabled),now,now))
+        with database.connect() as c:
+            c.execute("INSERT INTO provider_profiles(id,provider_type,display_name,base_url,credential_ref,model_config_json,capabilities_json,enabled,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",(pid,body.provider_type,body.display_name,body.base_url,f"provider:{pid}",database.encode(model_settings),database.encode(body.capabilities),int(body.enabled),now,now))
+            # Re-adding a built-in preset explicitly releases its deletion
+            # marker, so seed_defaults will not hide it on the next restart.
+            c.execute("DELETE FROM provider_profile_tombstones WHERE provider_id=?", (pid,))
     except sqlite3.IntegrityError as exc:raise HTTPException(409,"供应商配置 ID 已存在。") from exc
     return public_profile(get_profile(database,pid))
 @app.patch("/api/provider-profiles/{pid}")
@@ -969,7 +985,6 @@ async def update_profile(pid:str,body:ProviderProfileUpdate,request:Request):
     return public_profile(get_profile(database,pid))
 @app.delete("/api/provider-profiles/{pid}")
 async def remove_profile(pid:str,request:Request):
-    if pid in {"openai-default","jimeng-default","opencode-default","minimax-default"}:raise HTTPException(409,"默认配置不能删除。")
     database=db(request); profile=get_profile(database,pid)
     with database.connect() as c:
         binding_rows = c.execute("SELECT capability FROM capability_bindings WHERE provider_profile_id=? ORDER BY capability",(pid,)).fetchall()
@@ -979,6 +994,11 @@ async def remove_profile(pid:str,request:Request):
         # cannot leave a dangling default route behind.
         c.execute("DELETE FROM capability_bindings WHERE provider_profile_id=?",(pid,))
         c.execute("DELETE FROM provider_profiles WHERE id=?",(pid,))
+        if pid in SEEDED_PROVIDER_IDS:
+            # Built-in profiles are seeded at startup. Keep a durable marker
+            # so a deliberate deletion remains effective across restarts;
+            # adding the matching preset removes the marker transactionally.
+            c.execute("INSERT INTO provider_profile_tombstones(provider_id,deleted_at) VALUES(?,?) ON CONFLICT(provider_id) DO UPDATE SET deleted_at=excluded.deleted_at", (pid, utcnow()))
     _clear_provider_credential(profile)
     return {"ok":True,"provider_id":pid,"removed_capabilities":removed_capabilities}
 @app.post("/api/provider-profiles/{pid}/credential")
@@ -2454,6 +2474,7 @@ async def _execute_assistant_run(application: FastAPI, run_id: str) -> None:
         if assistant_mode == AUDIO_ASSISTANT_MODE:
             capabilities = _effective_capabilities(database)
             audio_context_input = context if isinstance(context, dict) else {}
+            voice_design_only = bool(audio_context_input.get("voice_design_only"))
             tts_provider_id = str(audio_context_input.get("audio_provider_profile_id") or (capabilities.get("tts") or {}).get("provider_profile_id") or "")
             tts_region = str(audio_context_input.get("audio_provider_region") or "").strip().lower() or None
             audio_catalog = _minimax_voice_catalog_payload(database, tts_provider_id, tts_region) if tts_provider_id else {
@@ -2473,6 +2494,7 @@ async def _execute_assistant_run(application: FastAPI, run_id: str) -> None:
                 {"shots": project_document.get("shots") or []},
                 audio_catalog,
                 context.get("audio_focus") if isinstance(context, dict) and isinstance(context.get("audio_focus"), dict) else None,
+                voice_design_only=voice_design_only,
             )
             audio_context["tts_route"] = {
                 "provider_profile_id": tts_provider_id or None,
@@ -2559,6 +2581,8 @@ async def _execute_assistant_run(application: FastAPI, run_id: str) -> None:
                 catalog=audio_catalog,
                 focus=context.get("audio_focus") if isinstance(context, dict) and isinstance(context.get("audio_focus"), dict) else None,
                 contract_snapshot=contract_snapshot(bundle),
+                user_message=str(message_row["content"] or ""),
+                voice_design_only=voice_design_only,
             )
             patch = AgentPatchV3.model_validate(normalized["patch"])
         else:
@@ -4575,36 +4599,101 @@ async def story_rollback_v3(project_id:str,body:StoryRollbackV3,request:Request)
 
 def _storyboard_input_package(doc:dict[str,Any],body:StoryOptimizationCreate)->dict[str,Any]:
     assets=doc.get("assets",[])
+    current_spec=doc.get("storySpec",{}) if isinstance(doc.get("storySpec"),dict) else {}
+    duration=body.duration or doc.get("duration",30)
+    spec_input={
+        **current_spec,
+        "shot_count_min":body.shot_count_min if body.shot_count_min is not None else current_spec.get("shot_count_min"),
+        "shot_count_target":body.shot_count_target if body.shot_count_target is not None else current_spec.get("shot_count_target"),
+        "shot_count_max":body.shot_count_max if body.shot_count_max is not None else current_spec.get("shot_count_max"),
+        "generator_profile":body.generator_profile or body.generator or current_spec.get("generator_profile") or doc.get("generator") or "seedance2.5",
+    }
+    budget=shot_budget(int(duration),spec_input)
+    target_generator=body.generator_profile or body.generator or current_spec.get("generator_profile") or doc.get("generator") or "seedance2.5"
     return {
         "project_id":doc.get("id"),
         "project_name":doc.get("name"),
         "source_script_version_id":body.source_script_version_id,
         "current_script":doc.get("script",""),
         "project_brief":doc.get("brief",""),
-        "duration":body.duration or doc.get("duration",30),
+        "duration":duration,
         "aspect_ratio":body.ratio or doc.get("ratio","9:16"),
-        "target_generator":body.generator or doc.get("generator","Seedance 2.5"),
+        "target_generator":target_generator,
         "existing_asset_ids":[a.get("id") for a in assets],
         "existing_shot_ids":[s.get("id") for s in doc.get("shots",[])],
         "optimization_goal":body.goal,
+        "workflow_mode":body.workflow_mode,
+        "shot_budget":budget,
         "change_strength":body.strength,
         "must_preserve":body.must_preserve,
         "must_avoid":body.must_avoid + body.prohibited_content,
         "prompt_contract":prompt_contract("shot"),
         "story_spec":{
-            "creative_goal":doc.get("storySpec",{}).get("creative_goal") if isinstance(doc.get("storySpec"),dict) else doc.get("brief",""),
-            "audience":body.audience or (doc.get("storySpec",{}).get("audience","") if isinstance(doc.get("storySpec"),dict) else ""),
-            "platform":body.platform or (doc.get("storySpec",{}).get("platform","") if isinstance(doc.get("storySpec"),dict) else ""),
+            "workflow_mode":body.workflow_mode,
+            "creative_goal":current_spec.get("creative_goal") or doc.get("brief",""),
+            "audience":body.audience or current_spec.get("audience", ""),
+            "platform":body.platform or current_spec.get("platform", ""),
             "language":body.language,
             "brand_requirements":body.brand_requirements,
-            "duration":body.duration or doc.get("duration",30),
+            "duration":duration,
             "ratio":body.ratio or doc.get("ratio","9:16"),
-            "structure":(doc.get("storySpec",{}).get("structure",[]) if isinstance(doc.get("storySpec"),dict) else []),
-            "beats":(doc.get("storySpec",{}).get("beats",[]) if isinstance(doc.get("storySpec"),dict) else []),
+            "structure":current_spec.get("structure",[]),
+            "beats":current_spec.get("beats",[]),
+            "shot_budget":budget,
+            "shot_count_min":budget["shot_count_min"],
+            "shot_count_target":budget["shot_count_target"],
+            "shot_count_max":budget["shot_count_max"],
+            "shot_budget_mode":budget["shot_budget_mode"],
+            "shot_budget_source":budget["shot_budget_source"],
+            "generator_profile":target_generator,
         },
     }
 
-def _validate_storyboard_output(result:dict[str,Any])->list[str]:
+def _normalise_storyboard_handoff(result:dict[str,Any])->dict[str,Any]:
+    """Merge repeated stable asset IDs without changing the source script.
+
+    Providers occasionally mention the same character/scene/prop more than
+    once while expanding its shot references. Stable IDs are the contract
+    boundary, so keep the first non-empty scalar definition and union list or
+    mapping fields instead of rejecting an otherwise usable storyboard.
+    """
+    output=deepcopy(result)
+    handoff=output.get("assetHandoff") if isinstance(output.get("assetHandoff"),dict) else {}
+    warnings=[str(value) for value in output.get("warnings",[]) if value]
+    for category in ("characters","scenes","props","soundRequirements"):
+        items=handoff.get(category)
+        if not isinstance(items,list):continue
+        merged:dict[str,dict[str,Any]]={}
+        order:list[str]=[]
+        for item in items:
+            if not isinstance(item,dict):continue
+            asset_id=str(item.get("id") or item.get("assetId") or item.get("asset_id") or "").strip()
+            if not asset_id:
+                continue
+            current=merged.get(asset_id)
+            if current is None:
+                current={**item,"id":asset_id}
+                merged[asset_id]=current
+                order.append(asset_id)
+                continue
+            for key,value in item.items():
+                if key in {"id","assetId","asset_id"} or value in (None,"",[]):
+                    continue
+                existing=current.get(key)
+                if isinstance(existing,list) and isinstance(value,list):
+                    for candidate in value:
+                        if candidate not in existing:existing.append(candidate)
+                elif isinstance(existing,dict) and isinstance(value,dict):
+                    current[key]={**existing,**value}
+                elif existing in (None,""):
+                    current[key]=value
+            warnings.append(f"Asset Handoff {category} 的 {asset_id} 重复定义已合并。")
+        handoff[category]=[merged[asset_id] for asset_id in order]
+    if warnings:output["warnings"]=list(dict.fromkeys(warnings))
+    output["assetHandoff"]=handoff
+    return output
+
+def _validate_storyboard_output(result:dict[str,Any],input_package:dict[str,Any]|None=None)->list[str]:
     issues=[]
     if not isinstance(result.get("proposedScript"),str) or not result["proposedScript"].strip():issues.append("proposedScript 缺失或为空")
     if not isinstance(result.get("shots"),list):issues.append("shots 必须是数组")
@@ -4614,6 +4703,24 @@ def _validate_storyboard_output(result:dict[str,Any])->list[str]:
         for s in result["shots"]:
             for f in ("id","scene","duration","purpose","size","camera","action"):
                 if f not in s or s[f] in (None,""):issues.append(f"镜头缺少必填字段 {f}")
+            if input_package is not None:
+                if s.get("visibleEvent") in (None,"",[]):issues.append(f"visible_event_missing: {s.get('id')}")
+                if s.get("eventConsequence") in (None,"",[]):issues.append(f"event_consequence_missing: {s.get('id')}")
+                plan=s.get("seedancePlan") if isinstance(s.get("seedancePlan"),dict) else {}
+                if not plan.get("model") or not plan.get("generationMode"):issues.append(f"seedance_plan_missing: {s.get('id')}")
+                continuity=s.get("continuity")
+                if not isinstance(continuity,dict) or not any(continuity.get(field) for field in ("cutIn","cutOut","firstFrame","lastFrame","editBridge")):
+                    issues.append(f"continuity_incomplete: {s.get('id')}")
+            plan=s.get("seedancePlan") if isinstance(s.get("seedancePlan"),dict) else {}
+            model=str(plan.get("model") or s.get("generator") or (input_package or {}).get("target_generator") or "").lower()
+            try:shot_duration=float(s.get("duration") or 0)
+            except (TypeError,ValueError):shot_duration=0
+            if "2.0" in model and shot_duration>15:issues.append(f"generator_duration_limit: {s.get('id')} 超过 Seedance 2.0 的 15 秒单镜头限制")
+            if "2.5" in model and shot_duration>30:issues.append(f"generator_duration_limit: {s.get('id')} 超过 Seedance 2.5 的 30 秒单次叙事规划上限")
+        budget=(input_package or {}).get("shot_budget") if isinstance((input_package or {}).get("shot_budget"),dict) else {}
+        maximum=int(budget.get("shot_count_max") or 0)
+        if maximum and len(result["shots"])>maximum:
+            issues.append(f"shot_budget_exceeded: 候选 {len(result['shots'])} 个镜头超过上限 {maximum} 个")
     handoff=result.get("assetHandoff") or {}
     for key in ("characters","scenes","props"):
         items=handoff.get(key) or []
@@ -4644,7 +4751,41 @@ def _canonical_story_shot(shot:dict[str,Any])->dict[str,Any]:
         must_avoid=source.get("mustAvoid") or [],
         context={"shots":[source],"references":source.get("referenceRoles") or []},
     )
-    return {**source,**canonical,"mustPreserve":canonical["promptPack"].get("mustPreserve") or [],"mustAvoid":canonical["promptPack"].get("mustAvoid") or []}
+    raw_plan=source.get("seedancePlan") if isinstance(source.get("seedancePlan"),dict) else {}
+    model=str(raw_plan.get("model") or source.get("generatorProfile") or "seedance2.5")
+    default_mode="reference_to_video" if source.get("referenceRoles") else "text_to_video"
+    seedance_plan={
+        "model":model,
+        "generationMode":str(raw_plan.get("generationMode") or source.get("generationMethod") or default_mode),
+        "targetDuration":float(raw_plan.get("targetDuration") or source.get("duration") or 0),
+        "aspectRatio":str(raw_plan.get("aspectRatio") or "16:9"),
+        "clipUnit":str(raw_plan.get("clipUnit") or "one_shot_one_reviewable_clip"),
+        "promptTimeline":raw_plan.get("promptTimeline") or [],
+        "startState":raw_plan.get("startState") or source.get("firstFrame") or "",
+        "playableChange":raw_plan.get("playableChange") or source.get("visibleEvent") or source.get("action") or "",
+        "endState":raw_plan.get("endState") or source.get("lastFrame") or "",
+        "continuityStrategy":raw_plan.get("continuityStrategy") or source.get("continuity") or "",
+        "referenceAssignments":raw_plan.get("referenceAssignments") or source.get("referenceRoles") or [],
+        "audioStrategy":raw_plan.get("audioStrategy") or source.get("sound") or "",
+        "mustPreserve":raw_plan.get("mustPreserve") or source.get("mustPreserve") or [],
+        "mustAvoid":raw_plan.get("mustAvoid") or source.get("mustAvoid") or [],
+        "riskFlags":raw_plan.get("riskFlags") or source.get("risks") or [],
+        "fallbackRoute":raw_plan.get("fallbackRoute") or "拆分为单一事件镜头并减少参考输入",
+    }
+    continuity=source.get("continuity") if isinstance(source.get("continuity"),dict) else {
+        "screenDirection":source.get("screenDirection") or "",
+        "eyeline":source.get("eyeline") or "",
+        "motionVector":source.get("motionVector") or "",
+        "cutIn":source.get("cutIn") or "",
+        "cutOut":source.get("cutOut") or "",
+        "matchAction":source.get("matchAction") or "",
+        "editBridge":source.get("editBridge") or "",
+        "preRoll":source.get("preRoll") or "",
+        "postRoll":source.get("postRoll") or "",
+        "firstFrame":source.get("firstFrame") or "",
+        "lastFrame":source.get("lastFrame") or "",
+    }
+    return {**source,**canonical,"seedancePlan":seedance_plan,"continuity":continuity,"mustPreserve":canonical["promptPack"].get("mustPreserve") or [],"mustAvoid":canonical["promptPack"].get("mustAvoid") or []}
 
 def _validate_regulator_output(result:dict[str,Any])->list[str]:
     issues=[]
@@ -4664,10 +4805,19 @@ async def _run_storyboard_agent(request:Request,project_id:str,input_package:dic
     database=db(request); profile,bound=resolve_profile(database,"orchestrator"); model=bound or profile["model_config"].get("orchestrator_model")
     if not model:raise HTTPException(409,"尚未配置编排模型，无法运行脚本优化。")
     validate_orchestrator_model(profile,model)
+    workflow_mode=str(input_package.get("workflow_mode") or "optimize_script_and_storyboard")
+    source_rule=("当前是 storyboard_from_source：原始剧本文字是锁定来源。proposedScript 必须逐字返回 current_script，不得改写、润色、压缩或替换；只提出场景和镜头候选。"
+                 if workflow_mode=="storyboard_from_source" else "当前是 optimize_script_and_storyboard：可产出可拍摄的剧本候选，但必须保留用户故事意图。")
     instructions=("你是 FRAMEFLOW 的 video-script-storyboard Skill。把用户的故事/脚本转成可执行分镜，"
                   "保留核心意图，只输出结构化 JSON，稳定 ID（SH/C/S/P）尽量保留。不要生成图片或视频。"
                   "每个镜头都要完成一次 camera-visible detail pass：明确一个主事件及其物理后果、空间地理、材质证据、"
                   "光线因果、镜头执行、空气行为、首尾帧连续性和参考图角色；不要只写风格形容词或关键词堆。"
+                  "每个镜头的 continuity 必须是对象，并同时填写 screenDirection、eyeline、motionVector、cutIn、cutOut、matchAction、editBridge、preRoll、postRoll、firstFrame、lastFrame；若某项不适用，填写‘无’或‘待确认’，不能省略字段。"
+                  "严格遵守 shot_budget：一个镜头只承担一个可见主事件和一个叙事变化；优先合并重复建立镜头、重复反应镜头和可由声音/转场完成的内容。"
+                  "为每个镜头输出完整 seedancePlan：model、generationMode、targetDuration、aspectRatio、clipUnit、promptTimeline、startState、playableChange、endState、continuityStrategy、referenceAssignments、audioStrategy、mustPreserve、mustAvoid、riskFlags、fallbackRoute 均必须出现；无内容时使用空数组或待确认文本，不能省略字段。"
+                  "assetHandoff 中每个资产都要使用稳定 ID，并用 generationReferenceAssets 明确列出参考资产 ID、角色、是否必需和用途；声音资产不能要求视觉参考图。"
+                  + source_rule
+                  + ("这是一次合同修复重试。上一候选缺少或错误填写结构化字段；请优先完整返回 schema 要求的 proposedScript、scenes、shots、continuity、seedancePlan 和 assetHandoff，不要只返回解释文字。" if input_package.get("contract_repair") else "")
                   + prompt_contract_instructions())
     text=f"请按完整前期包处理以下项目。\n\n输入包：{json.dumps(input_package,ensure_ascii=False)}"
     if profile["provider_type"]=="opencode":
@@ -4680,6 +4830,8 @@ async def _run_regulator_agent(request:Request,project_id:str,input_package:dict
     validate_orchestrator_model(profile,model)
     instructions=("你是 FRAMEFLOW 的 video-asset-regulator Skill。审计分镜、提取并分级资产、建立逐镜头依赖和下游路由，"
                   "同时为下游 Prompt 编写保留可复用的身份锚点、镜头可见细节、空间/材质/光线证据和连续性约束。"
+                  "资产生产工作台负责最终排序；你必须提供无歧义的 assetRequirements、dependencies、routingPlan 和 generationReferenceAssets。"
+                  "每个视觉资产的参考资产都要写明身份/服装/场景/道具/连续性等具体角色；基础角色、基础场景或独立道具可以没有参考图，但必须明确标记为 base_asset。声音资产只交接朗读文本和声音元数据，不得要求图片参考图。"
                   "只输出结构化 JSON。你不生成最终 Prompt、图片或视频，也不伪造领域 QA 结果。"
                   + prompt_contract_instructions())
     text=f"请审计以下分镜交接包。\n\n输入包：{json.dumps(input_package,ensure_ascii=False)}"
@@ -5659,8 +5811,11 @@ async def create_story_run(project_id:str,body:StoryOptimizationCreate,request:R
     doc.setdefault("scriptVersions",[]).append({"id":sid,"parentId":doc["scriptVersions"][-1]["id"] if doc["scriptVersions"] else None,"status":"active" if n==1 else "candidate","text":doc.get("script",""),"source":"user","skillId":None,"providerProfileId":None,"model":None,"createdAt":now,"acceptedAt":None})
     save_project_document(request,doc,rev)
     rid=asset_audit.new_id("STORYRUN")
+    input_package=_storyboard_input_package(doc,body)
+    input_package["source_script_version_id"]=sid
+    input_package["source_script_snapshot"]={"version_id":sid,"text":doc.get("script","")}
     with database.connect() as c:
-        c.execute("INSERT INTO story_workflow_chains(id,project_id,source_script_version_id,active_step,status,input_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",(rid,project_id,sid,"draft","draft",database.encode(_storyboard_input_package(doc,body)),now,now))
+        c.execute("INSERT INTO story_workflow_chains(id,project_id,source_script_version_id,active_step,status,input_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",(rid,project_id,sid,"draft","draft",database.encode(input_package),now,now))
     return {"id":rid,"project_id":project_id,"status":"draft","active_step":"draft"}
 
 @app.get("/api/v2/projects/{project_id}/story/runs")
@@ -5692,8 +5847,29 @@ async def start_story_run(run_id:str,request:Request):
     if row["status"]!="draft":raise HTTPException(409,"运行不处于 draft 状态。")
     project_id=row["project_id"]; _set_chain(database,run_id,active_step="running_storyboard",status="running_storyboard")
     try:
-        result=await _run_storyboard_agent(request,project_id,database.decode(row["input_json"],{}))
-        issues=_validate_storyboard_output(result)
+        input_package=database.decode(row["input_json"],{})
+        def prepare_storyboard_result(raw_result:dict[str,Any])->dict[str,Any]:
+            prepared=raw_result
+            if str(input_package.get("workflow_mode") or "") == "storyboard_from_source":
+                # The direct mode is an immutable-source workflow.  Even if a
+                # provider returns a rewritten script, never let it reach the
+                # candidate or acceptance paths.
+                prepared={**prepared,"workflowMode":"storyboard_from_source","proposedScript":str(input_package.get("current_script") or ""),"sourceScript":str(input_package.get("current_script") or ""),"sourceScriptVersionId":input_package.get("source_script_version_id")}
+            prepared=_normalise_storyboard_handoff(prepared)
+            prepared.setdefault("workflowMode",input_package.get("workflow_mode"))
+            prepared.setdefault("shotBudgetAssessment",input_package.get("shot_budget") or {})
+            prepared.setdefault("assetHandoff",{})
+            prepared["assetHandoff"]={**(prepared.get("assetHandoff") if isinstance(prepared.get("assetHandoff"),dict) else {}),"handoffVersion":"storyboard-handoff-v1","sourceStoryboardVersionId":input_package.get("source_script_version_id"),"projectId":project_id,"targetGenerator":input_package.get("target_generator"),"returnExpected":"video-asset-regulator"}
+            return prepared
+
+        result=prepare_storyboard_result(await _run_storyboard_agent(request,project_id,input_package))
+        issues=_validate_storyboard_output(result,input_package)
+        retryable_contract_issues=bool(issues) and not any(issue.startswith(("shot_budget_exceeded", "generator_duration_limit")) for issue in issues)
+        if retryable_contract_issues and not input_package.get("contract_repair"):
+            retry_input={**input_package,"contract_repair":True}
+            result=prepare_storyboard_result(await _run_storyboard_agent(request,project_id,retry_input))
+            issues=_validate_storyboard_output(result,input_package)
+            if not issues:result["contractRepairRetry"]=True
         if issues:
             raise ProviderError("结构化输出不合法："+"; ".join(issues),"validation",422)
         _set_chain(database,run_id,active_step="storyboard_review_required",status="storyboard_review_required",storyboard_output_json=database.encode(result),storyboard_run_id=asset_audit.new_id("RUN"),provider_profile_id=result.get("model"))
@@ -5714,14 +5890,22 @@ async def accept_storyboard(run_id:str,body:StoryboardAcceptRequest,request:Requ
     if not row:raise HTTPException(404,"脚本优化运行不存在。")
     if row["status"]!="storyboard_review_required":raise HTTPException(409,"运行不处于待审阅状态。")
     output=database.decode(row["storyboard_output_json"]); project_id=row["project_id"]; doc,rev=await read_project_doc(request,project_id)
-    proposed=output.get("proposedScript","")
+    input_package=database.decode(row["input_json"],{})
+    workflow_mode=str(input_package.get("workflow_mode") or output.get("workflowMode") or "optimize_script_and_storyboard")
+    direct_source=str(input_package.get("current_script") or output.get("sourceScript") or "")
+    proposed=direct_source if workflow_mode=="storyboard_from_source" else str(output.get("proposedScript") or "")
     proposed_shots=[_canonical_story_shot(item) for item in output.get("shots",[]) if isinstance(item,dict)]
     output={**output,"shots":proposed_shots}
+    spec=doc.setdefault("storySpec",{})
+    spec["workflow_mode"]=workflow_mode
+    input_budget=input_package.get("shot_budget") if isinstance(input_package.get("shot_budget"),dict) else {}
+    for budget_key in ("shot_count_min","shot_count_target","shot_count_max","shot_budget_mode","shot_budget_source"):
+        if input_budget.get(budget_key) is not None:spec[budget_key]=input_budget.get(budget_key)
+    if input_package.get("target_generator"):spec["generator_profile"]=input_package.get("target_generator")
     if isinstance(output.get("structure"),list) or isinstance(output.get("beats"),list):
-        spec=doc.setdefault("storySpec",{})
         if isinstance(output.get("structure"),list):spec["structure"]=[item for item in output["structure"] if isinstance(item,dict)]
         if isinstance(output.get("beats"),list):spec["beats"]=[item for item in output["beats"] if isinstance(item,dict)]
-    if body.scope in {"all","script_only"} and proposed:
+    if workflow_mode != "storyboard_from_source" and body.scope in {"all","script_only"} and proposed and not output.get("scriptAccepted"):
         doc["script"]=proposed
         sv={"id":_story_version_id("script",project_id,len(doc.get("scriptVersions",[]))+1),"parentId":row["source_script_version_id"],"status":"active","text":proposed,"source":"agent","skillId":"video-script-storyboard","providerProfileId":None,"model":output.get("model"),"createdAt":utcnow(),"acceptedAt":utcnow()}
         for v in doc.get("scriptVersions",[]):v["status"]="superseded" if v.get("status")=="active" else v.get("status")
@@ -5745,14 +5929,24 @@ async def accept_storyboard(run_id:str,body:StoryboardAcceptRequest,request:Requ
             if old.get("id") not in proposed_ids and old.get("id") not in [m.get("id") for m in merged]:
                 merged.append({**old,"status":"deprecated"})
         doc["shots"]=merged
-        if isinstance(output.get("scenes"),list) and not body.shot_ids:
-            doc["scenes"]=[scene for scene in output["scenes"] if isinstance(scene,dict)]
+        if isinstance(output.get("scenes"),list):
+            candidate_scenes=[scene for scene in output["scenes"] if isinstance(scene,dict)]
+            if body.shot_ids:
+                selected_scene_ids={str(s.get("scene")) for s in proposed_shots if s.get("id") in chosen and s.get("scene")}
+                existing_scene_ids={str(scene.get("id")) for scene in doc.get("scenes",[]) if isinstance(scene,dict) and scene.get("id")}
+                doc["scenes"]=[*doc.get("scenes",[]),*[scene for scene in candidate_scenes if str(scene.get("id")) in selected_scene_ids and str(scene.get("id")) not in existing_scene_ids]]
+            else:
+                doc["scenes"]=candidate_scenes
         sbv={"id":_story_version_id("storyboard",project_id,len(doc.get("storyboardVersions",[]))+1),"parentId":row["source_script_version_id"],"scriptVersionId":doc["scriptVersions"][-1]["id"] if doc.get("scriptVersions") else None,"status":"active","shotIds":[s.get("id") for s in merged],"package":output,"createdAt":utcnow(),"acceptedAt":utcnow()}
         for v in doc.get("storyboardVersions",[]):v["status"]="superseded" if v.get("status")=="active" else v.get("status")
         doc.setdefault("storyboardVersions",[]).append(sbv)
     _synchronise_fusion_slots(doc,create=bool(doc.get("assetPromptRuns")))
     next_revision=save_project_document(request,doc,rev)
     board=_sync_asset_board_after_document(database,project_id,doc,next_revision)
+    if body.scope == "script_only":
+        output={**output,"scriptAccepted":True}
+        _set_chain(database,run_id,active_step="storyboard_review_required",status="storyboard_review_required",storyboard_output_json=database.encode(output))
+        return {"run":story_chain_payload(database,_chain_row(database,run_id)),"project_revision":next_revision,"library":_library_payload(database,project_id,doc),"asset_board":board}
     # Now run regulator stage.
     _set_chain(database,run_id,active_step="running_regulator",status="running_regulator",storyboard_output_json=database.encode(output))
     try:
@@ -5773,30 +5967,124 @@ async def accept_regulator(run_id:str,request:Request):
     database=db(request); row=_chain_row(database,run_id)
     if not row:raise HTTPException(404,"脚本优化运行不存在。")
     if row["status"]!="regulator_review_required":raise HTTPException(409,"运行不处于资产总控待审阅状态。")
-    output=database.decode(row["regulator_output_json"]); project_id=row["project_id"]; doc,rev=await read_project_doc(request,project_id)
-    # Apply extracted assets (create missing logical assets, keep stable IDs).
+    output=database.decode(row["regulator_output_json"]); storyboard_output=database.decode(row["storyboard_output_json"],{}); project_id=row["project_id"]; doc,rev=await read_project_doc(request,project_id)
+    handoff=storyboard_output.get("assetHandoff") if isinstance(storyboard_output.get("assetHandoff"),dict) else {}
+    handoff_items=[]
+    for category in ("characters","scenes","props","soundRequirements"):
+        for item in handoff.get(category) or []:
+            if isinstance(item,dict):
+                handoff_items.append({**item,"assetClass":item.get("assetClass") or ("audio" if category=="soundRequirements" else category.rstrip("s"))})
+    handoff_by_id={str(item.get("assetId") or item.get("id")):item for item in handoff_items if item.get("assetId") or item.get("id")}
     existing={a.get("id"):a for a in doc.get("assets",[])}
+    existing_ids={str(asset_id) for asset_id in existing if asset_id}
+    extracted_ids={str(item.get("id")) for item in output.get("assetExtraction",[]) if isinstance(item,dict) and item.get("id")}
+    known_ids={str(asset_id) for asset_id in existing if asset_id} | extracted_ids | set(handoff_by_id)
+    handoff_issues=[]; reference_edge_count=0; reference_ids=[]
+    for asset_id,item in handoff_by_id.items():
+        refs=item.get("generationReferenceAssets") or item.get("generation_reference_assets") or item.get("references") or []
+        if not isinstance(refs,list):refs=[refs]
+        for reference in refs:
+            if not isinstance(reference,dict):
+                handoff_issues.append({"code":"reference_role_missing","asset_id":asset_id,"message":"参考资产必须是带职责的对象。"}); continue
+            ref_id=str(reference.get("assetId") or reference.get("asset_id") or reference.get("referenceId") or reference.get("reference_id") or "")
+            role=str(reference.get("role") or reference.get("referenceRole") or reference.get("reference_role") or "").strip()
+            reference_edge_count+=1
+            if ref_id:reference_ids.append(ref_id)
+            if not ref_id:handoff_issues.append({"code":"reference_id_unknown","asset_id":asset_id,"message":"参考图计划缺少资产 ID。"})
+            elif ref_id==asset_id:handoff_issues.append({"code":"reference_self_reference","asset_id":asset_id,"reference_id":ref_id,"message":"资产不得引用自身。"})
+            elif ref_id not in known_ids:handoff_issues.append({"code":"reference_id_unknown","asset_id":asset_id,"reference_id":ref_id,"message":f"参考资产 {ref_id} 不存在于当前交接包。"})
+            if not role:handoff_issues.append({"code":"reference_role_missing","asset_id":asset_id,"reference_id":ref_id,"message":"每张参考图必须声明控制职责。"})
+    for index,sound in enumerate(handoff.get("soundRequirements") or []):
+        if isinstance(sound,dict) and not (sound.get("sourceText") or sound.get("source_text") or sound.get("textStatus")):
+            handoff_issues.append({"code":"audio_source_text_missing","path":f"assetHandoff.soundRequirements[{index}]","message":"声音资产必须提供朗读文本或明确待确认状态。"})
+    for requirement in output.get("assetRequirements",[]):
+        if isinstance(requirement,dict) and requirement.get("assetId") and str(requirement.get("assetId")) not in known_ids:
+            handoff_issues.append({"code":"asset_id_unknown","shot_id":requirement.get("shotId"),"asset_id":requirement.get("assetId"),"message":f"镜头引用的资产 {requirement.get('assetId')} 未在交接包或项目资产中登记。"})
+    if handoff_issues:
+        raise HTTPException(422,{"code":"handoff_not_ready","message":"故事到资产交接校验失败。","issues":handoff_issues})
+    # Apply extracted assets (create missing logical assets, keep stable IDs).
     for item in output.get("assetExtraction",[]):
         if not isinstance(item,dict) or not item.get("id"):continue
-        if item["id"] in existing:continue
+        handoff_item=handoff_by_id.get(str(item["id"]),{})
         cls=item.get("assetClass") or item.get("class") or "unknown"
         skill={cls:"character","scene":"scene","prop":"prop","fusion":"fusion","audio":"audio"}.get(cls,"regulator")
-        existing[item["id"]]={"id":item["id"],"name":item.get("name") or item["id"],"type":asset_audit.CLASS_TYPE_LABEL.get(cls,cls),"grade":item.get("priority") or item.get("grade") or "B","status":"missing","note":item.get("role") or "","skill":skill}
+        refs=handoff_item.get("generationReferenceAssets") or handoff_item.get("generation_reference_assets") or handoff_item.get("references") or []
+        assignments=handoff_item.get("referenceAssignments") or handoff_item.get("referenceRoles") or []
+        metadata={"asset_class":cls,"production_role":handoff_item.get("productionRole") or item.get("role") or "","required_readiness":handoff_item.get("requiredReadiness") or "production","relevant_shots":handoff_item.get("relevantShots") or [],"depends_on_asset_ids":handoff_item.get("dependsOnAssetIds") or [],"generationReferenceAssets":refs,"generation_reference_assets":refs,"referenceRoles":assignments,"reference_roles":assignments,"prompt_context":handoff_item.get("promptContext") or item.get("promptContext") or "","seedanceCompatibility":handoff_item.get("seedanceCompatibility") or {},"base_asset":handoff_item.get("productionRole") == "base_asset" or item.get("productionRole") == "base_asset"}
+        if item["id"] in existing:
+            existing[item["id"]]["assetMetadata"]={**(_asset_metadata(existing[item["id"]]) or {}),**metadata}
+            continue
+        existing[item["id"]]={"id":item["id"],"name":item.get("name") or handoff_item.get("name") or item["id"],"type":asset_audit.CLASS_TYPE_LABEL.get(cls,cls),"assetClass":cls,"grade":item.get("priority") or item.get("grade") or handoff_item.get("priority") or "B","status":"missing","note":item.get("role") or handoff_item.get("productionRole") or "","skill":skill,"assetMetadata":metadata}
     doc["assets"]=list(existing.values())
     # Apply per-shot asset requirements.
     req_map={}
     for r in output.get("assetRequirements",[]):
         if not isinstance(r,dict):continue
-        req_map.setdefault(r.get("shotId"),[]).append({"assetId":r.get("assetId"),"assetClass":r.get("assetClass"),"role":r.get("role",""),"priority":r.get("priority","B"),"required":r.get("required",True),"requiredReadiness":r.get("requiredReadiness","production"),"source":"video-asset-regulator"})
+        handoff_item=handoff_by_id.get(str(r.get("assetId")),{})
+        refs=handoff_item.get("generationReferenceAssets") or handoff_item.get("generation_reference_assets") or []
+        roles=handoff_item.get("referenceAssignments") or handoff_item.get("referenceRoles") or []
+        req_map.setdefault(r.get("shotId"),[]).append({"assetId":r.get("assetId"),"assetClass":r.get("assetClass"),"role":r.get("role",""),"priority":r.get("priority","B"),"required":r.get("required",True),"requiredReadiness":r.get("requiredReadiness","production"),"generationReferenceAssets":refs,"referenceRoles":roles,"source":"video-asset-regulator"})
     for s in doc.get("shots",[]):s["assetRequirements"]=req_map.get(s.get("id"),[])
+    # Persist the same normalized edges consumed by the asset board.  The
+    # story desk declares the graph; the asset desk remains the authority for
+    # readiness and production order.
+    now=utcnow()
+    with database.connect() as connection:
+        for shot_id,requirements in req_map.items():
+            for requirement in requirements:
+                asset_id=str(requirement.get("assetId") or "")
+                if not asset_id or asset_id not in existing:continue
+                already=connection.execute("SELECT 1 FROM asset_dependencies_v4 WHERE project_id=? AND logical_asset_id=? AND dependency_asset_id=? AND shot_id=? AND relation='shot_dependency'",(project_id,asset_id,asset_id,str(shot_id))).fetchone()
+                if already:continue
+                connection.execute("INSERT INTO asset_dependencies_v4(id,project_id,logical_asset_id,dependency_asset_id,shot_id,relation,role,required,created_at) VALUES(?,?,?,?,?,?,?,?,?)",(asset_audit.new_id("DEP"),project_id,asset_id,asset_id,str(shot_id),"shot_dependency",requirement.get("role") or "asset reference",int(bool(requirement.get("required",True))),now))
+        for asset_id,item in handoff_by_id.items():
+            if asset_id not in existing:continue
+            for dependency_id in item.get("dependsOnAssetIds") or item.get("depends_on_asset_ids") or []:
+                dependency_id=str(dependency_id or "")
+                if not dependency_id or dependency_id==asset_id or dependency_id not in existing:continue
+                already=connection.execute("SELECT 1 FROM asset_dependencies_v4 WHERE project_id=? AND logical_asset_id=? AND dependency_asset_id=? AND relation='requires'",(project_id,asset_id,dependency_id)).fetchone()
+                if not already:
+                    connection.execute("INSERT INTO asset_dependencies_v4(id,project_id,logical_asset_id,dependency_asset_id,shot_id,relation,role,required,created_at) VALUES(?,?,?,?,?,?,?,?,?)",(asset_audit.new_id("DEP"),project_id,asset_id,dependency_id,None,"requires",item.get("productionRole") or "资产前置依赖",1,now))
+            refs=item.get("generationReferenceAssets") or item.get("generation_reference_assets") or item.get("references") or []
+            if not isinstance(refs,list):refs=[refs]
+            for reference in refs:
+                if not isinstance(reference,dict):continue
+                ref_id=str(reference.get("assetId") or reference.get("asset_id") or reference.get("referenceId") or reference.get("reference_id") or "")
+                role=str(reference.get("role") or reference.get("referenceRole") or reference.get("reference_role") or "").strip()
+                if not ref_id or not role:continue
+                already=connection.execute("SELECT 1 FROM asset_reference_roles_v4 WHERE project_id=? AND logical_asset_id=? AND reference_id=? AND role=?",(project_id,asset_id,ref_id,role)).fetchone()
+                if already:continue
+                connection.execute("INSERT INTO asset_reference_roles_v4(id,project_id,logical_asset_id,reference_id,reference_kind,artifact_id,role,source,notes,priority,scope,authority,conflict_group,effective_version,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(asset_audit.new_id("REF"),project_id,asset_id,ref_id,reference.get("referenceMode") or "logical_asset",reference.get("artifactId"),role,"storyboard-handoff",reference.get("reason") or "",int(reference.get("priority") or 100),"storyboard","primary",None,None,now,now))
     missingA=[a["id"] for a in doc.get("assets",[]) if str(a.get("grade","")).startswith("A") and not (a.get("status") in {"ready","approved"} and (a.get("artifactId") or a.get("filePath")) and a.get("qaDecision")=="Approved" and a.get("regulatorRegistered") is True)]
-    doc["assetRegulator"]={"version":2,"status":"approved" if not missingA else "draft","auditedAt":utcnow(),"missingA":missingA,"dependencyVersion":"v02"}
+    all_asset_ids={str(asset.get("id")) for asset in doc.get("assets",[]) if asset.get("id")}
+    resolved_refs=sorted({ref_id for ref_id in reference_ids if ref_id in all_asset_ids})
+    unresolved_refs=sorted({ref_id for ref_id in reference_ids if ref_id not in all_asset_ids})
+    awaiting_refs=[ref_id for ref_id in resolved_refs if not any(str(asset.get("id"))==ref_id and (asset.get("artifactId") or asset.get("filePath")) for asset in doc.get("assets",[]))]
+    production_preview=[]
+    preview_seen=set()
+    for asset in doc.get("assets",[]):
+        asset_id=str(asset.get("id") or "")
+        if not asset_id or asset_id in preview_seen:continue
+        metadata=_asset_metadata(asset)
+        deps=metadata.get("depends_on_asset_ids") or []
+        if not deps:
+            production_preview.append({"assetId":asset_id,"position":len(production_preview)+1,"dependsOnAssetIds":[]})
+            preview_seen.add(asset_id)
+    for asset in doc.get("assets",[]):
+        asset_id=str(asset.get("id") or "")
+        if not asset_id or asset_id in preview_seen:continue
+        metadata=_asset_metadata(asset)
+        production_preview.append({"assetId":asset_id,"position":len(production_preview)+1,"dependsOnAssetIds":metadata.get("depends_on_asset_ids") or []})
+        preview_seen.add(asset_id)
+    handoff_receipt={"createdAssets":[str(item.get("id")) for item in output.get("assetExtraction",[]) if isinstance(item,dict) and item.get("id") and str(item.get("id")) not in existing_ids],"updatedAssets":[str(item.get("id")) for item in output.get("assetExtraction",[]) if isinstance(item,dict) and item.get("id") and str(item.get("id")) in existing_ids],"shotAssetEdges":sum(len(value) for value in req_map.values()),"referenceAssetEdges":reference_edge_count,"resolvedAssetIds":sorted(all_asset_ids & (set(reference_ids)|extracted_ids)),"unresolvedAssetIds":unresolved_refs,"awaitingReferenceAssets":awaiting_refs,"productionOrderPreview":production_preview,"fusionSlotStates":[{"shotId":shot.get("id"),"status":"awaiting_assets" if shot.get("assetRequirements") else "not_required"} for shot in doc.get("shots",[])],"status":"ready"}
+    doc["assetHandoffReceipt"]=handoff_receipt
+    doc["assetRegulator"]={"version":2,"status":"approved" if not missingA else "draft","auditedAt":utcnow(),"missingA":missingA,"dependencyVersion":"v02","handoffReceipt":handoff_receipt}
     doc.setdefault("storyWorkflowRuns",[]).append({"runId":run_id,"acceptedAt":utcnow(),"step":"regulator"})
     _synchronise_fusion_slots(doc,create=bool(doc.get("assetPromptRuns")))
     next_revision=save_project_document(request,doc,rev)
     board=_sync_asset_board_after_document(database,project_id,doc,next_revision)
     _set_chain(database,run_id,active_step="succeeded",status="succeeded")
-    return {"run":story_chain_payload(database,_chain_row(database,run_id)),"missingA":missingA,"project_revision":next_revision,"library":_library_payload(database,project_id,doc),"asset_board":board}
+    return {"run":story_chain_payload(database,_chain_row(database,run_id)),"missingA":missingA,"handoffReceipt":handoff_receipt,"handoffIssues":[],"project_revision":next_revision,"library":_library_payload(database,project_id,doc),"asset_board":board}
 
 @app.post("/api/v2/story-runs/{run_id}/reject-storyboard")
 @app.post("/api/story-optimization-runs/{run_id}/reject-storyboard")
@@ -6050,12 +6338,129 @@ async def generate_speech(body:SpeechGenerate,request:Request):
     return {"url":artifact_url(body.project_id,dest),"filename":dest.name,"model":model,"voice":voice_id,"format":body.format,"duration":audio_duration(dest),"artifact_id":artifact["id"],"provider":profile["display_name"],"provider_type":"minimax","provider_profile_id":profile["id"],"provider_region":selected_region,"source_type":"minimax-tts","source_text":source_text,"provider_text":provider_text,"language":body.language,"locale":body.locale,"language_boost":upstream.get("language_boost"),"trace_id":provider_metadata.get("trace_id"),"extra_info":provider_metadata.get("extra_info",{}),"settings":{"speed":body.speed,"pitch":body.pitch,"volume":body.volume,"format":body.format,"sample_rate":body.sample_rate,"bitrate":body.bitrate},"disclosure":"此声音由 MiniMax AI 合成。"}
 
 
+@app.post("/api/v2/projects/{project_id}/audio/voice-design")
+async def design_project_voice_v3(project_id: str, body: VoiceDesignGenerate, request: Request):
+    """Create one paid MiniMax Voice Design preview as a non-adopted candidate.
+
+    The returned Voice ID is intentionally *not* inserted into ``voices``.
+    Users must explicitly adopt the candidate into a local voice-profile draft
+    and then run auditions before it can be locked for dialogue generation.
+    """
+    if not body.confirmed:
+        raise HTTPException(409, "创建 MiniMax 音色预览会产生费用，请先确认。")
+    database = db(request)
+    doc, revision = await read_project_doc(request, project_id)
+    if revision != body.expected_revision:
+        raise HTTPException(409, {"message": "声音工作区版本已变化，请刷新后再创建音色预览。", "current_revision": revision})
+    profile, _ = resolve_profile(database, "tts", body.provider_profile_id)
+    if profile["provider_type"] != "minimax":
+        raise HTTPException(409, "Voice Design 当前仅支持已配置的 MiniMax Provider。")
+    if not profile["enabled"]:
+        raise HTTPException(409, "MiniMax Provider 已停用。")
+    selected_region = _credential_region_for_profile(profile, body.provider_region)
+    if not _minimax_secret(profile, selected_region):
+        raise HTTPException(409, f"MiniMax {MINIMAX_REGION_LABELS[selected_region]}凭据尚未配置。")
+    regional_profile = _regional_minimax_profile(profile, selected_region)
+    request_fingerprint = hashlib.sha256(
+        f"{regional_profile['id']}\0{selected_region}\0{body.prompt.strip()}\0{body.preview_text.strip()}".encode("utf-8")
+    ).hexdigest()
+    existing_audio = _audio_studio_document(doc)
+    existing_candidates = existing_audio.get("voice_design_candidates") if isinstance(existing_audio.get("voice_design_candidates"), list) else []
+    existing_candidate = next(
+        (item for item in existing_candidates if isinstance(item, dict) and item.get("request_fingerprint") == request_fingerprint and item.get("artifact_id")),
+        None,
+    )
+    if existing_candidate:
+        return {
+            "project_id": project_id,
+            "revision": revision,
+            "candidate": existing_candidate,
+            "document": existing_audio,
+            "execution_status": "candidate",
+            "idempotent_reuse": True,
+            "next": "已复用相同 Voice Design 请求的候选；用户仍需试听并明确采用。",
+        }
+    try:
+        preview_audio, result = await minimax_voice_design(
+            regional_profile,
+            get_profile_secret(regional_profile),
+            body.prompt,
+            body.preview_text,
+            body.voice_id,
+        )
+    except ProviderError as exc:
+        raise HTTPException(exc.status_code, {"message": str(exc), "kind": exc.kind}) from exc
+
+    generated_voice_id = str(result["voice_id"])
+    candidate_id = f"VD{secrets.token_hex(6).upper()}"
+    target = safe_project_path(DATA_DIR, project_id, "artifacts/audio")
+    target.mkdir(parents=True, exist_ok=True)
+    # The API response is hex audio but does not guarantee a filename. Keep it
+    # as a candidate preview, not a production file or selected Take.
+    dest = target / f"voice-design-{candidate_id.lower()}.mp3"
+    dest.write_bytes(preview_audio)
+    artifact = register_artifact(
+        database,
+        project_id,
+        "audio",
+        dest,
+        regional_profile,
+        None,
+        None,
+        {
+            "source_type": "minimax-voice-design-preview",
+            "provider_type": "minimax",
+            "provider_region": selected_region,
+            "provider_voice_id": generated_voice_id,
+            "voice_design_prompt": body.prompt,
+            "preview_text": body.preview_text,
+            "ai_generated_disclosure": True,
+            "candidate_only": True,
+        },
+    )
+    now = datetime.now(UTC)
+    candidate = {
+        "id": candidate_id,
+        "status": "candidate",
+        "provider": "minimax",
+        "provider_profile_id": regional_profile["id"],
+        "provider_region": selected_region,
+        "provider_voice_id": generated_voice_id,
+        "provider_voice_name": body.name or generated_voice_id,
+        "source_type": "design",
+        "prompt": body.prompt,
+        "preview_text": body.preview_text,
+        "locale": body.locale,
+        "language": body.language,
+        "character_id": body.character_id,
+        "artifact_id": artifact["id"],
+        "url": artifact_url(project_id, dest),
+        "created_at": now.isoformat(),
+        "expires_at": (now + timedelta(hours=168)).isoformat(),
+        "retention_notice": "MiniMax 自定义 Voice ID 需在 7 天内用于语音合成，否则可能被上游删除。",
+        "request_fingerprint": request_fingerprint,
+    }
+    audio = _audio_studio_document(doc)
+    candidates = audio.get("voice_design_candidates") if isinstance(audio.get("voice_design_candidates"), list) else []
+    audio["voice_design_candidates"] = [item for item in candidates if isinstance(item, dict)] + [candidate]
+    doc["audio"] = audio
+    next_revision = save_project_document(request, doc, revision)
+    return {
+        "project_id": project_id,
+        "revision": next_revision,
+        "candidate": candidate,
+        "document": _audio_studio_document(doc),
+        "execution_status": "candidate",
+        "next": "用户选择“采用为角色声音”后才创建声音草稿；随后仍需三组试听与 QA。",
+    }
+
+
 def _default_audio_studio() -> dict[str, Any]:
     return {
         "version": 2,
         "schema_version": "minimax-speech-audio-v2",
         "schemaVersion": "minimax-speech-audio-v2",
-        "selected_mode": "overview",
+        "selected_mode": "creator",
         "voices": [],
         "voice_references": [],
         "auditions": [],

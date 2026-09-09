@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { generationReferenceAssetsFromConfig } from './asset-reference-requirements';
+import { generationReferenceAssetsFromConfig, mergeGenerationReferenceAssets } from './asset-reference-requirements';
 
 describe('image-generation reference assets', () => {
   it('reads reference roles without turning them into production gate dependencies', () => {
@@ -26,5 +26,19 @@ describe('image-generation reference assets', () => {
       generationReferenceAssets: [{ assetId: 'P02', name: 'P02' }, { assetId: 'P10' }],
     }, 'P10');
     expect(references).toEqual([{ assetId: 'P02', label: 'P02', role: undefined }]);
+  });
+
+  it('merges prerequisite assets that are missing from the reference list without duplicating them', () => {
+    const merged = mergeGenerationReferenceAssets([
+      { assetId: 'ENV01', label: 'ENV01' },
+      { assetId: 'P01', label: 'P01' },
+    ], [
+      { asset_id: 'P01', name: 'P01' },
+      { asset_id: 'P12', name: 'P12' },
+      { asset_id: 'P08', name: '当前资产' },
+    ], 'P08');
+
+    expect(merged.map((item) => item.assetId)).toEqual(['ENV01', 'P01', 'P12']);
+    expect(merged.map((item) => item.label)).toEqual(['ENV01', 'P01', 'P12']);
   });
 });

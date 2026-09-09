@@ -16,12 +16,13 @@ import {
   type EdgeChange,
   type NodeProps,
   type OnNodeDrag,
+  type CoordinateExtent,
   type Viewport,
   useReactFlow,
 } from '@xyflow/react';
 import { assetClassLabels, assetStatusLabels } from './asset-state';
 import { assetBoardSelectionKey } from './asset-board-selection';
-import { generationReferenceAssetsFromConfig } from './asset-reference-requirements';
+import { generationReferenceAssetsFromConfig, mergeGenerationReferenceAssets } from './asset-reference-requirements';
 import type { AssetBoardNode, LibraryAsset } from './types';
 
 export type AssetProductionTarget = 'prompt' | 'upload';
@@ -51,9 +52,48 @@ export type AssetBoardNodeData = Omit<AssetBoardNode, 'node_type'> & {
 };
 export type AssetFlowNode = Node<AssetBoardNodeData, 'asset-board'>;
 
+const assetBoardViewportPadding = { x: 220, y: 160 };
+const assetBoardMinimumContentSize = { width: 720, height: 640 };
+
 const defaultAssetBoardColumnWidths: AssetBoardColumnWidths = { shots: 260, 'asset-flow': 640, fusion: 640 };
 const assetBoardDefaultCardWidth = 286;
 const assetBoardCellPadding = 12;
+
+function flowNodeWidth(node: AssetFlowNode): number {
+  return Math.max(1, Number(node.style?.width) || assetBoardDefaultCardWidth);
+}
+
+function flowNodeHeight(node: AssetFlowNode): number {
+  const configuredHeight = Number(node.style?.height);
+  if (configuredHeight > 0) return configuredHeight;
+  if (node.data.node_type === 'table') return assetBoardMinimumContentSize.height;
+  if (node.data.node_type === 'handoff') return 500;
+  if (node.data.node_type === 'artifact') return 260;
+  if (node.data.node_type === 'shot') return 112;
+  return 160;
+}
+
+/**
+ * Keep the viewport and movable candidate cards inside the generated board.
+ * React Flow defaults both extents to infinity, which makes a small
+ * asset-board dataset easy to lose in an empty canvas. The extra viewport
+ * padding preserves a comfortable margin for one-shot navigation without
+ * reintroducing an effectively infinite work area.
+ */
+export function assetBoardFlowExtents(nodes: AssetFlowNode[]): { translateExtent: CoordinateExtent; nodeExtent: CoordinateExtent } {
+  const visibleNodes = nodes.filter((node) => !node.hidden);
+  const table = visibleNodes.find((node) => node.id === 'asset-grid:table') || nodes.find((node) => node.id === 'asset-grid:table');
+  const tableRight = table ? table.position.x + flowNodeWidth(table) : assetBoardMinimumContentSize.width;
+  const tableBottom = table ? table.position.y + flowNodeHeight(table) : assetBoardMinimumContentSize.height;
+  const contentRight = Math.max(assetBoardMinimumContentSize.width, tableRight, ...visibleNodes.map((node) => node.position.x + flowNodeWidth(node)));
+  const contentBottom = Math.max(assetBoardMinimumContentSize.height, tableBottom, ...visibleNodes.map((node) => node.position.y + flowNodeHeight(node)));
+  const nodeExtent: CoordinateExtent = [[0, 0], [contentRight, contentBottom]];
+  const translateExtent: CoordinateExtent = [
+    [-assetBoardViewportPadding.x, -assetBoardViewportPadding.y],
+    [contentRight + assetBoardViewportPadding.x, contentBottom + assetBoardViewportPadding.y],
+  ];
+  return { translateExtent, nodeExtent };
+}
 
 function assetBoardColumnWidthForKey(widths: AssetBoardColumnWidths, key: string): number {
   if (key === 'shots') return widths.shots;
@@ -273,12 +313,14 @@ function AssetBoardCard({ data, selected, id, positionAbsoluteX, positionAbsolut
     const artifactApproved = artifactQa === 'Approved' || ['approved_pending_registration', 'ready', 'active'].includes(artifactStatus);
     const artifactState = artifactApproved ? (artifactStatus === 'approved_pending_registration' ? '图片已审核 · 待登记' : '图片已审核') : '图片待审核';
     const prerequisiteGateAllowed = data.config.prerequisite_gate_allowed !== false;
-    const prerequisiteBlockedReason = String(data.config.prerequisite_blocked_reason || '前置资产尚未完成审核');
     const prerequisiteBlockedDependencies = Array.isArray(data.config.prerequisite_blocked_dependencies) ? data.config.prerequisite_blocked_dependencies.filter((item): item is Record<string, any> => Boolean(item && typeof item === 'object')) : [];
     const prerequisiteItems = Array.isArray(data.config.prerequisite_items) ? data.config.prerequisite_items.filter((item): item is Record<string, any> => Boolean(item && typeof item === 'object')) : prerequisiteBlockedDependencies;
-    const prerequisiteAssetSummary = prerequisiteItems.map((item) => String(item.name || item.asset_id || '前置资产')).join('、');
-    const prerequisiteIncompleteSummary = prerequisiteItems.filter((item) => item.production_ready !== true).map((item) => `${String(item.name || item.asset_id || '前置资产')}（${String(item.next_action || '完成审核')}）`).join('；');
-    const generationReferenceAssets = generationReferenceAssetsFromConfig(data.config, String(data.asset_id || ''));
+    const prerequisiteIncompleteSummary = prerequisiteItems.filter((item) => item.production_ready !== true).map((item) => String(item.name || item.asset_id || '前置资产')).join('、');
+    const generationReferenceAssets = mergeGenerationReferenceAssets(
+      generationReferenceAssetsFromConfig(data.config, String(data.asset_id || '')),
+      prerequisiteItems,
+      String(data.asset_id || ''),
+    );
     const canUploadAsset = fusionPromptActionable && !artifactId && prerequisiteGateAllowed;
     const handlePromptFileDrop = (event: DragEvent<HTMLElement>) => {
       if (!canUploadAsset) return;
@@ -307,8 +349,7 @@ function AssetBoardCard({ data, selected, id, positionAbsoluteX, positionAbsolut
         <strong>{data.label}</strong>
         <small>{data.asset_id || '资产'} · {String(data.config.target_skill || 'video-asset-regulator')}{relevantShots ? ` · ${relevantShots}` : ''}{isFusionSlot && fusionSourceIds.length ? ` · 来源 ${fusionSourceIds.join('、')}` : ''}</small>
         <PromptTextScroller label={data.label} text={String(data.config.prompt || '').trim() || (isFusionSlot ? '等待前置基础资产完成 Prompt QA、图片 QA 与登记后生成 Fusion Prompt。' : '')} empty={productionDraft && !String(data.config.prompt || '').trim()} />
-        {generationReferenceAssets.length > 0 && <div className="asset-board-reference-summary" role="status"><strong>图片生成参考资产</strong><span>参考图：{generationReferenceAssets.map((item) => item.label).join('、')}</span><small>这些资产需要提供给图片生成 Agent 作为参考图，不等同于生产审核前置门禁。</small></div>}
-        {prerequisiteItems.length > 0 && <div className={`asset-board-prerequisite-summary ${prerequisiteGateAllowed ? 'ready' : 'blocked'}`} role="status"><strong>生成所需前置资产</strong><span>前置资产：{prerequisiteAssetSummary}</span><small>{prerequisiteIncompleteSummary ? `当前未完成：${prerequisiteIncompleteSummary}` : '当前：全部完成，可进入生产'}</small></div>}
+        {generationReferenceAssets.length > 0 && <div className={`asset-board-reference-summary ${prerequisiteIncompleteSummary ? 'has-blocked' : 'ready'}`} role="status"><strong>图片生成参考资产</strong><span>参考图：{generationReferenceAssets.map((item) => item.role ? `${item.label}（${item.role}）` : item.label).join('、')}</span><small>{prerequisiteIncompleteSummary ? `未完成：${prerequisiteIncompleteSummary}` : '以上资产可作为当前图片生成参考图；括号内为参考职责'}</small></div>}
         <div className="asset-board-prompt-state"><span>{isFusionSlot && fusionNeedsPrompt ? '融合 Prompt：等待前置资产' : !fusionPromptReady ? '正式 Prompt：尚未生成' : artifactId ? `图片：${artifactState}` : `图像执行：${generationStatus}`}</span>{promptCoverageLabel && <span title="Prompt Contract 细节覆盖度">{promptCoverageLabel}</span>}{isFusionSlot && !fusionGateAllowed && <span title={fusionGateDisplayReason}>{fusionGateDisplayReason}</span>}{fusionPromptStale && <span>请重新生成 Fusion Prompt</span>}{!eligible && <span>非图像资产</span>}</div>
         <div className="asset-board-prompt-actions">
           {canUploadAsset && <label className="asset-board-upload-button nodrag nopan">上传资产<input className="nodrag nopan" type="file" accept="image/png,image/jpeg,image/webp" onClick={(event) => event.stopPropagation()} onChange={(event) => { const file = event.target.files?.[0]; if (file) data.onUploadAsset?.(String(data.asset_id), file); event.currentTarget.value = ''; }} /></label>}
@@ -363,6 +404,7 @@ export type AssetBoardFlowProps = {
 
 function AssetBoardFlowInner({ nodes, edges, onNodesChange, onEdgesChange, onConnect, onNodeClick, onNodeDragStart, onNodeDragStop, onMoveEnd, defaultViewport, focusTarget = '' }: AssetBoardFlowProps) {
   const nodeTypes = useMemo(() => ({ 'asset-board': (props: NodeProps<AssetFlowNode>) => <AssetBoardCard {...props} onNodeClick={onNodeClick} /> }), [onNodeClick]);
+  const flowExtents = useMemo(() => assetBoardFlowExtents(nodes), [nodes]);
   const flow = useReactFlow();
   const focusedTargetRef = useRef('');
   useEffect(() => {
@@ -381,7 +423,7 @@ function AssetBoardFlowInner({ nodes, edges, onNodesChange, onEdgesChange, onCon
     const height = node.data.node_type === 'artifact' ? 190 : node.data.node_type === 'shot' ? 120 : 110;
     flow.setCenter(node.position.x + width / 2, node.position.y + height / 2, { zoom: .86, duration: 460 });
   }, [focusTarget, flow, nodes]);
-  return <ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect} onNodeClick={onNodeClick} onNodeDragStart={onNodeDragStart} onNodeDragStop={onNodeDragStop} onMoveEnd={(event, viewport) => { if (event === null) return; onMoveEnd(viewport); }} defaultViewport={defaultViewport} fitView minZoom={0.12} maxZoom={1.8} deleteKeyCode={null} multiSelectionKeyCode={['Control', 'Meta']} selectionOnDrag selectionMode={SelectionMode.Partial} panOnDrag={[1, 2]}>
+  return <ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect} onNodeClick={onNodeClick} onNodeDragStart={onNodeDragStart} onNodeDragStop={onNodeDragStop} onMoveEnd={(event, viewport) => { if (event === null) return; onMoveEnd(viewport); }} defaultViewport={defaultViewport} translateExtent={flowExtents.translateExtent} nodeExtent={flowExtents.nodeExtent} fitView minZoom={0.12} maxZoom={1.8} deleteKeyCode={null} multiSelectionKeyCode={['Control', 'Meta']} selectionOnDrag selectionMode={SelectionMode.Partial} panOnDrag={[1, 2]}>
       <Background color="#343831" gap={22} size={1} />
       <Controls position="bottom-left" />
       <MiniMap position="bottom-right" pannable zoomable nodeColor="#d7ff4b" maskColor="rgba(6,7,6,.72)" />

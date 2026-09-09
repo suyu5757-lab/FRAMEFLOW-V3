@@ -1,8 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import { assetBoardAssetGroupHeight, assetBoardCardHeight, assetBoardCardHeights, assetBoardCardIsLocked, assetBoardFixedColumnBounds, assetBoardMinimumColumnWidth, assetBoardSafeColumnWidths, assetBoardToFlowEdges, assetBoardToFlowNodes, resolveAssetProductionTarget } from './App';
+import { assetBoardFlowExtents } from './AssetBoardFlow';
 import type { AssetBoard, LibraryAsset, StoryShot } from './types';
 
 describe('asset board geometry', () => {
+  it('limits the canvas and movable cards to the generated board frame', () => {
+    const nodes = [
+      { id: 'asset-grid:table', type: 'asset-board', position: { x: 0, y: 0 }, style: { width: 1800, height: 2400 }, data: { node_type: 'table', config: {} } },
+      { id: 'artifact:P08', type: 'asset-board', position: { x: 600, y: 900 }, style: { width: 286 }, data: { node_type: 'artifact', config: {} } },
+    ] as unknown as Parameters<typeof assetBoardFlowExtents>[0];
+    const extents = assetBoardFlowExtents(nodes);
+
+    expect(extents.nodeExtent).toEqual([[0, 0], [1800, 2400]]);
+    expect(extents.translateExtent).toEqual([[-220, -160], [2020, 2560]]);
+  });
+
   it('reserves enough width for the asset-flow title and prompt cards', () => {
     expect(assetBoardMinimumColumnWidth('asset-flow', 286, 16, 'adaptive')).toBe(612);
     expect(assetBoardMinimumColumnWidth('fusion', 286, 16, 'adaptive')).toBe(612);

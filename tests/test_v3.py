@@ -14,6 +14,7 @@ import server
 import frameflow.database as database_module
 from frameflow import asset_audit
 from frameflow.database import Database
+from frameflow.providers import STORYBOARD_OUTPUT_SCHEMA
 
 
 def project_document() -> dict:
@@ -47,6 +48,16 @@ class FrameflowV3Tests(unittest.TestCase):
             candidate = Path(str(self.db_path) + suffix)
             if candidate.is_file():
                 candidate.unlink()
+
+    def test_storyboard_provider_schema_requires_continuity_and_seedance_plan(self) -> None:
+        shot_schema = STORYBOARD_OUTPUT_SCHEMA["properties"]["shots"]["items"]
+        continuity = shot_schema["properties"]["continuity"]
+        seedance = shot_schema["properties"]["seedancePlan"]
+        self.assertEqual(set(continuity["required"]), {"screenDirection", "eyeline", "motionVector", "cutIn", "cutOut", "matchAction", "editBridge", "preRoll", "postRoll", "firstFrame", "lastFrame"})
+        self.assertIn("continuity", shot_schema["required"] if "required" in shot_schema else [])
+        self.assertIn("promptTimeline", seedance["required"])
+        self.assertIn("referenceAssignments", seedance["required"])
+        self.assertIn("fallbackRoute", seedance["required"])
 
     def test_graph_is_projected_and_revision_conflicts_are_rejected(self) -> None:
         first = self.client.get("/api/v2/projects/PRJ_V3/graph")
@@ -361,8 +372,8 @@ class FrameflowV3Tests(unittest.TestCase):
         self.assertEqual(created.status_code, 200, created.text)
         run_id = created.json()["id"]
         candidate = {"proposedScript": "候选剧本", "feasibility": {"verdict": "可执行", "difficulty": "low"}, "productionElements": {}, "scenes": [{"id": "SC01", "name": "室内"}], "shots": [
-            {"id": "SH01", "scene": "SC01", "duration": 5, "purpose": "更新镜头一", "size": "特写", "camera": "固定", "action": "按键"},
-            {"id": "SH03", "scene": "SC01", "duration": 3, "purpose": "新镜头", "size": "全景", "camera": "拉远", "action": "离开"},
+            {"id": "SH01", "scene": "SC01", "duration": 5, "purpose": "更新镜头一", "size": "特写", "camera": "固定", "action": "按键", "visibleEvent": "手指按下按键", "eventConsequence": "指示灯亮起", "seedancePlan": {"model": "seedance2.5", "generationMode": "reference_to_video"}, "continuity": {"cutIn": "手指入画"}},
+            {"id": "SH03", "scene": "SC01", "duration": 3, "purpose": "新镜头", "size": "全景", "camera": "拉远", "action": "离开", "visibleEvent": "角色离开画面", "eventConsequence": "门口只剩雨幕", "seedancePlan": {"model": "seedance2.5", "generationMode": "reference_to_video"}, "continuity": {"cutOut": "雨声延续"}},
         ], "risks": [], "assetHandoff": {"characters": [], "scenes": [], "props": []}}
         with mock.patch.object(server, "_run_storyboard_agent", new=mock.AsyncMock(return_value=candidate)), mock.patch.object(server, "_run_regulator_agent", new=mock.AsyncMock(return_value={"assetExtraction": [], "assetRequirements": [], "nextActions": []})):
             started = self.client.post(f"/api/v2/story-runs/{run_id}/start")
@@ -387,7 +398,7 @@ class FrameflowV3Tests(unittest.TestCase):
             "feasibility": {"verdict": "可执行", "difficulty": "low"},
             "productionElements": {},
             "scenes": [{"id": "SC01", "name": "雨夜"}],
-            "shots": [{"id": "SH01", "scene": "SC01", "duration": 5, "purpose": "悬念", "size": "近景", "camera": "固定", "action": "按键"}],
+            "shots": [{"id": "SH01", "scene": "SC01", "duration": 5, "purpose": "悬念", "size": "近景", "camera": "固定", "action": "按键", "visibleEvent": "手指按下按键", "eventConsequence": "屏幕突然亮起", "seedancePlan": {"model": "seedance2.5", "generationMode": "reference_to_video"}, "continuity": {"cutIn": "黑屏后入画"}}],
             "risks": [],
             "assetHandoff": {"characters": [], "scenes": [], "props": []},
         }
@@ -407,6 +418,171 @@ class FrameflowV3Tests(unittest.TestCase):
         after_accept = self.client.get("/api/v2/projects/PRJ_V3").json()["document"]
         self.assertEqual(after_accept["script"], "候选剧本：他按下播放键。")
         self.assertTrue(any(version.get("status") == "active" and version.get("source") == "agent" for version in after_accept["scriptVersions"]))
+
+    def test_accept_script_only_keeps_shot_candidate_review_open_until_shots_are_accepted(self) -> None:
+        created = self.client.post("/api/v2/projects/PRJ_V3/story/runs", json={"goal": "full", "strength": "balanced"})
+        self.assertEqual(created.status_code, 200, created.text)
+        run_id = created.json()["id"]
+        candidate = {
+            "proposedScript": "先接受剧本，不应立即进入资产总控。",
+            "feasibility": {"verdict": "可执行", "difficulty": "low"},
+            "productionElements": {},
+            "scenes": [{"id": "SC01", "name": "室内"}],
+            "shots": [{"id": "SH01", "scene": "SC01", "duration": 5, "purpose": "建立", "size": "中景", "camera": "固定", "action": "抬头", "visibleEvent": "角色抬头看向门外", "eventConsequence": "雨水从屋檐落下遮断视线", "seedancePlan": {"model": "seedance2.5", "generationMode": "reference_to_video"}, "continuity": {"cutIn": "环境声先入"}}],
+            "risks": [], "assetHandoff": {"characters": [], "scenes": [], "props": []},
+        }
+        regulator = mock.AsyncMock(return_value={"assetExtraction": [], "assetRequirements": [], "nextActions": []})
+        with mock.patch.object(server, "_run_storyboard_agent", new=mock.AsyncMock(return_value=candidate)), mock.patch.object(server, "_run_regulator_agent", new=regulator):
+            started = self.client.post(f"/api/v2/story-runs/{run_id}/start")
+            self.assertEqual(started.status_code, 200, started.text)
+            script_only = self.client.post(f"/api/v2/story-runs/{run_id}/accept-storyboard", json={"scope": "script_only"})
+            self.assertEqual(script_only.status_code, 200, script_only.text)
+            self.assertEqual(script_only.json()["run"]["status"], "storyboard_review_required")
+            regulator.assert_not_awaited()
+            shots_only = self.client.post(f"/api/v2/story-runs/{run_id}/accept-storyboard", json={"scope": "shots_only", "shot_ids": ["SH01"]})
+            self.assertEqual(shots_only.status_code, 200, shots_only.text)
+            self.assertEqual(shots_only.json()["run"]["status"], "regulator_review_required")
+            regulator.assert_awaited_once()
+        current = self.client.get("/api/v2/projects/PRJ_V3").json()["document"]
+        self.assertEqual(current["script"], candidate["proposedScript"])
+        self.assertEqual(current["shots"][0]["id"], "SH01")
+
+    def test_storyboard_from_source_preserves_script_byte_for_byte_on_acceptance(self) -> None:
+        source = "原文：雨落在玻璃上。\n\n角色说：不要替我改写这句话……"
+        saved = self.client.put("/api/v2/projects/PRJ_V3/story", json={
+            "expected_revision": 1,
+            "spec": {"creative_goal": "锁定原文", "duration": 60, "ratio": "16:9", "generator_profile": "seedance2.5"},
+            "script": source,
+            "scenes": [{"id": "C01", "name": "室内"}],
+            "shots": [],
+        })
+        self.assertEqual(saved.status_code, 200, saved.text)
+        created = self.client.post("/api/v2/projects/PRJ_V3/story/runs", json={
+            "goal": "script_storyboard", "workflow_mode": "storyboard_from_source", "duration": 60, "generator_profile": "seedance2.5",
+        })
+        self.assertEqual(created.status_code, 200, created.text)
+        run_id = created.json()["id"]
+        candidate = {
+            "proposedScript": "供应商不应有机会写入的改写版本",
+            "feasibility": {"verdict": "可执行", "difficulty": "low"},
+            "productionElements": {},
+            "scenes": [{"id": "C01", "name": "室内"}],
+            "shots": [{"id": "SH01", "scene": "C01", "duration": 8, "purpose": "建立", "size": "中景", "camera": "固定", "action": "雨滴滑落", "visibleEvent": "雨滴沿玻璃滑落", "eventConsequence": "玻璃表面的倒影被水痕切断", "seedancePlan": {"model": "seedance2.5", "generationMode": "reference_to_video", "targetDuration": 8}, "continuity": {"cutIn": "雨声先入", "cutOut": "倒影稳定"}}],
+            "risks": [], "assetHandoff": {"characters": [], "scenes": [], "props": []},
+        }
+        regulator = {"assetExtraction": [], "assetRequirements": [], "nextActions": []}
+        with mock.patch.object(server, "_run_storyboard_agent", new=mock.AsyncMock(return_value=candidate)), mock.patch.object(server, "_run_regulator_agent", new=mock.AsyncMock(return_value=regulator)):
+            started = self.client.post(f"/api/v2/story-runs/{run_id}/start")
+            self.assertEqual(started.status_code, 200, started.text)
+            self.assertEqual(started.json()["run"]["storyboard_output"]["proposedScript"], source)
+            accepted = self.client.post(f"/api/v2/story-runs/{run_id}/accept-storyboard", json={"scope": "all"})
+            self.assertEqual(accepted.status_code, 200, accepted.text)
+        current = self.client.get("/api/v2/projects/PRJ_V3").json()["document"]
+        self.assertEqual(current["script"], source)
+        self.assertFalse(any(version.get("source") == "agent" for version in current.get("scriptVersions", [])))
+        self.assertEqual(current["shots"][0]["seedancePlan"]["model"], "seedance2.5")
+
+    def test_storyboard_handoff_merges_repeated_stable_asset_ids(self) -> None:
+        source = "锁定原文：角色走上高架。"
+        saved = self.client.put("/api/v2/projects/PRJ_V3/story", json={
+            "expected_revision": 1,
+            "spec": {"creative_goal": "去重交接", "duration": 12, "ratio": "16:9", "generator_profile": "seedance2.5"},
+            "script": source,
+            "scenes": [],
+            "shots": [],
+        })
+        self.assertEqual(saved.status_code, 200, saved.text)
+        created = self.client.post("/api/v2/projects/PRJ_V3/story/runs", json={"workflow_mode": "storyboard_from_source", "duration": 12, "generator_profile": "seedance2.5"})
+        self.assertEqual(created.status_code, 200, created.text)
+        run_id = created.json()["id"]
+        candidate = {
+            "proposedScript": "供应商返回的改写会被锁定原文覆盖",
+            "feasibility": {"verdict": "可执行", "difficulty": "low"},
+            "productionElements": {},
+            "scenes": [{"id": "S001", "name": "高架"}],
+            "shots": [{"id": "SH01", "scene": "S001", "duration": 8, "purpose": "建立", "size": "中景", "camera": "固定", "action": "抬头", "visibleEvent": "角色抬头", "eventConsequence": "雨水顺着护栏落下", "seedancePlan": {"model": "seedance2.5", "generationMode": "reference_to_video"}, "continuity": {"cutIn": "雨声先入"}}],
+            "risks": [],
+            "assetHandoff": {"characters": [{"id": "C001", "name": "主角", "relevantShots": ["SH01"]}, {"id": "C001", "generationReferenceAssets": [{"assetId": "STYLE01", "role": "视觉风格"}]}], "scenes": [{"id": "S001", "name": "高架"}], "props": [], "soundRequirements": []},
+        }
+        with mock.patch.object(server, "_run_storyboard_agent", new=mock.AsyncMock(return_value=candidate)):
+            started = self.client.post(f"/api/v2/story-runs/{run_id}/start")
+        self.assertEqual(started.status_code, 200, started.text)
+        output = started.json()["run"]["storyboard_output"]
+        self.assertEqual(started.json()["run"]["status"], "storyboard_review_required")
+        self.assertEqual(len(output["assetHandoff"]["characters"]), 1)
+        self.assertEqual(output["assetHandoff"]["characters"][0]["relevantShots"], ["SH01"])
+        self.assertEqual(output["assetHandoff"]["characters"][0]["generationReferenceAssets"][0]["assetId"], "STYLE01")
+
+    def test_storyboard_contract_failure_retries_once_without_retrying_budget_failure(self) -> None:
+        source = "锁定原文：雨夜平台。"
+        saved = self.client.put("/api/v2/projects/PRJ_V3/story", json={
+            "expected_revision": 1,
+            "spec": {"creative_goal": "合同重试", "duration": 12, "ratio": "16:9", "generator_profile": "seedance2.5"},
+            "script": source,
+            "scenes": [],
+            "shots": [],
+        })
+        self.assertEqual(saved.status_code, 200, saved.text)
+        created = self.client.post("/api/v2/projects/PRJ_V3/story/runs", json={"workflow_mode": "storyboard_from_source", "duration": 12, "generator_profile": "seedance2.5"})
+        self.assertEqual(created.status_code, 200, created.text)
+        run_id = created.json()["id"]
+        invalid = {"proposedScript": "错误改写", "feasibility": {"verdict": "可执行", "difficulty": "low"}, "productionElements": {}, "scenes": [], "risks": [], "assetHandoff": {"characters": [], "scenes": [], "props": []}}
+        valid = {"proposedScript": "错误改写", "feasibility": {"verdict": "可执行", "difficulty": "low"}, "productionElements": {}, "scenes": [{"id": "S001", "name": "平台"}], "shots": [{"id": "SH01", "scene": "S001", "duration": 8, "purpose": "建立", "size": "中景", "camera": "固定", "action": "抬头", "visibleEvent": "角色抬头", "eventConsequence": "雨水从护栏落下", "seedancePlan": {"model": "seedance2.5", "generationMode": "reference_to_video"}, "continuity": {"cutIn": "雨声先入"}}], "risks": [], "assetHandoff": {"characters": [], "scenes": [], "props": []}}
+        agent = mock.AsyncMock(side_effect=[invalid, valid])
+        with mock.patch.object(server, "_run_storyboard_agent", new=agent):
+            started = self.client.post(f"/api/v2/story-runs/{run_id}/start")
+        self.assertEqual(started.status_code, 200, started.text)
+        self.assertEqual(started.json()["run"]["status"], "storyboard_review_required")
+        self.assertEqual(agent.await_count, 2)
+        self.assertTrue(started.json()["run"]["storyboard_output"].get("contractRepairRetry"))
+
+    def test_storyboard_candidate_over_budget_is_rejected_before_acceptance(self) -> None:
+        created = self.client.post("/api/v2/projects/PRJ_V3/story/runs", json={"goal": "full", "workflow_mode": "optimize_script_and_storyboard", "duration": 60, "generator_profile": "seedance2.0"})
+        self.assertEqual(created.status_code, 200, created.text)
+        run_id = created.json()["id"]
+        shots = [{"id": f"SH{index:02d}", "scene": "C01", "duration": 7, "purpose": f"事件 {index}", "size": "中景", "camera": "固定", "action": "动作"} for index in range(1, 10)]
+        candidate = {"proposedScript": "候选", "feasibility": {"verdict": "可执行", "difficulty": "medium"}, "productionElements": {}, "scenes": [{"id": "C01", "name": "夜"}], "shots": shots, "risks": [], "assetHandoff": {"characters": [], "scenes": [], "props": []}}
+        with mock.patch.object(server, "_run_storyboard_agent", new=mock.AsyncMock(return_value=candidate)):
+            started = self.client.post(f"/api/v2/story-runs/{run_id}/start")
+        self.assertEqual(started.status_code, 422, started.text)
+        self.assertIn("shot_budget_exceeded", str(started.json()))
+        self.assertEqual(self.client.get(f"/api/v2/story-runs/{run_id}").json()["run"]["status"], "failed")
+
+    def test_asset_handoff_acceptance_persists_reference_roles_and_receipt(self) -> None:
+        created = self.client.post("/api/v2/projects/PRJ_V3/story/runs", json={"goal": "full", "duration": 12, "generator_profile": "seedance2.5"})
+        self.assertEqual(created.status_code, 200, created.text)
+        run_id = created.json()["id"]
+        candidate = {
+            "proposedScript": "资产交接测试",
+            "feasibility": {"verdict": "可执行", "difficulty": "medium"},
+            "productionElements": {},
+            "scenes": [{"id": "S001", "name": "雨夜平台"}],
+            "shots": [{"id": "SH01", "scene": "S001", "duration": 6, "purpose": "建立空间", "size": "中景", "camera": "固定", "action": "雨水落下", "visibleEvent": "雨水沿平台边缘落下", "eventConsequence": "积水表面产生连续波纹", "seedancePlan": {"model": "seedance2.5", "generationMode": "reference_to_video"}, "continuity": {"cutIn": "风声先入", "cutOut": "波纹保持"}}],
+            "risks": [],
+            "assetHandoff": {
+                "characters": [{"id": "C001", "name": "主角", "productionRole": "base_asset", "relevantShots": ["SH01"], "generationReferenceAssets": []}],
+                "scenes": [{"id": "S001", "name": "雨夜平台", "productionRole": "base_asset", "relevantShots": ["SH01"], "generationReferenceAssets": []}],
+                "props": [{"id": "P001", "name": "雨伞", "productionRole": "prop", "relevantShots": ["SH01"], "generationReferenceAssets": [{"assetId": "C001", "role": "尺度与手持关系", "reason": "确认角色手持比例"}]}],
+                "soundRequirements": [{"id": "AUDIO001", "name": "雨声", "sourceText": "连续雨声", "relevantShots": ["SH01"]}],
+            },
+        }
+        regulator = {"assetExtraction": [{"id": "C001", "assetClass": "character", "name": "主角", "priority": "B"}, {"id": "S001", "assetClass": "scene", "name": "雨夜平台", "priority": "B"}, {"id": "P001", "assetClass": "prop", "name": "雨伞", "priority": "B"}], "assetRequirements": [{"shotId": "SH01", "assetId": "C001", "assetClass": "character", "role": "主角", "required": True}], "nextActions": []}
+        with mock.patch.object(server, "_run_storyboard_agent", new=mock.AsyncMock(return_value=candidate)), mock.patch.object(server, "_run_regulator_agent", new=mock.AsyncMock(return_value=regulator)):
+            started = self.client.post(f"/api/v2/story-runs/{run_id}/start")
+            self.assertEqual(started.status_code, 200, started.text)
+            accepted = self.client.post(f"/api/v2/story-runs/{run_id}/accept-storyboard", json={"scope": "all"})
+            self.assertEqual(accepted.status_code, 200, accepted.text)
+            finalized = self.client.post(f"/api/v2/story-runs/{run_id}/accept-regulator")
+            self.assertEqual(finalized.status_code, 200, finalized.text)
+        receipt = finalized.json()["handoffReceipt"]
+        self.assertEqual(finalized.json()["run"]["status"], "succeeded")
+        self.assertGreaterEqual(receipt["createdAssets"].__len__(), 3)
+        self.assertEqual(receipt["shotAssetEdges"], 1)
+        self.assertEqual(receipt["referenceAssetEdges"], 1)
+        self.assertIn("C001", receipt["resolvedAssetIds"])
+        project = self.client.get("/api/v2/projects/PRJ_V3").json()["document"]
+        prop = next(asset for asset in project["assets"] if asset["id"] == "P001")
+        self.assertEqual(prop["assetMetadata"]["generationReferenceAssets"][0]["role"], "尺度与手持关系")
 
     def test_provider_catalog_never_exposes_credentials(self) -> None:
         response = self.client.get("/api/v2/providers/catalog")

@@ -2,6 +2,12 @@
 
 本手册对应 `minimax-speech-audio-v2`。声音工坊的日常路径是 MiniMax 官方系统音色；Voice Design 和 Voice Clone 只在用户明确选择高级路径时使用。本项目不安装或维护本地 TTS 模型，也不把 GitHub 仓库作为运行依赖。
 
+## 创作者优先的声音工坊入口
+
+声音资产工坊默认打开三段式创作台：顶部是声音 AI 对话，中部是 MiniMax 式声音创作器，下部是剧本角色声音库和逐句台词队列。AI 只整理想法、语言、音色候选、Voice Design 文案和台词草稿；实际音色预览、Demo 和正式台词仍由用户在 MiniMax 操作区单独确认费用后触发。
+
+角色声音先建立，再生成正式台词。剧本变更会自动更新结构化角色 / 对白待处理队列，但不会静默创建 Voice Profile、生成音频或提交 QA。专业参数、Take 历史、QA、登记、音乐和音效保留在“高级制作与交接”中。
+
 ## 推荐工作流
 
 ```text
@@ -27,6 +33,23 @@
 - `Japanese_GracefulMaiden`：先验证柔和、甜美和较少的机械感。
 
 这些名称只是筛选线索，不能推断最终年龄、性别或自然度；最终选择必须依据实际试听和 QA。
+
+## Voice Design 双路径
+
+选择“新建音色”后，声音 AI 输出两个独立字段：`prompt`（音色描述）和 `preview_text`（试听文本）。用户可以：
+
+- 点击“复制到 MiniMax Web”，只复制 Voice Design 执行包，不产生费用；
+- 点击“创建音色预览”，在当前 MiniMax 区域执行一次付费预览，返回候选 `voice_id` 和试听文件。
+
+工作台保存 Voice Design 结果为 `voice_design_candidates`，候选不会自动进入 `voices`，也不会自动成为角色声音。用户必须先试听并点击“采用为角色声音”，再建立三组 audition、完成 QA 和锁定。MiniMax 自定义 Voice ID 需要在 7 天内用于语音合成，否则可能被上游删除；工作台不会自动调用 TTS 来维持它。
+
+Voice Design 接口为：
+
+```text
+POST /api/v2/projects/{project_id}/audio/voice-design
+```
+
+接口要求 `confirmed=true`、当前项目 revision、`prompt` 和不超过 500 个字符的 `preview_text`。中国区与国际区沿用当前选中的 MiniMax 路由；连接状态不确定时不自动重试，也不跨区域切换。
 
 ## 语言与区域
 

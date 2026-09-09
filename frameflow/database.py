@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 
 
 def utcnow() -> str:
@@ -1142,6 +1142,17 @@ ALTER TABLE assistant_runs_v18 DROP COLUMN assistant_mode;
 ALTER TABLE conversations DROP COLUMN assistant_mode;
 """
 
+_V20_UP = """
+CREATE TABLE IF NOT EXISTS provider_profile_tombstones (
+    provider_id TEXT PRIMARY KEY,
+    deleted_at TEXT NOT NULL
+);
+"""
+
+_V20_DOWN = """
+DROP TABLE IF EXISTS provider_profile_tombstones;
+"""
+
 MIGRATIONS: dict[int, dict[str, str]] = {
     1: {"up": _BASE_SCHEMA, "down": ""},
     2: {"up": _V2_UP, "down": _V2_DOWN},
@@ -1162,6 +1173,7 @@ MIGRATIONS: dict[int, dict[str, str]] = {
     17: {"up": _V17_UP, "down": _V17_DOWN},
     18: {"up": _V18_UP, "down": _V18_DOWN},
     19: {"up": _V19_UP, "down": _V19_DOWN},
+    20: {"up": _V20_UP, "down": _V20_DOWN},
 }
 
 

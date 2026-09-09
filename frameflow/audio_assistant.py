@@ -278,6 +278,158 @@ def _language_boost(locale: str, language: str, explicit: Any = None) -> str | N
     return explicit_value if explicit_value not in {"Chinese", "auto", "Automatic"} else None
 
 
+DEFAULT_LOCALE_BY_LANGUAGE = {
+    "Chinese": "zh-CN",
+    "English": "en-US",
+    "Japanese": "ja-JP",
+    "Korean": "ko-KR",
+    "French": "fr-FR",
+    "German": "de-DE",
+    "Spanish": "es-ES",
+    "Italian": "it-IT",
+    "Portuguese": "pt-BR",
+    "Russian": "ru-RU",
+}
+
+
+def _language_context(*sources: dict[str, Any] | None) -> dict[str, str]:
+    """Return the first complete, non-invented language context from sources.
+
+    A dialogue may inherit a locale from the explicitly selected MiniMax voice
+    candidate.  It must never inherit one from a character's nationality or
+    silently guess a translation from the user's source-language idea.
+    """
+
+    values: dict[str, str] = {}
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for key, aliases, limit in (
+            ("locale", ("locale",), 40),
+            ("language", ("language",), 80),
+            ("dialect", ("dialect",), 120),
+            ("provider_region", ("provider_region", "providerRegion"), 20),
+        ):
+            if values.get(key):
+                continue
+            value = next((_text(source.get(alias), limit) for alias in aliases if _text(source.get(alias), limit)), "")
+            if value:
+                values[key] = value
+    locale = values.get("locale", "")
+    language = values.get("language", "") or (_language_boost(locale, "") or "")
+    if language:
+        values["language"] = language
+        values.setdefault("locale", DEFAULT_LOCALE_BY_LANGUAGE.get(language, ""))
+    if values.get("language") == "Japanese":
+        values.setdefault("dialect", "Standard Japanese")
+    return {key: value for key, value in values.items() if value}
+
+
+def _voice_design_brief_source(proposal: dict[str, Any], user_message: str | None) -> str:
+    """Pick a bounded creative brief for the deterministic Voice Design fallback."""
+
+    return _text(
+        proposal.get("source_idea")
+        or proposal.get("sourceIdea")
+        or proposal.get("intent_summary")
+        or proposal.get("intentSummary")
+        or user_message,
+        2400,
+    )
+
+
+def _voice_design_preview_from_request(proposal: dict[str, Any], user_message: str | None) -> str:
+    """Recover a real preview line without inventing one when the model omits it."""
+
+    dialogue_rows = proposal.get("dialogue_candidates")
+    if not isinstance(dialogue_rows, list):
+        dialogue_rows = proposal.get("dialogues") if isinstance(proposal.get("dialogues"), list) else []
+    for row in dialogue_rows[:16]:
+        if isinstance(row, dict):
+            candidate_text = _text(row.get("source_text") or row.get("sourceText") or row.get("text"), 500)
+            if candidate_text:
+                return candidate_text
+    explicit_text = _text(user_message, 2400)
+    if explicit_text:
+        match = re.search(r"(?:她想说|他想说|它想说|想说|台词(?:是|为)?)\s*[:：]\s*(.+)", explicit_text, flags=re.IGNORECASE | re.DOTALL)
+        if match:
+            candidate_text = match.group(1).strip().strip('"“”\'')
+            if candidate_text:
+                return candidate_text[:500]
+    return _text(proposal.get("preview_text") or proposal.get("previewText"), 500)
+
+
+def _voice_design_request_language(value: str | None) -> dict[str, str]:
+    """Infer only an explicit language request for display metadata.
+
+    This does not translate text or establish a provider capability.  It only
+    prevents a clearly stated language such as Japanese from being rendered as
+    "unspecified" in the copy package.
+    """
+
+    source = _text(value, 2400)
+    if re.search(r"日本|日语|日文|japanese", source, flags=re.IGNORECASE):
+        return {"language": "Japanese", "locale": "ja-JP", "dialect": "Standard Japanese"}
+    if re.search(r"中文|汉语|普通话|chinese", source, flags=re.IGNORECASE):
+        return {"language": "Chinese", "locale": "zh-CN", "dialect": "Mandarin"}
+    if re.search(r"英语|英文|english", source, flags=re.IGNORECASE):
+        return {"language": "English", "locale": "en-US", "dialect": "General American"}
+    if re.search(r"韩语|韩文|korean", source, flags=re.IGNORECASE):
+        return {"language": "Korean", "locale": "ko-KR", "dialect": "Standard Korean"}
+    return {}
+
+
+def _voice_design_fallback_prompt(proposal: dict[str, Any], user_message: str | None) -> str:
+    """Create a useful MiniMax prompt only when OpenCode omitted voice_design.
+
+    This is intentionally a small safety net, not a replacement for the model's
+    creative rewrite.  It preserves the user's intent while turning common
+    Chinese descriptors into observable Voice Design language.
+    """
+
+    source = _voice_design_brief_source(proposal, user_message)
+    if not source:
+        return ""
+    matching_source = f"{source} {_text(user_message, 2400)}"
+    identity: list[str] = []
+    qualities: list[str] = []
+    avoid: list[str] = []
+    if re.search(r"日本|日语|日文|japanese", matching_source, flags=re.IGNORECASE):
+        identity.append("Japanese, with natural standard pronunciation")
+    if re.search(r"女高中生|高中女生|女学生|年轻女性|少女|female student|young woman", matching_source, flags=re.IGNORECASE):
+        identity.append("a young female high-school student")
+    elif re.search(r"高中生|学生|student", matching_source, flags=re.IGNORECASE):
+        identity.append("a high-school student")
+    if re.search(r"甜|sweet", matching_source, flags=re.IGNORECASE):
+        qualities.append("sweet")
+    if re.search(r"轻柔|柔和|温柔|soft|gentle", matching_source, flags=re.IGNORECASE):
+        qualities.append("soft and gentle")
+    if re.search(r"活力|朝气|有精神|lively|youthful|energetic", matching_source, flags=re.IGNORECASE):
+        qualities.append("youthful and lively, with an energetic baseline")
+    if re.search(r"动漫|二次元|anime", matching_source, flags=re.IGNORECASE):
+        avoid.append("exaggerated anime-style delivery")
+    if re.search(r"尖锐|刺耳|sharp|harsh", matching_source, flags=re.IGNORECASE):
+        avoid.append("a sharp or harsh tone")
+    if re.search(r"机械|机器人|robotic", matching_source, flags=re.IGNORECASE):
+        avoid.append("robotic rhythm")
+    if not identity:
+        identity.append("an original fictional character voice")
+    if not qualities:
+        qualities.append("natural, clear, and approachable")
+    if not avoid:
+        avoid.append("overacting, unnatural pitch jumps, and mechanical timing")
+    brief_without_line = re.split(r"(?:她想说|他想说|它想说|想说|台词(?:是|为)?)\s*[:：]", source, maxsplit=1, flags=re.IGNORECASE)[0].strip()
+    context_line = f"Character context: {brief_without_line}." if brief_without_line else "Character context: an original fictional role."
+    return "\n".join([
+        "Create an original fictional voice. Do not imitate any real person, public figure, or copyrighted character.",
+        f"Voice identity: {', '.join(identity)}.",
+        f"Voice quality: {', '.join(dict.fromkeys(qualities))}.",
+        "Delivery: natural conversational pacing, clear articulation, relaxed breath, and a warm close presence.",
+        context_line,
+        f"Avoid: {', '.join(dict.fromkeys(avoid))}.",
+    ])
+
+
 def _numeric(value: Any, default: float, minimum: float, maximum: float, field: str) -> float:
     if value in (None, ""):
         return default
@@ -316,6 +468,8 @@ def build_audio_assistant_context(
     story_document: dict[str, Any] | None,
     catalog: dict[str, Any] | None,
     focus: dict[str, Any] | None = None,
+    *,
+    voice_design_only: bool = False,
 ) -> dict[str, Any]:
     """Build a bounded audio-first context for OpenCode."""
 
@@ -364,6 +518,8 @@ def build_audio_assistant_context(
     return {
         "mode": AUDIO_ASSISTANT_MODE,
         "contract_version": AUDIO_ASSISTANT_CONTRACT_VERSION,
+        "task": "voice-design" if voice_design_only else "audio-preparation",
+        "voice_design_only": bool(voice_design_only),
         "focus": {
             "kind": _text(focus_value.get("kind"), 30) or "project",
             "target_id": _record_id(focus_value.get("target_id")) or None,
@@ -409,7 +565,18 @@ def audio_preparation_result_schema() -> dict[str, Any]:
         "type": "object",
         "properties": {
             "reply": {"type": "string"},
-            "proposal": {"type": "object", "additionalProperties": True},
+            "proposal": {
+                "type": "object",
+                "description": (
+                    "声音准备方案。dialogue_candidates 中的每一项必须是可审阅的完整台词："
+                    "source_text、provider_text、language、locale 均为非空；"
+                    "若无法形成目标语言台词，请不要输出占位候选，改在 questions 返回一个 required 问题。"
+                    "当 audio_preparation_context.voice_design_only=true 时，必须返回一个非空的 voice_design，"
+                    "其中 prompt 是可直接粘贴到 MiniMax Voice Design 的音色描述，preview_text 是单独可试听的实际台词；"
+                    "此模式不要把系统音色、角色登记、audition、QA 或交接当作当前任务。"
+                ),
+                "additionalProperties": True,
+            },
             "patch": {"type": ["object", "null"], "additionalProperties": True},
             "actions": {"type": "array", "items": {"type": "string"}},
             "next_questions": {"type": "array", "items": {"type": "object", "additionalProperties": True}},
@@ -571,15 +738,22 @@ def _audition_record(
     }
 
 
-def _dialogue_record(item: dict[str, Any], focus: dict[str, Any], candidate_id: str, valid_shots: set[str]) -> dict[str, Any]:
+def _dialogue_record(
+    item: dict[str, Any],
+    focus: dict[str, Any],
+    candidate_id: str,
+    valid_shots: set[str],
+    language_context: dict[str, str] | None = None,
+) -> dict[str, Any]:
     source_text = _text(item.get("source_text") or item.get("sourceText") or item.get("text"), 9999)
     provider_text = _provider_text(item, source_text)
     shot_ids = _string_list(item.get("shot_ids") or item.get("shotIds") or focus.get("shot_ids"), 32)
     unknown = [shot_id for shot_id in shot_ids if shot_id not in valid_shots]
     if unknown:
         raise AudioPreparationError(f"对白引用了不存在的镜头：{'、'.join(unknown)}。")
-    locale = _text(item.get("locale"), 40)
-    language = _text(item.get("language"), 80)
+    context = language_context if isinstance(language_context, dict) else {}
+    locale = _text(item.get("locale"), 40) or _text(context.get("locale"), 40)
+    language = _text(item.get("language"), 80) or _text(context.get("language"), 80) or (_language_boost(locale, "") or "")
     return {
         "character_id": _record_id(item.get("character_id")) or _record_id(focus.get("character_id")) or None,
         "voice_id": _record_id(item.get("voice_id")) or None,
@@ -591,9 +765,9 @@ def _dialogue_record(item: dict[str, Any], focus: dict[str, Any], candidate_id: 
         "text_status": "candidate" if source_text else "missing",
         "locale": locale or None,
         "language": language or None,
-        "dialect": _text(item.get("dialect"), 120) or None,
+        "dialect": _text(item.get("dialect"), 120) or _text(context.get("dialect"), 120) or None,
         "language_boost": _language_boost(locale, language, item.get("language_boost") or item.get("languageBoost")),
-        "provider_region": _text(item.get("provider_region") or item.get("providerRegion"), 20) or None,
+        "provider_region": _text(item.get("provider_region") or item.get("providerRegion"), 20) or _text(context.get("provider_region"), 20) or None,
         "settings": {
             "speed": _numeric((item.get("settings") or {}).get("speed") if isinstance(item.get("settings"), dict) else item.get("speed"), 1.0, 0.5, 2.0, "speed"),
             "pitch": _numeric((item.get("settings") or {}).get("pitch") if isinstance(item.get("settings"), dict) else item.get("pitch"), 0.0, -12.0, 12.0, "pitch"),
@@ -650,6 +824,8 @@ def normalize_voice_preparation_result(
     catalog: dict[str, Any] | None,
     focus: dict[str, Any] | None,
     contract_snapshot: dict[str, Any],
+    user_message: str | None = None,
+    voice_design_only: bool = False,
 ) -> dict[str, Any]:
     """Normalize and strictly bound one OpenCode preparation response."""
 
@@ -668,6 +844,34 @@ def normalize_voice_preparation_result(
     stored_voices = audio_document.get("voices") if isinstance(audio_document.get("voices"), list) else []
     stored_auditions = audio_document.get("auditions") if isinstance(audio_document.get("auditions"), list) else []
     stored_dialogues = audio_document.get("dialogues") if isinstance(audio_document.get("dialogues"), list) else []
+
+    raw_voice_design = proposal.get("voice_design") if isinstance(proposal.get("voice_design"), dict) else proposal.get("voiceDesign") if isinstance(proposal.get("voiceDesign"), dict) else None
+    voice_design: dict[str, Any] | None = None
+    design_prompt = _text(raw_voice_design.get("prompt") or raw_voice_design.get("voice_design_prompt") or raw_voice_design.get("voiceDesignPrompt"), 4000) if raw_voice_design else ""
+    design_preview = _text(raw_voice_design.get("preview_text") or raw_voice_design.get("previewText"), 500) if raw_voice_design else ""
+    # The primary workbench is deliberately a Voice Design-only conversation.
+    # Make the model output contract deterministic at the boundary: if an
+    # otherwise valid response omits one of the two copy-ready fields, recover
+    # it from the user's brief and an actual requested line rather than showing
+    # an empty candidate card or falling back to the production form.
+    if voice_design_only:
+        design_prompt = design_prompt or _voice_design_fallback_prompt(proposal, user_message)
+        design_preview = design_preview or _voice_design_preview_from_request(proposal, user_message)
+    if design_prompt and design_preview:
+        requested_language = _voice_design_request_language(user_message)
+        voice_design = {
+            "prompt": design_prompt,
+            "preview_text": design_preview,
+            "language": _text(raw_voice_design.get("language"), 80) if raw_voice_design else "",
+            "locale": _text(raw_voice_design.get("locale"), 40) if raw_voice_design else "",
+            "provider_region": _text(raw_voice_design.get("provider_region") or raw_voice_design.get("providerRegion"), 20) if raw_voice_design else "",
+            "rationale": _text(raw_voice_design.get("rationale") or raw_voice_design.get("reason"), 700) if raw_voice_design else "",
+        }
+        voice_design["language"] = voice_design["language"] or requested_language.get("language") or _language_context({"locale": voice_design.get("locale")}).get("language") or None
+        voice_design["locale"] = voice_design["locale"] or requested_language.get("locale") or None
+        voice_design["dialect"] = requested_language.get("dialect") or None
+        voice_design["provider_region"] = voice_design["provider_region"] or catalog_region
+        voice_design["rationale"] = voice_design["rationale"] or ("AI 已将原始想法整理为可直接复制到 MiniMax Voice Design 的两段输入。" if voice_design_only else None)
 
     raw_candidates = proposal.get("voice_candidates") if isinstance(proposal.get("voice_candidates"), list) else proposal.get("voiceCandidates") if isinstance(proposal.get("voiceCandidates"), list) else []
     if not raw_candidates and isinstance(proposal.get("voice_profiles"), list):
@@ -732,11 +936,33 @@ def normalize_voice_preparation_result(
     raw_dialogues = proposal.get("dialogue_candidates") if isinstance(proposal.get("dialogue_candidates"), list) else proposal.get("dialogues") if isinstance(proposal.get("dialogues"), list) else []
     dialogue_candidates: list[dict[str, Any]] = []
     dialogue_operations: list[dict[str, Any]] = []
+    incomplete_dialogue_count = 0
+    dialogue_context_hint: dict[str, str] = _language_context(voice_design)
     for index, raw in enumerate(raw_dialogues[:16], 1):
         if not isinstance(raw, dict):
             continue
         candidate_id = _text(raw.get("candidate_id") or raw.get("candidateId"), 80) or f"dialogue-candidate-{index}"
-        record = _dialogue_record(raw, focus_value, candidate_id, valid_shots)
+        source_text = _text(raw.get("source_text") or raw.get("sourceText") or raw.get("text"), 9999)
+        if not source_text:
+            # A candidate ID is not a dialogue.  Keeping an empty row visible
+            # makes it look selectable and lets an empty operation leak into
+            # the workbench.  Ask for the smallest missing input instead.
+            incomplete_dialogue_count += 1
+            continue
+        requested_voice_candidate_id = _record_id(raw.get("voice_candidate_id") or raw.get("voiceCandidateId"))
+        selected_voice = candidate_to_profile.get(requested_voice_candidate_id)
+        if selected_voice is None and len(candidate_to_profile) == 1:
+            selected_voice = next(iter(candidate_to_profile.values()))
+        context_hint = _language_context(raw, selected_voice, voice_design)
+        if context_hint:
+            dialogue_context_hint = context_hint
+        record = _dialogue_record(raw, focus_value, candidate_id, valid_shots, context_hint)
+        if not record.get("language") or not record.get("locale"):
+            # We may fill language metadata only from a selected voice, an
+            # explicit provider value, or a Voice Design package.  The text
+            # itself does not establish a safe target locale.
+            incomplete_dialogue_count += 1
+            continue
         if not record.get("voice_id") and not record.get("voice_candidate_id") and len(candidate_to_profile) == 1:
             # With one proposed voice there is no ambiguity: bind the line to
             # that candidate so applying the selected operations fills the
@@ -818,7 +1044,7 @@ def normalize_voice_preparation_result(
     # If OpenCode supplied profiles but no audition matrix, create the three
     # standard preparation rows for each selected profile.  This is still a
     # draft-only operation and does not create a billable request.
-    if voice_profiles and not audition_operations:
+    if voice_profiles and dialogue_candidates and not audition_operations:
         default_text = _text((dialogue_candidates[0] if dialogue_candidates else {}).get("source_text"), 9999)
         conditions = ("neutral", "emotional", "pronunciation-stress")
         for voice_index, voice in enumerate(voice_profiles, 1):
@@ -859,7 +1085,17 @@ def normalize_voice_preparation_result(
     if catalog_status not in {"live", "cached"}:
         blockers.append("MiniMax 系统音色目录不可执行；需要先修复凭据或网络并刷新目录。")
     if not dialogue_candidates:
+        language_hint = dialogue_context_hint.get("language") or "目标"
+        locale_hint = dialogue_context_hint.get("locale") or "未指定 locale"
         blockers.append("尚未形成可审阅的逐句对白候选；请确认目标语言和实际台词。")
+        if not any(item.get("id") == "target-dialogue-required" for item in questions):
+            questions.append({
+                "id": "target-dialogue-required",
+                "question": f"请补全要用 {language_hint}（{locale_hint}）朗读的实际台词。可以直接给出目标语言文本，或明确让我先提供翻译候选。",
+                "reason": "当前候选缺少可朗读文本或语言/locale，不能回填、试听或复制到 MiniMax。",
+                "required": True,
+                "options": ["直接提供目标语言台词", "请先给出翻译候选"],
+            })
     requested_model = _text((proposal.get("preflight") or {}).get("model") if isinstance(proposal.get("preflight"), dict) else "", 80) or "speech-2.8-hd"
     if requested_model not in {"speech-2.8-hd", "speech-2.8-turbo"}:
         requested_model = "speech-2.8-hd"
@@ -876,7 +1112,9 @@ def normalize_voice_preparation_result(
         "can_generate": False,
         "blockers": list(dict.fromkeys(blockers)),
     }
-    if state == "ready_for_review" and blockers:
+    if not dialogue_candidates and state != "blocked":
+        state = "needs_clarification"
+    elif state == "ready_for_review" and blockers:
         state = "blocked" if any("不可执行" in item or "不存在" in item for item in blockers) else state
     normalized_proposal = {
         "proposal_version": AUDIO_ASSISTANT_CONTRACT_VERSION,
@@ -888,10 +1126,15 @@ def normalize_voice_preparation_result(
         "questions": questions,
         "voice_candidates": voice_candidates,
         "voice_profiles": voice_profiles,
+        "voice_design": voice_design,
         "dialogue_candidates": dialogue_candidates,
         "audition_matrix": audition_matrix,
         "preflight": preflight,
-        "checks": [{"code": "catalog", "status": "pass" if catalog_status in {"live", "cached"} else "blocked", "message": f"MiniMax 系统音色目录：{catalog_status}"}, {"code": "text_confirmation", "status": "warning", "message": "台词仍需用户确认"}],
+        "checks": [
+            {"code": "catalog", "status": "pass" if catalog_status in {"live", "cached"} else "blocked", "message": f"MiniMax 系统音色目录：{catalog_status}"},
+            {"code": "target_dialogue", "status": "pass" if dialogue_candidates else "blocked", "message": "目标语言台词已形成候选" if dialogue_candidates else f"已拦截 {incomplete_dialogue_count or len(raw_dialogues)} 条不完整台词候选"},
+            {"code": "text_confirmation", "status": "warning", "message": "台词仍需用户确认"},
+        ],
         "operation_ids": [str(item["id"]) for item in operations],
         "contract_snapshot": deepcopy(contract_snapshot),
     }

@@ -95,6 +95,41 @@ class FrameflowV3SettingsTests(unittest.TestCase):
         self.assertEqual(readded.status_code, 200, readded.text)
         self.assertEqual(readded.json()["provider"]["id"], "comfyui-default")
 
+    def test_seeded_provider_delete_is_persistent_and_preset_can_restore_it(self) -> None:
+        provider_id = "minimax-default"
+        with mock.patch.object(server, "delete_secret") as clear_secret:
+            deleted = self.client.delete(f"/api/v2/settings/providers/{provider_id}")
+
+        self.assertEqual(deleted.status_code, 200, deleted.text)
+        self.assertFalse(any(item["id"] == provider_id for item in deleted.json()["providers"]))
+        self.assertEqual(
+            {call.args[0] for call in clear_secret.call_args_list},
+            {
+                "provider:minimax-default:minimax:cn",
+                "provider:minimax-default:minimax:global",
+                "provider:minimax-default",
+            },
+        )
+        reopened = server.Database(self.db_path)
+        server.seed_defaults(reopened)
+        with reopened.connect() as connection:
+            self.assertIsNone(connection.execute("SELECT id FROM provider_profiles WHERE id=?", (provider_id,)).fetchone())
+            tombstone = connection.execute("SELECT provider_id FROM provider_profile_tombstones WHERE provider_id=?", (provider_id,)).fetchone()
+            self.assertIsNotNone(tombstone)
+
+        presets = self.client.get("/api/v2/settings/providers").json()["presets"]
+        minimax_preset = next(item for item in presets if item["preset_id"] == "minimax")
+        self.assertEqual(minimax_preset["base_url"], "https://api.minimax.cn/v1")
+        readded = self.client.post("/api/v2/settings/providers/from-preset/minimax", json={})
+        self.assertEqual(readded.status_code, 200, readded.text)
+        self.assertEqual(readded.json()["provider"]["id"], provider_id)
+        reopened = server.Database(self.db_path)
+        with reopened.connect() as connection:
+            self.assertIsNone(connection.execute("SELECT provider_id FROM provider_profile_tombstones WHERE provider_id=?", (provider_id,)).fetchone())
+        server.seed_defaults(reopened)
+        with reopened.connect() as connection:
+            self.assertIsNotNone(connection.execute("SELECT id FROM provider_profiles WHERE id=?", (provider_id,)).fetchone())
+
     def test_credential_write_import_clear_and_probe_never_echo_secret(self) -> None:
         secret = "sk-settings-secret-123456"
         with mock.patch.object(server, "set_secret") as write, mock.patch.object(server, "get_secret", return_value=secret), mock.patch.dict(server.os.environ, {"OPENAI_API_KEY": secret}, clear=False):

@@ -56,6 +56,8 @@ class OpenCodeClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session_body["agent"], "build")
         self.assertNotIn("model", message_body)
         self.assertNotIn("agent", message_body)
+        self.assertEqual(message_body["format"], {"type": "json_schema", "schema": {"type": "object"}})
+        self.assertNotIn("retryCount", message_body["format"])
         expected_directory = str(Path("/tmp/frameflow-opencode-test").resolve())
         self.assertEqual(calls[0][3], {"directory": expected_directory})
         self.assertEqual(calls[1][3], {"directory": expected_directory})

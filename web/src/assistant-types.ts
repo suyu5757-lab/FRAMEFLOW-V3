@@ -179,6 +179,15 @@ export type AudioPreparationDialogueCandidate = {
   operation: 'tts' | string;
 };
 
+export type AudioPreparationVoiceDesign = {
+  prompt: string;
+  preview_text: string;
+  language?: string | null;
+  locale?: string | null;
+  provider_region?: 'cn' | 'global' | string | null;
+  rationale?: string | null;
+};
+
 export type AudioPreparationAudition = {
   candidate_id: string;
   voice_candidate_id?: string;
@@ -186,6 +195,10 @@ export type AudioPreparationAudition = {
   source_text: string;
   provider_text: string;
   text_status: 'candidate' | 'confirmed' | 'missing' | string;
+  locale?: string | null;
+  language?: string | null;
+  dialect?: string | null;
+  language_boost?: string | null;
   direction?: {
     emotion?: string | null;
     intensity?: string | null;
@@ -209,6 +222,7 @@ export type AudioPreparationProposal = {
   questions?: AudioPreparationQuestion[];
   voice_candidates?: AudioPreparationVoiceCandidate[];
   voice_profiles?: Array<Record<string, any>>;
+  voice_design?: AudioPreparationVoiceDesign | null;
   dialogue_candidates?: AudioPreparationDialogueCandidate[];
   audition_matrix?: AudioPreparationAudition[];
   preflight?: {

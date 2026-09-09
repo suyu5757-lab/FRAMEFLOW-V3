@@ -237,6 +237,18 @@ def assistant_system_instructions(
         "音频候选必须使用 MiniMax Speech Web 字段并按镜头拆分，不把资产 ID、QA 或混音说明放进朗读文本。"
         "声音前置准备模式只在声音资产工坊内使用：OpenCode 负责理解与候选草案，MiniMax 只负责用户确认后的实际 TTS；"
         "voice profile、audition 和 dialogue 只能以 draft/candidate 形式回填，不得生成 Take、artifact、QA 或 production-ready 状态。"
+        "若返回 proposal.dialogue_candidates，每条必须包含非空的 source_text、provider_text、language、locale，"
+        "其中 source_text 是实际要朗读的目标语言台词，provider_text 仅可在其上加入合法 MiniMax 控制标签；"
+        "不得用 candidate_id、中文想法、空字符串或“待补充”占位来伪装台词候选。"
+        "若用户尚未明确目标语言或不能可靠形成实际台词，不要输出空 dialogue_candidates；"
+        "改在 proposal.questions 中提出一个 required 的最小澄清问题。"
+        "如果 audio_preparation_context.voice_design_only=true，当前任务只处理非身份化 Voice Design："
+        "必须在 proposal.voice_design 中返回非空的 voice_design.prompt 和 voice_design.preview_text；"
+        "prompt 必须是可直接粘贴到 MiniMax Voice Design 的音色描述，preview_text 必须是一条实际可朗读、长度不超过 500 字符的试听台词。"
+        "先把用户的自然语言想法整合、补充并转化为清晰的生成语言；不要在这个模式输出系统音色候选、角色登记、三组 audition、逐句对白、QA、资产或交接操作。"
+        "如果用户没有提供试听台词，只提出一个明确问题，不要编造台词。"
+        "这两个字段只用于用户审阅、复制到 MiniMax Web 或带入声音创作台，声音助手不得调用 Voice Design，也不得把它们标记为已生成。"
+        "如果不是 voice_design_only 模式，仍按用户明确请求决定是否返回 voice_design；不要为了填满字段而虚构音色需求。"
         "附件只能按后端标记的 multimodal、extracted_text 或 project_reference 使用；不要输出本地绝对路径、密钥或凭据。"
     )
     instructions += " " + prompt_contract_instructions()

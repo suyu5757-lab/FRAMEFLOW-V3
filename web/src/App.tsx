@@ -3,11 +3,13 @@ import type { Connection, Edge, EdgeChange, Node, NodeChange, Viewport } from '@
 import { StudioApiError, studioApi } from './api';
 import { AudioStudioView } from './AudioStudioView';
 import { AssistantWorkspace } from './AssistantWorkspace';
+import { StoryWorkbench } from './StoryWorkbench';
 import { EDGE_RELATIONS, autoLayoutNodes, edgeRelationPresentation, wouldCreateExecutionCycle, type EdgeRelation } from './graph-editor';
-import type { AgentPlan, AudioStudioDocument, AudioStudioEnvelope, AssetBoard, AssetBoardEdgeRelation, AssetBoardEnvelope, AssetBoardNode, AssetLibraryEnvelope, DashboardEnvelope, DashboardTask, GraphEnvelope, GraphNodeData, HomeStatus, LibraryAsset, MiniMaxRegion, ProjectCreateInput, ProjectDashboard, ProjectRecord, ProjectHomeSummary, RenderJob, RunEstimate, SettingsEnvelope, SettingsProvider, SettingsPreset, StoryChecks, StoryDiff, StoryDocument, StoryEnvelope, StoryRun, StoryShot, TimelineClip, TimelineDocument, TimelineEnvelope, TimelinePreflight, TimelinePreflightShot, WorkflowGraph, WorkflowManifest, WorkflowRun, WorkflowRunDetail } from './types';
+import type { AgentPlan, AudioStudioDocument, AudioStudioEnvelope, AssetBoard, AssetBoardEdgeRelation, AssetBoardEnvelope, AssetBoardNode, AssetLibraryEnvelope, DashboardEnvelope, DashboardTask, GraphEnvelope, GraphNodeData, HomeStatus, LibraryAsset, MiniMaxRegion, ProjectCreateInput, ProjectDashboard, ProjectRecord, ProjectHomeSummary, RenderJob, RunEstimate, SettingsEnvelope, SettingsProvider, SettingsPreset, StoryChecks, StoryDocument, StoryEnvelope, StoryRun, StoryShot, TimelineClip, TimelineDocument, TimelineEnvelope, TimelinePreflight, TimelinePreflightShot, WorkflowGraph, WorkflowManifest, WorkflowRun, WorkflowRunDetail } from './types';
 import { dashboardHasActiveWork, progressLabel, stageProgress, statusClass, statusIcon, statusLabel, taskPriorityLabel } from './dashboard-state';
 import { assetClassLabels as sharedAssetClassLabels, assetStatusLabels as sharedAssetStatusLabels } from './asset-state';
 import { buildAssetGenerationOrder, type AssetGenerationOrderItem } from './asset-generation-order';
+import { generationReferenceAssetsForAsset, mergeGenerationReferenceAssets } from './asset-reference-requirements';
 import { applyAssetBoardSelection, assetBoardSelectionKey, selectedAssetBoardCards as getSelectedAssetBoardCards, singleSelectedAssetBoardCard, type AssetBoardSelectionKey } from './asset-board-selection';
 import { VirtualAssetList } from './components/VirtualAssetList';
 import { PROMPT_CONTRACT_VERSION, PROMPT_WORKFLOW_ID, buildMiniMaxWebPromptPackage, buildNaturalLanguagePrompt, formatMiniMaxWebPromptPackage, normalizePromptPack, renderPromptValue } from './prompt-design';
@@ -1230,11 +1232,12 @@ function AssetProductionPanel({ asset, story, fusionSources, busy, projectRevisi
   const fusionSlot = Boolean(asset.fusionSlot || asset.assetMetadata?.fusion_slot || asset.assetMetadata?.fusionSlot);
   const fusionGateAllowed = typeof asset.fusionPromptGenerationAllowed === 'boolean' ? asset.fusionPromptGenerationAllowed : fusionSources.length >= 2 && fusionBlockedSources.length === 0;
   const prerequisiteGateAllowed = asset.prerequisiteGate?.allowed !== false;
-  const prerequisiteBlockedReason = String(asset.prerequisiteGate?.reason || '前置资产尚未完成审核');
   const prerequisiteItems = Array.isArray(asset.prerequisiteGate?.items) ? asset.prerequisiteGate.items : [];
   const prerequisiteAssetSummary = prerequisiteItems.map((item: Record<string, any>) => String(item.name || item.asset_id || '前置资产')).join('、');
   const prerequisiteBlockedDependencies = prerequisiteItems.filter((item: Record<string, any>) => item.production_ready !== true);
-  const prerequisiteIncompleteSummary = prerequisiteBlockedDependencies.map((item: Record<string, any>) => `${String(item.name || item.asset_id || '前置资产')}（${String(item.next_action || '完成审核')}）`).join('；');
+  const prerequisiteIncompleteSummary = prerequisiteBlockedDependencies.map((item: Record<string, any>) => String(item.name || item.asset_id || '前置资产')).join('、');
+  const prerequisiteBlockedReason = prerequisiteIncompleteSummary ? `未完成：${prerequisiteIncompleteSummary}` : String(asset.prerequisiteGate?.reason || '前置资产尚未完成审核');
+  const generationReferenceAssets = mergeGenerationReferenceAssets(generationReferenceAssetsForAsset(asset), prerequisiteItems, asset.id);
   const fusionCanGenerate = isFusion && prerequisiteGateAllowed && fusionSources.length >= 2 && fusionBlockedSources.length === 0 && fusionGateAllowed && Boolean(fusionShotId);
   const audioPromptShotIds = Array.isArray(asset.promptRelevantShots) ? asset.promptRelevantShots.map(String) : [];
   const audioPromptShots = (story?.story.shots || []).filter((shot) => !audioPromptShotIds.length || audioPromptShotIds.includes(String(shot.id))) as unknown as Record<string, unknown>[];
@@ -1254,6 +1257,7 @@ function AssetProductionPanel({ asset, story, fusionSources, busy, projectRevisi
   };
   const selectionContextLabel = selectedCardType === 'handoff' ? 'Prompt / 图片卡' : selectedCardType === 'artifact' ? '候选版本卡' : '资产卡';
   return <section className="asset-production-panel">
+    {generationReferenceAssets.length > 0 && <div className={`asset-reference-panel-summary ${prerequisiteIncompleteSummary ? 'blocked' : 'ready'}`} role="status"><strong>图片生成参考资产</strong><span>参考图：{generationReferenceAssets.map((item) => item.role ? `${item.label}（${item.role}）` : item.label).join('、')}</span><small>{prerequisiteIncompleteSummary ? `未完成：${prerequisiteIncompleteSummary}` : '以上资产可作为当前图片生成参考图；括号内为参考职责'}</small>{!prerequisiteGateAllowed && <small>参考图未全部完成前，上传候选、图片生成、媒体 QA 与登记会保持锁定。</small>}</div>}
     <header><span>{selectionContextLabel} · {assetClassLabels[asset.assetClass] || asset.assetClass} · {asset.id}</span><h2>{asset.name || asset.id}</h2><p>{assetBoardStatusLabel(asset.readiness.status)} · 等级 {asset.grade || 'B'}{shotLabels ? ` · 镜头 ${shotLabels}` : ''}{isFusion && asset.fusionPromptStale ? ' · 融合输入已变化' : ''}</p>{asset.assetClass === 'character' && <div className="character-reference-plan-note"><strong>首轮角色参考图 · 1 张</strong><span>一张合成图包含面部 / 上半身特写 + 正面、侧面、背面全身视图。融合效果不理想时，再按需追加镜头化图片。</span></div>}{prerequisiteItems.length > 0 && <div className={`asset-prerequisite-panel-summary ${prerequisiteGateAllowed ? 'ready' : 'blocked'}`} role="status"><strong>生成所需前置资产</strong><span>前置资产：{prerequisiteAssetSummary}</span><small>{prerequisiteIncompleteSummary ? `当前未完成：${prerequisiteIncompleteSummary}` : '当前：全部完成，可进入生产'}</small>{!prerequisiteGateAllowed && <small>Prompt 仍可查看、编辑和复制；上传候选、图片生成、媒体 QA 与登记会在前置资产完成后开放。</small>}</div>}{!prerequisiteGateAllowed && prerequisiteItems.length === 0 && <div className="asset-prerequisite-panel-warning" role="status"><strong>前置资产未完成</strong><span>{prerequisiteBlockedReason}</span></div>}{asset.prompt && !isAudioAsset && (!isFusion || fusionPromptReady) && <div className="asset-prompt-gate"><span>Prompt QA：{String(asset.promptQaDecision || 'Pending')} · 图像：{String(asset.generationStatus || 'planned')}</span><div>{asset.promptQaDecision !== 'Approved' && <button onClick={() => onApprovePromptCard(asset.id)} disabled={busy}>通过 Prompt QA</button>}{asset.promptQaDecision === 'Approved' && asset.imageGenerationEligible !== false && asset.generationStatus !== 'generated-pending-qa' && <button className="asset-prompt-gate-primary" onClick={() => onGenerateImageCard(asset.id)} disabled={busy || !prerequisiteGateAllowed}>{asset.assetClass === 'character' ? '确认并生成角色结构参考图' : '确认并生成图像'}</button>}</div></div>}{asset.readiness.registered_ready && !asset.readiness.production_ready && <div className="manual-production-gate"><strong>已登记资产可人工确认</strong><small>仅豁免 Prompt / Prompt QA，当前登记文件、图片 QA、授权与融合门仍然有效。</small><textarea value={manualApprovalReason} onChange={(event) => setManualApprovalReason(event.target.value)} placeholder="填写人工审核原因" rows={2} /><button onClick={() => onManualProductionApproval?.(asset.id, true, manualApprovalReason.trim(), currentFileId)} disabled={busy || !manualApprovalReason.trim() || !currentArtifactId || !onManualProductionApproval}>人工通过可入镜</button></div>}{manualApprovalActive && <div className="manual-production-active"><span>当前登记文件已人工通过可入镜</span><button onClick={() => onManualProductionApproval?.(asset.id, false, '撤销人工通过', currentFileId)} disabled={busy || !onManualProductionApproval}>撤销人工通过</button></div>}</header>
      <div className="asset-production-actions"><button onClick={save} disabled={busy}>{isAudioAsset ? '保存声音字段 / 规格' : '保存 Prompt / 规格'}</button>{!isFusion && <button className="asset-ai-prompt-button" onClick={() => onGeneratePrompt?.(asset.id)} disabled={busy || !onGeneratePrompt}>AI 编写 Prompt</button>}<button className="asset-chatgpt-button" onClick={() => onHandoff({ ...asset, promptPack: promptPackDraft || asset.promptPack }, prompt)} disabled={busy || (!prompt.trim() && !isAudioAsset) || (isAudioAsset && !minimaxWebPackage?.copyText) || (isFusion && !fusionPromptReady)}>{isFusion && !fusionPromptReady ? '历史融合 Prompt 不可执行' : isAudioAsset ? '复制 MiniMax Web 包' : '复制 Prompt'}</button></div>
     {isFusion && <section className="fusion-inputs-panel"><div><span>FUSION WORKFLOW</span><h3>{fusionPromptReady ? '正式融合 Prompt' : '等待基础资产就绪'}</h3><p>{String(asset.fusionPromptBlockedReason || asset.fusionPlan?.shot_intent || '系统已根据当前分镜自动关联角色、场景和道具；前置资产全部成为正式资产后才能生成融合 Prompt。')}</p></div><div className="fusion-plan-summary"><span>目标镜头：{fusionShotId || '未绑定'}</span><span>规划状态：{fusionPromptReady ? (asset.fusionPromptStale ? '输入已变化 · 待重新融合' : '已生成正式 Prompt') : fusionSlot ? '自动关联 · 等待前置资产' : '等待基础资产就绪'}</span></div><div className="fusion-input-list">{fusionSources.length ? fusionSources.map((source) => <span key={source.id} className={source.readiness?.production_ready === true || source.production_ready === true ? 'ready' : 'blocked'}>{assetClassLabels[source.assetClass] || source.assetClass} · {source.name || source.id}{source.readiness?.production_ready === true || source.production_ready === true ? ' · 已就绪' : ` · ${source.readiness?.next_action || '未就绪'}`}</span>) : <small>系统尚未从当前分镜解析到可融合的基础资产，请先完成对应分镜资产需求。</small>}</div>{assetBoardDirty && <p className="fusion-connection-warning">当前工作区布局尚未保存；点击生成时会先保存最新工作区状态。</p>}{fusionBlockedSources.length > 0 && <p className="fusion-connection-warning">存在未达到 production_ready 的输入资产：{fusionBlockedSources.map((source) => source.name || source.id).join('、')}</p>}{!fusionGateAllowed && asset.fusionPromptBlockedReason && <p className="fusion-connection-warning">{asset.fusionPromptBlockedReason}</p>}{!fusionShotId && <p className="fusion-connection-warning">该融合资产尚未绑定有效镜头。</p>}<div className="fusion-input-actions"><button className="fusion-compose-button" onClick={() => setPrompt(composeFusionPrompt(asset, fusionSources, story))} disabled={busy || fusionSources.length < 2}>预览融合输入</button><button className="fusion-compose-button fusion-ai-button" onClick={() => onGenerateFusionPrompt(asset.id, fusionSourceIds, fusionShotId)} disabled={busy || !fusionCanGenerate}>生成融合 Prompt（AI）</button></div></section>}
@@ -1911,178 +1915,6 @@ function storyIssueMissingAssets(issue: StoryCheckIssue): Array<{ shot_id: strin
     .map((item) => ({ shot_id: String(item.shot_id || '—'), asset_id: String(item.asset_id || '—') }));
 }
 
-function StoryView({ story, storyRun, storyDiff, dirty, busy, notice, assetPromptRun, onChange, onSave, onGenerate, onAccept, onRollback, onOpenAssetBoard, onGenerateAssetPrompts }: { story: StoryEnvelope | null; storyRun: StoryRun | null; storyDiff: StoryDiff | null; dirty: boolean; busy: boolean; notice: string; assetPromptRun: AssetPromptRunState; onChange: (story: StoryDocument) => void; onSave: () => void; onGenerate: () => void; onAccept: (scope?: 'all' | 'script_only' | 'shots_only', shotIds?: string[]) => void; onRollback: (versionId: string, scope: 'script' | 'shots') => void; onOpenAssetBoard: () => void; onGenerateAssetPrompts: () => void }) {
-  const [selectedCandidateIds, setSelectedCandidateIds] = useState<string[]>([]);
-  const creativeGoalRef = useRef<HTMLTextAreaElement | null>(null);
-  const [assetPromptNow, setAssetPromptNow] = useState(() => Date.now());
-  const resizeCreativeGoal = () => {
-    const textarea = creativeGoalRef.current;
-    if (!textarea) return;
-    textarea.style.height = 'auto';
-    textarea.style.height = `${textarea.scrollHeight}px`;
-  };
-  useEffect(() => { if (story) resizeCreativeGoal(); }, [story?.story.spec.creative_goal]);
-  useEffect(() => {
-    if (!['preparing', 'running'].includes(assetPromptRun.status)) return;
-    setAssetPromptNow(Date.now());
-    const timer = window.setInterval(() => setAssetPromptNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [assetPromptRun.status]);
-  if (!story) return <div className="empty-state">正在读取故事与分镜…</div>;
-  const proposedScript = typeof storyRun?.storyboard_output?.proposedScript === 'string' ? storyRun.storyboard_output.proposedScript : '';
-  const proposedShots = Array.isArray(storyRun?.storyboard_output?.shots) ? storyRun.storyboard_output.shots.filter((item): item is StoryShot => typeof item === 'object' && item !== null && typeof (item as Record<string, unknown>).id === 'string') : [];
-  const reviewReady = storyRun?.status === 'storyboard_review_required';
-  // The asset-prompt endpoint is the workflow step that extracts missing
-  // assets from the accepted storyboard and creates their Prompt cards. An
-  // asset_gap is therefore expected at this point and must not disable this
-  // action. Other story structure errors still block Prompt generation.
-  const promptGenerationBlockingIssues = story.checks.issues.filter((issue) => issue.severity === 'error' && issue.code !== 'asset_gap');
-  const assetGapIssues = story.checks.issues.filter((issue) => issue.code === 'asset_gap');
-  const assetGapIssueCount = assetGapIssues.length;
-  const promptGenerationBlocked = busy || !story.story.shots.length || promptGenerationBlockingIssues.length > 0;
-  const promptGenerationTitle = !story.story.shots.length
-    ? '请先完成至少一个镜头'
-    : promptGenerationBlockingIssues.length > 0
-      ? `请先修复故事与分镜的阻塞问题：${promptGenerationBlockingIssues[0].message}`
-      : story.checks.issues.some((issue) => issue.code === 'asset_gap')
-        ? '镜头资产尚未登记，将由本流程自动提取并创建 Prompt 卡'
-        : '按 video-asset-regulator 审计并生成资产 Prompt 卡';
-  const sceneStatus = dirty ? `有未保存更改 · ${notice || 'V3 工作台已连接'}` : (notice || 'V3 工作台已连接');
-  const storyRunLabel = storyRun ? ({
-    succeeded: '工作流已完成',
-    storyboard_review_required: '候选待审阅',
-    regulator_review_required: '资产审阅',
-    failed: '工作流失败',
-  } as Record<string, string>)[storyRun.status] || storyRun.active_step : '';
-  const updateSpec = (key: keyof StoryDocument['spec'], value: string | number) => onChange({ ...story.story, spec: { ...story.story.spec, [key]: value } });
-  const updateShot = (shotId: string, key: keyof StoryShot, value: string | number) => onChange({ ...story.story, shots: story.story.shots.map((shot) => shot.id === shotId ? { ...shot, [key]: value } : shot) });
-  const stableId = (prefix: 'SH' | 'SC') => `${prefix}M-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
-  const addScene = () => onChange({ ...story.story, scenes: [...story.story.scenes, { id: stableId('SC'), name: '新场景', description: '' }] });
-  const updateScene = (sceneId: string, key: string, value: string) => onChange({ ...story.story, scenes: story.story.scenes.map((scene) => String(scene.id || '') === sceneId ? { ...scene, [key]: value } : scene) });
-  const removeScene = (sceneId: string) => onChange({ ...story.story, scenes: story.story.scenes.filter((scene) => String(scene.id || '') !== sceneId) });
-  const addShot = () => {
-    const scene = String(story.story.scenes[0]?.id || story.story.scenes[0]?.name || 'SCENE');
-    onChange({ ...story.story, shots: [...story.story.shots, { id: stableId('SH'), scene, duration: 3, purpose: '', size: '中景', camera: '固定', action: '' }] });
-  };
-  const removeShot = (shotId: string) => onChange({ ...story.story, shots: story.story.shots.filter((shot) => shot.id !== shotId) });
-  const moveShot = (shotId: string, direction: -1 | 1) => {
-    const shots = [...story.story.shots]; const index = shots.findIndex((shot) => shot.id === shotId); const target = index + direction;
-    if (index < 0 || target < 0 || target >= shots.length) return;
-    [shots[index], shots[target]] = [shots[target], shots[index]]; onChange({ ...story.story, shots });
-  };
-  const duplicateShot = (shotId: string) => {
-    const index = story.story.shots.findIndex((shot) => shot.id === shotId); if (index < 0) return;
-    const shots = [...story.story.shots]; shots.splice(index + 1, 0, { ...shots[index], id: stableId('SH'), purpose: `${shots[index].purpose || '镜头'}（副本）` }); onChange({ ...story.story, shots });
-  };
-  const splitShot = (shotId: string) => {
-    const index = story.story.shots.findIndex((shot) => shot.id === shotId); if (index < 0) return;
-    const shots = [...story.story.shots]; const source = shots[index]; const half = Math.max(.1, Number((source.duration / 2).toFixed(2)));
-    shots[index] = { ...source, duration: half }; shots.splice(index + 1, 0, { ...source, id: stableId('SH'), duration: Math.max(.1, Number((source.duration - half).toFixed(2))), purpose: `${source.purpose || '镜头'}（拆分）` }); onChange({ ...story.story, shots });
-  };
-  const linesToItems = (value: string, prefix: string) => value.split('\n').map((line) => line.trim()).filter(Boolean).map((label, index) => ({ id: `${prefix}${String(index + 1).padStart(2, '0')}`, label }));
-  const allCheckIssues = story.checks.issues;
-  const blockingIssues = allCheckIssues.filter((issue) => issue.severity === 'error' && issue.code !== 'asset_gap');
-  const warningIssues = allCheckIssues.filter((issue) => issue.severity !== 'error' && issue.code !== 'asset_gap');
-  const pendingAssetRefs = assetGapIssues.flatMap(storyIssueMissingAssets);
-  const pendingAssetCount = pendingAssetRefs.length || assetGapIssueCount;
-  const storyCheckTone = blockingIssues.length ? 'has-blockers' : assetGapIssues.length ? 'has-assets' : 'is-clear';
-  const storyCheckTitle = blockingIssues.length
-    ? `先处理 ${blockingIssues.length} 个阻塞问题`
-    : assetGapIssues.length
-      ? '故事与分镜已通过，下一步准备资产'
-      : '故事与分镜检查通过';
-  const storyCheckDescription = blockingIssues.length
-    ? '下面列出会阻止后续资产 Prompt 或生产步骤的问题，并提供直接修改入口。'
-    : assetGapIssues.length
-      ? '当前没有会阻止后续制作的故事结构错误；资产引用会在下一步资产生产中登记或自动提取。'
-      : '当前没有会阻止后续制作的故事结构错误。';
-  const storyActionFeedback = busy
-    ? (notice && notice !== 'V3 工作台已连接' ? notice : '正在处理当前操作，请稍候…')
-    : notice !== 'V3 工作台已连接' ? notice : '';
-  const storyActionFeedbackTone = /失败|错误|无法|未能|阻塞|请先|不存在|冲突|异常/.test(storyActionFeedback) ? ' error' : busy ? ' pending' : ' done';
-  const assetPromptRunLabel = assetPromptRun.status === 'preparing'
-    ? '准备资产 Prompt 任务'
-    : assetPromptRun.status === 'running'
-      ? '资产 Prompt 生成执行中'
-      : assetPromptRun.status === 'success'
-        ? '资产 Prompt 生成完成'
-        : assetPromptRun.status === 'error' ? '资产 Prompt 生成失败' : '';
-  const assetPromptRunElapsed = assetPromptRun.startedAt ? Math.max(0, Math.floor(((assetPromptRun.status === 'preparing' || assetPromptRun.status === 'running' ? assetPromptNow : Date.now()) - assetPromptRun.startedAt) / 1000)) : 0;
-  const assetPromptRunElapsedLabel = assetPromptRunElapsed < 60
-    ? `${Math.floor(assetPromptRunElapsed)} 秒`
-    : `${Math.floor(assetPromptRunElapsed / 60)} 分 ${Math.floor(assetPromptRunElapsed % 60)} 秒`;
-  const shotById = new Map(story.story.shots.map((shot) => [shot.id, shot]));
-  const warningGroups = Array.from(warningIssues.reduce((groups, issue) => {
-    const current = groups.get(issue.code) || { code: issue.code, message: issue.message, count: 0 };
-    current.count += 1;
-    groups.set(issue.code, current);
-    return groups;
-  }, new Map<string, { code: string; message: string; count: number }>() ).values());
-  const focusShot = (shotId: string) => {
-    const target = document.querySelector<HTMLElement>(`[data-story-shot-id="${CSS.escape(shotId)}"]`);
-    if (!target) return;
-    target.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    target.classList.remove('story-check-focus');
-    window.requestAnimationFrame(() => {
-      target.classList.add('story-check-focus');
-      window.setTimeout(() => target.classList.remove('story-check-focus'), 1800);
-    });
-    target.querySelector<HTMLInputElement>('input, textarea')?.focus({ preventScroll: true });
-  };
-  return (
-    <section className="story-view" aria-busy={busy}>
-      <header className="section-heading"><div><span>STORY & SHOT DESIGN</span><h2>故事与分镜</h2></div><div className="story-heading-actions"><div className="story-heading-status" role="status" aria-live="polite" aria-label={`故事阻塞 ${blockingIssues.length} 个，提醒 ${warningIssues.length} 个${pendingAssetCount ? `，资产待登记 ${pendingAssetCount} 项` : ''}${storyRunLabel ? `，${storyRunLabel}` : ''}`}><span className={`story-status-pill${blockingIssues.length ? ' blocked' : ' clear'}`}>{blockingIssues.length ? `阻塞 ${blockingIssues.length}` : '检查通过'}</span><span className="story-status-pill muted">提醒 {warningIssues.length}</span>{pendingAssetCount > 0 && <span className="story-status-pill asset">资产待登记 {pendingAssetCount}</span>}{storyRunLabel && <span className="story-status-pill run">{storyRunLabel}</span>}</div>{storyActionFeedback && <span className={`story-action-feedback${storyActionFeedbackTone}`} role="status" aria-live="polite">{busy && <i aria-hidden="true" />}{storyActionFeedback}</span>}{storyRun && ['storyboard_review_required', 'regulator_review_required'].includes(storyRun.status) && <button type="button" onClick={() => onAccept('all')} disabled={busy}>接受下一层</button>}<button type="button" className="asset-prompt-button" onClick={() => { void onGenerateAssetPrompts(); }} disabled={promptGenerationBlocked} title={promptGenerationTitle}>资产 Prompt 生成</button><button type="button" className="asset-entry-button" onClick={onOpenAssetBoard} disabled={busy || !story.story.shots.length}>进入资产生产</button><button type="button" onClick={onSave} disabled={!dirty || busy}>保存故事剧本</button></div></header>
-      {assetPromptRun.status !== 'idle' && <section className={`asset-prompt-runtime ${assetPromptRun.status}`} role="status" aria-live="polite" aria-label={assetPromptRunLabel}><div className="asset-prompt-runtime-icon" aria-hidden="true">{assetPromptRun.status === 'success' ? '✓' : assetPromptRun.status === 'error' ? '!' : <i />}</div><div className="asset-prompt-runtime-copy"><strong>{assetPromptRunLabel}</strong><span>{assetPromptRun.message}</span></div>{['preparing', 'running'].includes(assetPromptRun.status) && <time>{assetPromptRunElapsedLabel}</time>}</section>}
-      <section className={`story-check-overview ${storyCheckTone}`} aria-label="故事与分镜检查结果">
-        <div className="story-check-overview-heading">
-          <div><span>PRODUCTION GATE</span><h3>{storyCheckTitle}</h3><p>{storyCheckDescription}</p></div>
-          <div className="story-check-overview-counters"><strong>{blockingIssues.length}<small>阻塞</small></strong><strong>{warningIssues.length}<small>提醒</small></strong><strong>{assetGapIssues.length ? pendingAssetCount : story.story.shots.length}<small>{assetGapIssues.length ? '待资产' : '镜头'}</small></strong></div>
-        </div>
-        {blockingIssues.length ? <div className="story-blocker-list">{blockingIssues.map((issue, index) => {
-          const shot = issue.shot_id ? shotById.get(issue.shot_id) : undefined;
-          const missingAssets = storyIssueMissingAssets(issue);
-          return <article className="story-blocker-card" key={`${issue.code}-${issue.shot_id || 'project'}-${index}`}>
-            <div className="story-blocker-card-heading"><span className="story-check-severity">阻塞</span><strong>{storyIssueTitle(issue)}</strong>{issue.shot_id && <b className="story-check-target">{issue.shot_id}</b>}</div>
-            <p className="story-blocker-message">{issue.message}{issue.shot_id ? ` · ${issue.shot_id}` : ''}</p>
-            {issue.code === 'dialogue_overrun' && shot && <div className="story-blocker-evidence"><small>当前对白 / 旁白</small><span>{String(shot.dialogue || shot.narration || '未填写')}</span></div>}
-            <p className="story-blocker-guidance">怎么改：{storyIssueGuidance(issue, shot)}</p>
-            {missingAssets.length > 0 && <div className="story-missing-assets"><small>未登记引用 · {missingAssets.length} 项</small><div>{missingAssets.map((item, missingIndex) => <span key={`${item.shot_id}-${item.asset_id}-${missingIndex}`}>{item.shot_id} → {item.asset_id}</span>)}</div></div>}
-            <div className="story-blocker-actions">{issue.shot_id && <button type="button" onClick={() => focusShot(issue.shot_id as string)}>定位到 {issue.shot_id}</button>}{issue.code === 'asset_gap' && <button type="button" className="story-blocker-primary" onClick={onOpenAssetBoard} disabled={busy}>进入资产生产登记资产</button>}</div>
-          </article>;
-        })}</div> : <div className={`story-check-clear${assetGapIssues.length ? ' has-assets' : ''}`}>{assetGapIssues.length ? '故事与分镜已通过。可以继续进行资产 Prompt 生成和资产生产；下面列出待登记引用。' : '可以继续进行资产 Prompt 生成和资产生产。'}</div>}
-        {assetGapIssues.length > 0 && <article className="story-asset-pending-card"><div className="story-asset-pending-heading"><div><span>ASSET PREPARATION · NEXT STEP</span><strong>{pendingAssetCount} 项资产引用待登记</strong></div><b>正常下一步</b></div><p>剧本与分镜完成后，镜头会先保留所需的角色、场景、道具和声音引用；进入资产生产后再登记、提取并完成资产审阅，不会阻止当前阶段继续。</p><div className="story-missing-assets"><small>镜头引用 · {pendingAssetRefs.length || pendingAssetCount} 项</small><div>{pendingAssetRefs.map((item, index) => <span key={`${item.shot_id}-${item.asset_id}-${index}`}>{item.shot_id} → {item.asset_id}</span>)}</div></div><div className="story-blocker-actions story-asset-pending-actions"><button type="button" className="story-blocker-primary" onClick={onOpenAssetBoard} disabled={busy}>进入资产生产登记资产</button></div></article>}
-        {warningIssues.length > 0 && <details className="story-warning-drawer"><summary><span>提醒明细</span><small>{warningIssues.length} 条提醒 · {warningGroups.map((group) => `${group.message} ×${group.count}`).join(' · ')}</small></summary><div className="story-warning-list">{warningIssues.map((issue, index) => <div className="story-warning-item" key={`${issue.code}-${issue.shot_id || 'project'}-${index}`}><b>提醒</b><span>{issue.message}{issue.shot_id ? ` · ${issue.shot_id}` : ''}</span>{issue.shot_id && <button type="button" onClick={() => focusShot(issue.shot_id as string)}>定位</button>}</div>)}</div></details>}
-      </section>
-      <div className="story-spec-grid">
-        <label>创意目标 / 补充想法<textarea id="story-creative-goal" name="story-creative-goal" ref={creativeGoalRef} value={story.story.spec.creative_goal} onChange={(event) => updateSpec('creative_goal', event.target.value)} onInput={resizeCreativeGoal} /></label>
-        <label>平台<input id="story-platform" name="story-platform" value={story.story.spec.platform} onChange={(event) => updateSpec('platform', event.target.value)} /></label>
-        <label>目标时长<input id="story-duration" name="story-duration" type="number" min="1" value={story.story.spec.duration} onChange={(event) => updateSpec('duration', Number(event.target.value) || 1)} /></label>
-        <label>画幅<input id="story-ratio" name="story-ratio" value={story.story.spec.ratio} onChange={(event) => updateSpec('ratio', event.target.value)} /></label>
-        <label>语言<input id="story-language" name="story-language" value={story.story.spec.language} onChange={(event) => updateSpec('language', event.target.value)} /></label>
-        <label>结构 / 节拍<textarea id="story-beats" name="story-beats" value={story.story.spec.beats.map((item) => String(item.label || item.text || '')).join('\n')} placeholder="每行一个节拍，例如：建立目标\n冲突升级\n反转与收束" onChange={(event) => onChange({ ...story.story, spec: { ...story.story.spec, structure: linesToItems(event.target.value, 'S'), beats: linesToItems(event.target.value, 'B') } })} /></label>
-      </div>
-      <div className="story-section-title story-scene-title"><div><span>SCENE LIST</span><h3>场景</h3></div><div className="story-scene-meta"><span className={`story-section-status${dirty ? ' dirty' : ''}`} role="status" aria-live="polite" title={sceneStatus}>{sceneStatus}</span><div className="story-section-actions"><small>{story.story.scenes.length} 个场景</small><button type="button" onClick={addScene} disabled={busy}>＋ 新增场景</button></div></div></div>
-      <div className="manual-scene-list">{story.story.scenes.map((scene, index) => { const sceneId = String(scene.id || `SCENE-${index + 1}`); return <article className="manual-scene-row" key={sceneId}><b>{sceneId}</b><label>场景名称<input id={`scene-${sceneId}-name`} name={`scene-${sceneId}-name`} value={String(scene.name || '')} onChange={(event) => updateScene(sceneId, 'name', event.target.value)} /></label><label>空间/说明<input id={`scene-${sceneId}-description`} name={`scene-${sceneId}-description`} value={String(scene.description || '')} onChange={(event) => updateScene(sceneId, 'description', event.target.value)} /></label><button type="button" onClick={() => removeScene(sceneId)} disabled={busy}>删除场景</button></article>; })}{!story.story.scenes.length && <div className="empty-state compact">暂无场景。可直接手工新增，不需要 Provider。</div>}</div>
-      <section className="script-workflow" aria-label="脚本优化流程">
-        <div className="script-stage source-script-stage">
-          <div className="script-stage-heading"><div><span>STEP 01 · SOURCE</span><h3>初始想法 / 现有剧本</h3></div><small>输入你的想法、剧情梗概或已有剧本，AI 会以此作为唯一优化来源。</small></div>
-          <textarea id="story-source-script" name="story-source-script" aria-label="初始想法或现有剧本" value={story.story.script} onChange={(event) => onChange({ ...story.story, script: event.target.value })} placeholder="在这里输入初始想法、剧情梗概或现有剧本……" />
-          <div className="script-stage-action"><button className="script-optimize-button" onClick={onGenerate} disabled={busy || !story.story.script.trim()}>✦ AI 整合并优化为拍摄剧本</button><span>{busy ? '正在生成候选…' : '点击后会保留原稿，并生成下方可审阅的拍摄剧本候选。'}</span></div>
-        </div>
-        <div className="script-stage optimized-script-stage">
-          <div className="script-stage-heading"><div><span>STEP 02 · AI OUTPUT</span><h3>AI 优化后的拍摄剧本</h3></div><small>{proposedScript ? '候选版本已生成，可在下方审阅并接受。' : '完成上方输入并点击按钮后，AI 优化结果会显示在这里。'}</small></div>
-          <textarea id="story-optimized-script" name="story-optimized-script" aria-label="AI 优化后的拍摄剧本" value={proposedScript} readOnly placeholder="AI 优化后的、适合拍摄执行的剧本将显示在这里……" />
-        </div>
-      </section>
-      <div className="story-section-title"><div><span>SHOT TABLE</span><h3>镜头表</h3></div><div className="story-section-actions"><small>{story.story.shots.length} 个镜头 · {story.checks.metrics.total_duration}s</small><button type="button" onClick={addShot} disabled={busy}>＋ 新增镜头</button><button onClick={onSave} disabled={!dirty || busy}>保存镜头表</button></div></div>
-      <div className="shot-table">{story.story.shots.length ? story.story.shots.map((shot, index) => <article className="shot-row" data-story-shot-id={shot.id} key={shot.id}><div className="shot-id"><b>{shot.id}</b><small>{shot.scene}</small></div><label>时长<input id={`shot-${shot.id}-duration`} name={`shot-${shot.id}-duration`} type="number" min="0.1" step="0.1" value={shot.duration} onChange={(event) => updateShot(shot.id, 'duration', Number(event.target.value) || 0.1)} /></label><label>景别<input id={`shot-${shot.id}-size`} name={`shot-${shot.id}-size`} value={shot.size} onChange={(event) => updateShot(shot.id, 'size', event.target.value)} /></label><label>机位/运镜<input id={`shot-${shot.id}-camera`} name={`shot-${shot.id}-camera`} value={shot.camera} onChange={(event) => updateShot(shot.id, 'camera', event.target.value)} /></label><label>动作/表演<input id={`shot-${shot.id}-action`} name={`shot-${shot.id}-action`} value={shot.action} onChange={(event) => updateShot(shot.id, 'action', event.target.value)} /></label><label>叙事目的<input id={`shot-${shot.id}-purpose`} name={`shot-${shot.id}-purpose`} value={shot.purpose} onChange={(event) => updateShot(shot.id, 'purpose', event.target.value)} /></label><label className="shot-row-script-field">对白<textarea id={`shot-${shot.id}-dialogue`} name={`shot-${shot.id}-dialogue`} value={String(shot.dialogue || '')} onChange={(event) => updateShot(shot.id, 'dialogue', event.target.value)} placeholder="角色：对白内容（可留空）" /></label><label className="shot-row-script-field">旁白<textarea id={`shot-${shot.id}-narration`} name={`shot-${shot.id}-narration`} value={String(shot.narration || '')} onChange={(event) => updateShot(shot.id, 'narration', event.target.value)} placeholder="旁白 / 画外音（可留空）" /></label><div className="shot-row-actions"><button type="button" aria-label={`上移 ${shot.id}`} onClick={() => moveShot(shot.id, -1)} disabled={busy || index === 0}>↑</button><button type="button" aria-label={`下移 ${shot.id}`} onClick={() => moveShot(shot.id, 1)} disabled={busy || index === story.story.shots.length - 1}>↓</button><button type="button" onClick={() => duplicateShot(shot.id)} disabled={busy}>复制</button><button type="button" onClick={() => splitShot(shot.id)} disabled={busy}>拆分</button><button type="button" onClick={() => removeShot(shot.id)} disabled={busy}>删除</button></div></article>) : <div className="empty-state">暂无镜头。点击“新增镜头”即可手工建立生产链，不需要 Provider。</div>}</div>
-      {reviewReady && <section className="candidate-review"><div className="story-section-title"><div><span>CANDIDATE REVIEW</span><h3>候选差异审阅</h3></div><small>候选不会覆盖当前版本</small></div><details open><summary>候选剧本</summary><pre>{proposedScript || '候选未提供剧本改动'}</pre></details><div className="candidate-shots" aria-label="候选镜头"><div className="candidate-shots-heading"><div><span>SHOT OPTIONS</span><strong>候选镜头</strong></div><small>勾选后可局部接受 · 共 {proposedShots.length} 个候选</small></div><div className="candidate-shot-list">{proposedShots.map((candidate, index) => { const selected = selectedCandidateIds.includes(candidate.id); const purpose = String(candidate.purpose || candidate.action || '未命名镜头'); const action = candidate.action && String(candidate.action) !== purpose ? String(candidate.action) : ''; const metadata = [Number.isFinite(Number(candidate.duration)) ? `${candidate.duration}s` : '', candidate.size ? String(candidate.size) : '', candidate.scene ? String(candidate.scene) : ''].filter(Boolean).join(' · '); const camera = candidate.camera ? String(candidate.camera) : ''; return <label className={`candidate-shot-card${selected ? ' selected' : ''}`} key={candidate.id}><input type="checkbox" checked={selected} aria-label={`选择 ${candidate.id}`} onChange={(event) => setSelectedCandidateIds((current) => event.target.checked ? [...current, candidate.id] : current.filter((id) => id !== candidate.id))} /><span className="candidate-shot-order" aria-hidden="true">{String(index + 1).padStart(2, '0')}</span><span className="candidate-shot-copy"><span className="candidate-shot-topline"><b>{candidate.id}</b>{metadata && <small>{metadata}</small>}</span><strong>{purpose}</strong>{action && <span className="candidate-shot-action">{action}</span>}{camera && <small className="candidate-shot-camera">机位 · {camera}</small>}</span><span className="candidate-shot-state">{selected ? '已选择' : '待选择'}</span></label>; })}</div></div><div className="candidate-actions"><button onClick={() => onAccept('script_only')}>仅接受剧本</button><button onClick={() => onAccept('shots_only', selectedCandidateIds)} disabled={!selectedCandidateIds.length}>接受选中镜头</button><button onClick={() => onAccept('all')}>接受全部候选</button></div></section>}
-      {storyDiff && <section className="story-diff"><div className="story-section-title"><div><span>VERSION DIFF</span><h3>最近版本差异</h3></div><small>{storyDiff.shot_diff.added.length} 新增 · {storyDiff.shot_diff.changed.length} 修改 · {storyDiff.shot_diff.removed.length} 移除</small></div><pre>{storyDiff.script_diff.filter((item) => item.type !== 'same').map((item) => `${item.type === 'add' ? '+' : '-'} ${item.text}`).join('\n') || '剧本文本无变化'}</pre></section>}
-      <div className="version-history"><div className="story-section-title"><div><span>VERSION HISTORY</span><h3>版本与回退</h3></div><small>回退会创建新版本，不覆盖历史</small></div>{story.story.script_versions.filter((version) => version.status !== 'active').slice(-5).map((version) => <div className="version-row" key={String(version.id)}><span>{String(version.id)} · {String(version.source || 'unknown')}</span><button onClick={() => onRollback(String(version.id), 'script')} disabled={busy}>回退剧本</button></div>)}{story.story.storyboard_versions.filter((version) => version.status !== 'active').slice(-5).map((version) => <div className="version-row" key={String(version.id)}><span>{String(version.id)} · 分镜</span><button onClick={() => onRollback(String(version.id), 'shots')} disabled={busy}>回退分镜</button></div>)}</div>
-    </section>
-  );
-}
-
 const settingsCapabilityLabels: Record<string, string> = {
   orchestrator: '编排 Agent', vision: '视觉理解', image: '图片生成', image_edit: '图片编辑', video: '视频生成',
   tts: '语音 / TTS', music: '音乐', sfx: '音效', lip_sync: '口型同步', upscale: '放大 / 修复', upload: '媒体上传',
@@ -2091,7 +1923,6 @@ const settingsProviderLabels: Record<string, string> = {
   openai: 'OpenAI', openai_compatible: 'OpenAI-compatible', jimeng_cli: '即梦官方 CLI', opencode: 'OpenCode Agent', comfyui: 'ComfyUI 本地', minimax: 'MiniMax TTS',
 };
 const settingsProviderTypes = ['openai', 'openai_compatible', 'jimeng_cli', 'opencode', 'comfyui', 'minimax'];
-const settingsProtectedProviderIds = new Set(['openai-default', 'jimeng-default', 'opencode-default', 'minimax-default']);
 const settingsEnvForType: Record<string, string> = { openai: 'OPENAI_API_KEY', openai_compatible: 'DEEPSEEK_API_KEY', opencode: 'OPENCODE_SERVER_PASSWORD', comfyui: 'COMFYUI_API_KEY', minimax: 'MINIMAX_CN_API_KEY' };
 const settingsProviderCapabilities: Record<string, string[]> = {
   openai: ['orchestrator', 'vision', 'image', 'image_edit'],
@@ -2199,7 +2030,62 @@ function MiniMaxCredentialPanel({ selected, activeRegion, preferredModel, modelO
 
 type SettingsDraft = { providerType: string; displayName: string; baseUrl: string; capabilities: string[]; enabled: boolean; modelConfig: string; serverUsername: string; agent: string; preferredModel: string; thinkingStrength: string; cliExecutable: string; minimaxRegion: 'cn' | 'global' };
 
-function SettingsView({ settings, busy, onRefresh, onSaveProvider, onAddPreset, onDeleteProvider, onWriteCredential, onImportCredential, onClearCredential, onProbe, onBind, onAutoMatch }: {
+type SettingsPresetView = {
+  provider?: SettingsProvider;
+  status: string;
+  detail: string;
+};
+
+function normalizeSettingsUrl(value: unknown): string {
+  return String(value || '').trim().replace(/\/+$/, '').toLowerCase();
+}
+
+function findSettingsPresetProvider(preset: SettingsPreset, providers: SettingsProvider[]): SettingsProvider | undefined {
+  return providers.find((provider) => provider.id === preset.id)
+    || providers.find((provider) => provider.provider_type === preset.provider_type);
+}
+
+function buildSettingsPresetView(preset: SettingsPreset, providers: SettingsProvider[]): SettingsPresetView {
+  const provider = findSettingsPresetProvider(preset, providers);
+  if (!provider) {
+    return { status: '可添加', detail: `预设链接：${preset.base_url}` };
+  }
+
+  const actualConfig = provider.model_config || {};
+  const presetConfig = preset.model_config || {};
+  const actualRegion = provider.provider_type === 'minimax'
+    ? String(provider.active_region || actualConfig.region || 'cn').toLowerCase()
+    : '';
+  const presetRegion = provider.provider_type === 'minimax'
+    ? String(presetConfig.region || 'cn').toLowerCase()
+    : '';
+  const actualModel = provider.provider_type === 'minimax'
+    ? String(actualConfig.tts_model || '')
+    : provider.provider_type === 'opencode'
+      ? String(actualConfig.orchestrator_model || actualConfig.preferred_model || '')
+      : String(actualConfig.model_version || actualConfig.default_model || '');
+  const presetModel = provider.provider_type === 'minimax'
+    ? String(presetConfig.tts_model || '')
+    : provider.provider_type === 'opencode'
+      ? String(presetConfig.orchestrator_model || presetConfig.preferred_model || '')
+      : String(presetConfig.model_version || presetConfig.default_model || '');
+  const differsFromPreset = provider.id !== preset.id
+    || normalizeSettingsUrl(provider.base_url) !== normalizeSettingsUrl(preset.base_url)
+    || (provider.provider_type === 'minimax' && actualRegion !== presetRegion)
+    || (Boolean(actualModel) && actualModel !== presetModel);
+  const regionLabel = provider.provider_type === 'minimax'
+    ? (actualRegion === 'global' ? '国际区' : '中国区')
+    : '';
+  const modelLabel = actualModel ? `模型：${actualModel}` : '';
+  const detail = [regionLabel, `实际链接：${provider.base_url}`, modelLabel].filter(Boolean).join(' · ');
+  return {
+    provider,
+    status: differsFromPreset ? '已修改 · 以实际配置为准' : '已在接入目录',
+    detail,
+  };
+}
+
+function SettingsView({ settings, busy, onRefresh, onSaveProvider, onAddPreset, onDeleteProvider, onWriteCredential, onImportCredential, onClearCredential, onProbe }: {
   settings: SettingsEnvelope | null;
   busy: boolean;
   onRefresh: () => void;
@@ -2210,18 +2096,16 @@ function SettingsView({ settings, busy, onRefresh, onSaveProvider, onAddPreset, 
   onImportCredential: (providerId: string, environmentVariable: string, region?: MiniMaxRegion) => void;
   onClearCredential: (providerId: string, region?: MiniMaxRegion) => void;
   onProbe: (providerId: string) => Promise<boolean>;
-  onBind: (capability: string, providerId: string, model: string | null) => void;
-  onAutoMatch: () => void;
 }) {
   const providers = settings?.providers || [];
   const [selectedId, setSelectedId] = useState('');
   const [isCreating, setIsCreating] = useState(false);
+  const [providerManagementMode, setProviderManagementMode] = useState(false);
   const [secret, setSecret] = useState('');
   const [environmentVariable, setEnvironmentVariable] = useState('OPENAI_API_KEY');
   const [minimaxSecrets, setMinimaxSecrets] = useState<Record<MiniMaxRegion, string>>({ cn: '', global: '' });
   const [minimaxEnvironmentVariables, setMinimaxEnvironmentVariables] = useState<Record<MiniMaxRegion, string>>({ cn: 'MINIMAX_CN_API_KEY', global: 'MINIMAX_GLOBAL_API_KEY' });
   const [draft, setDraft] = useState<SettingsDraft>({ providerType: 'openai', displayName: '', baseUrl: 'https://api.openai.com/v1', capabilities: ['orchestrator'], enabled: true, modelConfig: '{}', serverUsername: 'opencode', agent: 'build', preferredModel: '', thinkingStrength: 'max', cliExecutable: 'dreamina', minimaxRegion: 'cn' });
-  const [bindingDraft, setBindingDraft] = useState<Record<string, { providerId: string; model: string }>>({});
   const [saveFeedback, setSaveFeedback] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
   const [probePendingId, setProbePendingId] = useState<string | null>(null);
   useEffect(() => {
@@ -2296,12 +2180,6 @@ function SettingsView({ settings, busy, onRefresh, onSaveProvider, onAddPreset, 
     setMinimaxEnvironmentVariables({ cn: 'MINIMAX_CN_API_KEY', global: 'MINIMAX_GLOBAL_API_KEY' });
   }, [selected?.id, selected?.model_config]);
 
-  useEffect(() => {
-    const next: Record<string, { providerId: string; model: string }> = {};
-    (settings?.bindings || []).forEach((binding) => { next[binding.capability] = { providerId: binding.provider_profile_id, model: binding.model || '' }; });
-    setBindingDraft(next);
-  }, [settings?.bindings]);
-
   const selectProvider = (provider: SettingsProvider) => { setIsCreating(false); setSelectedId(provider.id); setSaveFeedback(null); };
   const startCreate = () => { setIsCreating(true); setSelectedId(''); setSecret(''); setMinimaxSecrets({ cn: '', global: '' }); setMinimaxEnvironmentVariables({ cn: 'MINIMAX_CN_API_KEY', global: 'MINIMAX_GLOBAL_API_KEY' }); setSaveFeedback(null); setDraft({ providerType: 'openai', displayName: '新 Provider', baseUrl: 'https://api.openai.com/v1', capabilities: ['orchestrator'], enabled: true, modelConfig: '{}', serverUsername: 'opencode', agent: 'build', preferredModel: '', thinkingStrength: 'max', cliExecutable: 'dreamina', minimaxRegion: 'cn' }); };
   const toggleCapability = (capability: string) => {
@@ -2324,32 +2202,46 @@ function SettingsView({ settings, busy, onRefresh, onSaveProvider, onAddPreset, 
     if (saved) setDraft((current) => ({ ...current, modelConfig: JSON.stringify(config, null, 2) }));
     setSaveFeedback(saved ? { kind: 'success', text: '保存成功 · Provider 配置已写入' } : { kind: 'error', text: '保存失败 · 请查看顶部提示' });
   };
-  const selectedBinding = (capability: string) => bindingDraft[capability] || { providerId: '', model: '' };
-  const updateBindingDraft = (capability: string, patch: Partial<{ providerId: string; model: string }>) => setBindingDraft((current) => ({ ...current, [capability]: { ...selectedBinding(capability), ...patch } }));
-
   if (!settings) return <div className="empty-state">正在读取 V3 设置控制面…</div>;
+  const routeSummary = (['orchestrator', 'tts', 'image', 'video'] as const).map((capability) => {
+    const binding = settings.bindings.find((item) => item.capability === capability);
+    const provider = providers.find((item) => item.id === binding?.provider_profile_id);
+    const config = provider?.model_config || {};
+    const model = provider
+      ? binding?.model
+        || String(config.orchestrator_model || config.tts_model || config.model_version || config.preferred_model || 'Provider 默认')
+      : '';
+    const status = !provider ? '未配置' : provider.healthy === true ? '已就绪' : provider.healthy === false ? '需检查' : '待检测';
+    const statusClass = !provider ? 'unbound' : provider.healthy === true ? 'ready' : provider.healthy === false ? 'check' : 'pending';
+    const region = provider?.provider_type === 'minimax'
+      ? ` · ${provider.active_region === 'global' ? '国际区' : '中国区'}`
+      : '';
+    return { capability, providerName: provider?.display_name || '—', model, status, statusClass, region };
+  });
   return <section className="settings-view">
-    <header className="settings-heading"><div><span>V3 CONTROL PLANE</span><h2>设置与 Provider 控制面</h2><p>管理模型接入、系统凭据、能力路由和本地运行环境。所有配置均属于 V3，不兼容旧版接口。</p></div><button onClick={onRefresh} disabled={busy}>重新检测全部状态</button></header>
+    <header className="settings-heading"><div><span>V3 CONTROL PLANE</span><h2>设置与 Provider 控制面</h2><p>管理模型接入、系统凭据和本地运行环境；Provider 状态变化会自动更新运行路由。所有配置均属于 V3，不兼容旧版接口。</p></div><button onClick={onRefresh} disabled={busy}>重新检测全部状态</button></header>
     <div className="settings-health-grid">
       <article className="settings-health-card"><small>运行时</small><strong>{settings.system.runtime.toUpperCase()}</strong><span>FrameFlow {settings.system.version} · Schema {settings.system.schema_version}</span></article>
       <article className={`settings-health-card ${settings.system.keyring.available ? 'ok' : 'danger'}`}><small>系统凭据库</small><strong>{settings.system.keyring.available ? '可用' : '不可用'}</strong><span>{settings.system.keyring.backend || '未发现可用后端'}</span></article>
       <article className={`settings-health-card ${settings.system.media.ffmpeg && settings.system.media.ffprobe ? 'ok' : 'warn'}`}><small>媒体工具链</small><strong>{settings.system.media.ffmpeg && settings.system.media.ffprobe ? 'FFmpeg 就绪' : '需要补齐'}</strong><span>ffmpeg / ffprobe · {Math.round(settings.system.disk_free_bytes / 1024 / 1024 / 1024)} GB 可用</span></article>
       <article className={`settings-health-card ${settings.system.minimax?.credential_configured ? 'ok' : 'warn'}`}><small>MiniMax TTS</small><strong>{settings.system.minimax?.credential_configured ? '已配置' : '未配置'}</strong><span>{settings.system.minimax?.active_region === 'global' ? '当前执行区：国际区' : '当前执行区：中国区'} · 两区凭据独立</span></article>
     </div>
+    <section className="settings-route-summary" aria-label="当前运行路由"><div className="settings-route-summary-heading"><div><small>RUNTIME ROUTING</small><h3>当前运行路由</h3></div><span>Provider 状态变化会自动重新匹配</span></div><div className="settings-route-summary-grid">{routeSummary.map((item) => <article className={`settings-route-card ${item.statusClass}`} key={item.capability}><small>{settingsCapabilityLabels[item.capability]}</small><strong>{item.providerName}</strong><span>{item.status}{item.model ? ` · ${item.model}` : ''}{item.region}</span></article>)}</div></section>
     <div className="settings-layout">
-      <aside className="settings-provider-column"><div className="settings-column-heading"><div><small>PROVIDERS</small><h3>接入目录</h3></div><button onClick={startCreate}>＋ 新配置</button></div>
-        {providers.map((provider) => <div key={provider.id} className={`settings-provider-item ${!isCreating && provider.id === selectedId ? 'active' : ''} ${settingsProtectedProviderIds.has(provider.id) ? '' : 'deletable'}`} role="group">
+      <aside className="settings-provider-column"><div className="settings-column-heading"><div><small>PROVIDERS</small><h3>接入目录</h3></div><div className="settings-column-heading-actions"><button type="button" onClick={startCreate}>＋ 新配置</button><button type="button" className={`settings-provider-manage-toggle ${providerManagementMode ? 'active' : ''}`} aria-label="Provider 管理" aria-pressed={providerManagementMode} title={providerManagementMode ? '已开启管理模式：点击关闭删除按钮' : '开启管理模式以显示彻底删除按钮'} onClick={() => setProviderManagementMode((current) => !current)}>Provider 管理</button></div></div>
+        {providerManagementMode && <p className="settings-management-note">管理模式已开启：删除会清理 Provider 配置、系统凭据和能力绑定；快速接入预设会保留。</p>}
+        {providers.map((provider) => <div key={provider.id} className={`settings-provider-item ${!isCreating && provider.id === selectedId ? 'active' : ''} ${providerManagementMode ? 'management-mode' : ''}`} role="group">
           <button type="button" className="settings-provider-select" onClick={() => selectProvider(provider)}><span className="settings-provider-status">{provider.enabled ? '●' : '○'}</span><span><b>{provider.display_name}</b><small>{settingsProviderLabels[provider.provider_type] || provider.provider_type}</small></span><i className={provider.healthy === true ? 'ok' : provider.healthy === false ? 'danger' : ''}>{provider.credential_configured ? '已接入' : provider.provider_type === 'comfyui' || provider.provider_type === 'opencode' || provider.provider_type === 'jimeng_cli' ? '待连接' : '缺凭据'}</i></button>
-          {!settingsProtectedProviderIds.has(provider.id) && <button type="button" className="settings-provider-delete" aria-label={`删除 ${provider.display_name}`} title="删除此 Provider" onClick={() => onDeleteProvider(provider.id)} disabled={busy}>×</button>}
+          {providerManagementMode && <button type="button" className="settings-provider-delete" aria-label={`删除 ${provider.display_name}`} title="永久删除此 Provider" onClick={() => onDeleteProvider(provider.id)} disabled={busy}>×</button>}
         </div>)}
-        <div className="settings-presets"><div className="settings-presets-heading"><small>快速接入预设</small><span>删除配置后仍可重新添加</span></div>{settings.presets.map((preset: SettingsPreset) => <button key={preset.preset_id} onClick={() => onAddPreset(preset.preset_id)} disabled={busy}><b>{preset.display_name}</b><span>{settingsProviderLabels[preset.provider_type] || preset.provider_type} · 添加独立配置</span></button>)}</div>
+        <div className="settings-presets"><div className="settings-presets-heading"><small>快速接入预设</small><span>删除配置后仍可重新添加</span></div>{settings.presets.map((preset: SettingsPreset) => { const presetView = buildSettingsPresetView(preset, providers); return <button key={preset.preset_id} className={presetView.provider ? 'settings-preset-installed' : ''} aria-label={presetView.provider ? `打开 ${preset.display_name} 当前配置` : `添加 ${preset.display_name} Provider`} onClick={() => presetView.provider ? selectProvider(presetView.provider) : onAddPreset(preset.preset_id)} disabled={busy}><b>{presetView.provider ? `打开 ${preset.display_name}` : preset.display_name}</b><span className="settings-preset-status">{presetView.status}</span><span className="settings-preset-detail">{presetView.detail}</span></button>; })}</div>
       </aside>
         <div className="settings-editor">
-          <div className="settings-editor-heading"><div><small>{isCreating ? 'NEW PROVIDER' : 'PROVIDER PROFILE'}</small><h3>{isCreating ? '创建新的 V3 Provider' : selected?.display_name || '选择 Provider'}</h3></div>{selected && <div className="settings-editor-actions"><button onClick={async () => { setProbePendingId(selected.id); try { await onProbe(selected.id); } finally { setProbePendingId(null); } }} disabled={busy}>连接探测</button>{!settingsProtectedProviderIds.has(selected.id) && <button className="danger-button" onClick={() => onDeleteProvider(selected.id)} disabled={busy}>删除配置</button>}</div>}</div>
+          <div className="settings-editor-heading"><div><small>{isCreating ? 'NEW PROVIDER' : 'PROVIDER PROFILE'}</small><h3>{isCreating ? '创建新的 V3 Provider' : selected?.display_name || '选择 Provider'}</h3></div>{selected && <div className="settings-editor-actions"><button onClick={async () => { setProbePendingId(selected.id); try { await onProbe(selected.id); } finally { setProbePendingId(null); } }} disabled={busy}>连接探测</button>{providerManagementMode && <button className="danger-button" onClick={() => onDeleteProvider(selected.id)} disabled={busy}>删除配置</button>}</div>}</div>
          {selected && <section className={`settings-connection-result ${probeStatusClass}`} role="status" aria-live="polite"><div className="settings-connection-heading"><small>CONNECTION STATUS</small><strong>{probeStatus}</strong><span>{currentCredentialMissing ? `当前${runtimeMinimaxLabel}尚未配置独立 API Key，请在下方凭据卡写入后再探测。` : probe?.error_kind === 'auth' ? authCredentialHint : probe?.error ? String(probe.error) : probePending ? '正在验证接入点、认证与可用模型，请稍候…' : probe?.ok === true ? `Provider 已响应，当前区域：${selected.provider_type === 'minimax' ? runtimeMinimaxLabel : '默认接入点'}。下面的数据来自最近一次探测。` : '点击右上角“连接探测”获取实时状态。'}</span></div><dl><div><dt>延迟</dt><dd>{probe?.latency_ms != null ? `${Number(probe.latency_ms)} ms` : '—'}</dd></div><div><dt>可用模型</dt><dd>{probeModels.length ? `${probeModels.length} 个` : '—'}</dd></div><div><dt>声明能力</dt><dd>{probeCapabilities.length ? probeCapabilities.map((capability) => settingsCapabilityLabels[String(capability)] || String(capability)).join('、') : '—'}</dd></div>{selected.provider_type === 'minimax' && <div><dt>可用音色</dt><dd>{probeVoices.length ? `${probeVoices.length} 个` : '—'}</dd></div>}<div><dt>最近检测</dt><dd>{probe?.checked_at ? new Date(Number(probe.checked_at) * 1000).toLocaleString('zh-CN') : '—'}</dd></div>{probe?.server_version != null && <div><dt>Server 版本</dt><dd>{String(probe.server_version)}</dd></div>}</dl>{selected.provider_type === 'minimax' && probeVoices.length > 0 && <p className="settings-help">音色 ID：{probeVoices.slice(0, 12).map((voice) => String(voice.voice_id || voice.id || '')).filter(Boolean).join('、')}{probeVoices.length > 12 ? ' …' : ''}</p>}</section>}
           <div className="settings-form-grid"><label>显示名称<input value={draft.displayName} onChange={(event) => setDraft({ ...draft, displayName: event.target.value })} /></label><label>Provider 类型<select value={draft.providerType} disabled={!isCreating} onChange={(event) => setDraft({ ...draft, providerType: event.target.value, capabilities: [] })}>{settingsProviderTypes.map((type) => <option key={type} value={type}>{settingsProviderLabels[type]}</option>)}</select></label>{draft.providerType === 'jimeng_cli' ? <label className="settings-wide">CLI 可执行文件（只填写程序路径）<input value={draft.cliExecutable} onChange={(event) => setDraft({ ...draft, cliExecutable: event.target.value })} placeholder="dreamina 或 dreamina.exe 的完整路径" /><small className="settings-field-help">不要把 curl 安装命令填在这里；安装命令请在终端执行，成功后这里保持为 dreamina。</small></label> : <label className="settings-wide">Base URL<input value={draft.baseUrl} onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })} placeholder="https://… 或本机 http://127.0.0.1…" /></label>}</div>
-         <div className="settings-capability-picker"><span>声明能力</span>{Object.entries(settingsCapabilityLabels).map(([capability, label]) => { const supported = supportedCapabilities.includes(capability); return <label className={supported ? '' : 'unsupported'} key={capability}><input type="checkbox" checked={draft.capabilities.includes(capability)} disabled={!supported} onChange={() => toggleCapability(capability)} />{label}{!supported && <small>不支持</small>}</label>; })}{unsupportedSelectedCapabilities.length > 0 && <p className="settings-capability-help">当前配置中存在不受此 Provider 适配器支持的能力，保存时会自动忽略这些选项。</p>}<p className="settings-capability-explain">{draft.providerType === 'opencode' ? '这里表示 Provider 适配器可以承担的能力，不是单个 Go 模型的媒体生成能力。OpenCode Go 负责文本编排；图片、视频、声音等任务会按能力绑定交给其他 Provider。' : '这里表示当前 Provider 适配器可以承担的能力；具体模型仍以连接探测和能力绑定为准。'}</p></div>
-         <label className="settings-toggle"><input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })} />启用此 Provider（停用后不可被能力路由选择）</label>
+          <div className="settings-capability-picker"><span>支持能力</span>{Object.entries(settingsCapabilityLabels).map(([capability, label]) => { const supported = supportedCapabilities.includes(capability); return <label className={supported ? '' : 'unsupported'} key={capability}><input type="checkbox" checked={draft.capabilities.includes(capability)} disabled={!supported} onChange={() => toggleCapability(capability)} />{label}{!supported && <small>不支持</small>}</label>; })}{unsupportedSelectedCapabilities.length > 0 && <p className="settings-capability-help">当前配置中存在不受此 Provider 适配器支持的能力，保存时会自动忽略这些选项。</p>}<p className="settings-capability-explain">{draft.providerType === 'opencode' ? '这里表示 Provider 适配器可以承担的能力，不是单个 Go 模型的媒体生成能力。OpenCode Go 负责文本编排；图片、视频、声音等任务会按自动运行路由交给其他 Provider。' : '这里表示当前 Provider 适配器可以承担的能力；具体模型仍以连接探测和自动运行路由为准。'}</p></div>
+         <label className="settings-toggle"><input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })} />启用此 Provider（停用后不可被自动运行路由选择）</label>
           {draft.providerType === 'opencode' && <div className="settings-agent-form"><div className="settings-subheading"><small>OPENCODE AGENT</small><h4>Agent 接入参数</h4></div><div className="settings-form-grid"><label>Server 用户名<input value={draft.serverUsername} onChange={(event) => setDraft({ ...draft, serverUsername: event.target.value })} /></label><label>Agent<input value={draft.agent} onChange={(event) => setDraft({ ...draft, agent: event.target.value })} /></label><label>思考强度<select value={draft.thinkingStrength} onChange={(event) => setDraft({ ...draft, thinkingStrength: event.target.value })}><option value="auto">自动（跟随模型）</option><option value="low">低 · 快速响应</option><option value="medium">中 · 平衡</option><option value="high">高 · 深度规划</option><option value="max">最大 · 复杂创作 / QA</option></select></label><label className="settings-wide">主力模型<select value={draft.preferredModel} onChange={(event) => setDraft({ ...draft, preferredModel: event.target.value })} disabled={!opencodeModelOptions.length}><option value="">{opencodeModelOptions.length ? '请选择主力模型' : '请先连接探测模型'}</option>{opencodeModelOptions.map((model) => <option key={model.id} value={model.id}>{model.label}</option>)}</select></label></div>{selectedGoModel && <div className="settings-go-model-card"><div className="settings-go-model-heading"><span>FRAMEFLOW 调度建议</span><strong>{selectedGoModel.name}</strong></div><div className="settings-go-model-focus"><small>更偏向视频制作</small><b>{selectedGoModel.focus}</b></div><p>{selectedGoModel.note}</p>{selectedGoModel.quota && <small className="settings-go-model-quota">官方典型额度：每 5 小时约 {selectedGoModel.quota} 次请求</small>}</div>}{draft.preferredModel && !selectedGoModel && !selectedDetectedModel && <div className="settings-go-model-card settings-go-model-card-warning"><div className="settings-go-model-heading"><span>当前配置</span><strong>{draft.preferredModel}</strong></div><p>该模型不在当前 OpenCode Go 官方目录中。重新探测后可切换到上方 Go 模型组合。</p></div>}<p className="settings-help">模型列表优先来自最近一次连接探测；OpenCode Go 官方组合仅用于补充用途说明。“思考强度”会作为 OpenCode 的 variant 参数发送。“更偏向视频制作”是 FRAMEFLOW 的调度建议，不代表模型原生支持图片或视频生成。保存后会写入 OpenCode 的编排模型配置，并自动同步“编排 Agent”能力绑定。</p></div>}
           {draft.providerType === 'jimeng_cli' && <div className="settings-agent-form"><div className="settings-subheading"><small>DREAMINA CLI</small><h4>即梦视频模型</h4></div><label className="settings-wide">默认模型<select className="settings-jimeng-model-select" value={draft.preferredModel || 'seedance2.0fast'} onChange={(event) => setDraft({ ...draft, preferredModel: event.target.value })}>{JIMENG_VIDEO_MODELS.map((model) => <option key={model.id} value={model.id}>{model.id} · {model.description}</option>)}</select></label><p className="settings-help">模型列表已按当前 dreamina CLI 帮助同步；VIP、图生/首尾帧专用模型会在不匹配的生成模式下被后端拦截。安装命令请在终端执行，不要填入上方路径。登录命令：dreamina login --headless。</p></div>}
           {draft.providerType === 'minimax' && <MiniMaxCredentialPanel selected={selected} activeRegion={activeMinimaxRegion} preferredModel={draft.preferredModel} modelOptions={minimaxModelOptions} secrets={minimaxSecrets} environmentVariables={minimaxEnvironmentVariables} busy={busy} onModelChange={(model) => setDraft((current) => ({ ...current, preferredModel: model }))} onSecretChange={(region, value) => setMinimaxSecrets((current) => ({ ...current, [region]: value }))} onEnvironmentChange={(region, value) => setMinimaxEnvironmentVariables((current) => ({ ...current, [region]: value }))} onWrite={(region) => { if (!selected) return; onWriteCredential(selected.id, minimaxSecrets[region], region); setMinimaxSecrets((current) => ({ ...current, [region]: '' })); }} onImport={(region) => { if (!selected) return; onImportCredential(selected.id, minimaxEnvironmentVariables[region], region); }} onClear={(region) => { if (!selected) return; onClearCredential(selected.id, region); }} onSelectRegion={(region) => setDraft((current) => ({ ...current, minimaxRegion: region, baseUrl: minimaxRegionLabels[region].baseUrl }))} />}
@@ -2357,7 +2249,6 @@ function SettingsView({ settings, busy, onRefresh, onSaveProvider, onAddPreset, 
          <div className="settings-save-row"><button className="settings-primary" onClick={saveProvider} disabled={busy || !draft.displayName.trim() || !draft.baseUrl.trim()}>{isCreating ? '创建 Provider' : '保存 Provider 配置'}</button>{saveFeedback && <span className={`settings-save-feedback ${saveFeedback.kind}`} role="status">{saveFeedback.text}</span>}</div>
         {!isCreating && selected && (selected.provider_type === 'jimeng_cli' ? <section className="settings-credential-card"><div className="settings-subheading"><small>LOCAL CLI LOGIN</small><h4>即梦本机登录态</h4><p>{selected.credential_configured ? 'CLI 已检测到本机登录态。' : '不填写 API Key；请先安装官方 CLI，并运行 dreamina login 或 dreamina login --headless。'}</p></div><small className="settings-security-note">登录态由官方 dreamina CLI 自己管理，FrameFlow 不读取、不保存 Cookie 或 token。</small></section> : selected.provider_type !== 'minimax' ? <section className="settings-credential-card"><div className="settings-subheading"><small>CREDENTIALS</small><h4>系统凭据库</h4><p>{selected.credential_configured ? `当前状态：已配置 ${selected.credential_mask || '••••••••'}` : selected.provider_type === 'opencode' || selected.provider_type === 'comfyui' ? '当前 Provider 可以不配置密钥，连接由本地服务决定。' : '当前状态：未配置 API Key'}</p></div><div className="settings-credential-actions"><input type="password" value={secret} onChange={(event) => setSecret(event.target.value)} placeholder="输入后仅写入系统凭据库，不会保存到网页" autoComplete="off"/><button onClick={() => { onWriteCredential(selected.id, secret); setSecret(''); }} disabled={busy || !secret}>写入凭据库</button><select value={environmentVariable} onChange={(event) => setEnvironmentVariable(event.target.value)}><option>{settingsEnvForType[selected.provider_type] || 'OPENAI_API_KEY'}</option><option>OPENAI_API_KEY</option><option>DEEPSEEK_API_KEY</option><option>OPENCODE_SERVER_PASSWORD</option><option>COMFYUI_API_KEY</option><option>MINIMAX_API_KEY</option></select><button onClick={() => onImportCredential(selected.id, environmentVariable)} disabled={busy}>导入环境变量</button><button className="danger-button" onClick={() => onClearCredential(selected.id)} disabled={busy}>清除系统凭据</button></div><small className="settings-security-note">API Key 不回显、不进入项目 JSON、运行快照、日志、前端 localStorage 或 Provider 探测结果。</small></section> : null)}
        </div>
-       <aside className="settings-routing" aria-label="Capability routing"><div className="settings-column-heading"><div><small>CAPABILITY ROUTING</small><h3>能力绑定</h3></div><button onClick={onAutoMatch} disabled={busy}>补齐自动推荐</button></div><p className="settings-help">{settings.routing_policy || '先按 Provider 能力和状态自动匹配，再允许手动调整。'} MiniMax 是当前唯一 TTS Provider；每项能力只保存一个默认 Provider + model。</p>{settings.capabilities.map((capability) => { const binding = selectedBinding(capability); const candidates = providers.filter((provider) => provider.enabled && provider.contract?.capabilities.includes(capability)); const provider = providers.find((item) => item.id === binding.providerId); const models = provider?.models || []; return <div className="settings-binding-row" key={capability}><label>{settingsCapabilityLabels[capability] || capability}<select value={binding.providerId} onChange={(event) => updateBindingDraft(capability, { providerId: event.target.value, model: '' })}><option value="">未绑定</option>{candidates.map((item) => <option key={item.id} value={item.id}>{item.display_name}</option>)}</select></label><label>模型<select value={binding.model} onChange={(event) => updateBindingDraft(capability, { model: event.target.value })}><option value="">Provider 默认</option>{(models.length ? models : capability === 'orchestrator' ? settings.orchestrator_models.models.map((item) => item.id) : []).map((model) => <option key={model} value={model}>{model}</option>)}</select></label><button onClick={() => onBind(capability, binding.providerId, binding.model || null)} disabled={busy || !binding.providerId}>保存绑定</button></div>; })}</aside>
     </div>
     <section className="settings-security-panel"><div><small>SECURITY BOUNDARY</small><h3>安全与费用规则</h3></div><ul><li>付费媒体调用必须通过 V3 审批门，设置页不会直接触发生成。</li><li>密钥只进入系统凭据库；清除操作只清除系统存储，不修改环境变量。</li><li>Provider 探测只展示脱敏状态、延迟、能力和模型目录。</li><li>新结果保留为独立版本；设置变更不会覆盖项目、资产或时间线内容。</li></ul></section>
   </section>;
@@ -2435,7 +2326,6 @@ function Studio() {
   const [assetEditorDraftDirty, setAssetEditorDraftDirty] = useState(false);
   const [settings, setSettings] = useState<SettingsEnvelope | null>(null);
   const [storyRun, setStoryRun] = useState<StoryRun | null>(null);
-  const [storyDiff, setStoryDiff] = useState<StoryDiff | null>(null);
   const [run, setRun] = useState<WorkflowRun | null>(null);
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -3121,7 +3011,6 @@ function Studio() {
          setDashboard(dashboardEnvelope);
          setDashboardError('');
         setStoryRun(storyRuns.runs[0] || null);
-        setStoryDiff(null);
         setDirty(false);
          setStoryDirty(false);
          setAgentPlan(null);
@@ -3530,9 +3419,6 @@ function Studio() {
     await refreshAudioStudio();
     return ok;
   };
-  const bindSettingsCapability = (capability: string, providerId: string, model: string | null) => runSettingsAction(async () => { await studioApi.updateSettingsBinding({ capability, provider_profile_id: providerId, model }); }, `${settingsCapabilityLabels[capability] || capability} 能力绑定已保存`);
-  const autoMatchSettingsBindings = () => runSettingsAction(async () => { await studioApi.autoMatchSettingsBindings(); }, '已按 Provider 能力和状态补齐自动推荐');
-
   const refreshTimelinePreflight = async () => {
     if (!projectId) return;
     try { setTimelinePreflight(await studioApi.timelinePreflight(projectId)); } catch (error) { setNotice((error as Error).message); }
@@ -4405,18 +4291,6 @@ function Studio() {
     } finally { setAgentBusy(false); }
   };
 
-  useEffect(() => {
-    if (!projectId || !story) return;
-    const versions = story.story.script_versions.filter((version) => typeof version.id === 'string');
-    const active = versions.find((version) => version.status === 'active');
-    const previous = versions.filter((version) => version.id !== active?.id).at(-1);
-    if (!active || !previous) {
-      setStoryDiff(null);
-      return;
-    }
-    studioApi.storyDiff(projectId, String(previous.id), String(active.id)).then(setStoryDiff).catch(() => setStoryDiff(null));
-  }, [projectId, story?.revision]);
-
   const saveStory = async (manageBusy = true, background = false, expectedRevisionOverride?: number, allowRetry = true): Promise<StoryEnvelope | null> => {
     const current = storyRef.current || story;
     if (!current || !projectId) return null;
@@ -4462,16 +4336,18 @@ function Studio() {
     } finally { if (manageBusy) setBusy(false); }
   };
 
-  const generateStoryCandidate = async () => {
+  const generateStoryCandidate = async (mode: 'optimize' | 'direct' = 'optimize') => {
     if (!story || !projectId) return;
     setBusy(true);
     try {
       const currentStory = storyDirty ? await saveStory(false) : story;
       if (!currentStory) return;
-      const created = await studioApi.createStoryRun(projectId, { goal: 'full', strength: 'balanced', duration: currentStory.story.spec.duration, ratio: currentStory.story.spec.ratio, generator: project?.document.generator, audience: currentStory.story.spec.audience, platform: currentStory.story.spec.platform, language: currentStory.story.spec.language, brand_requirements: currentStory.story.spec.brand_requirements, must_preserve: currentStory.story.spec.must_preserve, must_avoid: currentStory.story.spec.must_avoid });
+      const currentSpec = currentStory.story.spec;
+      const generatorProfile = currentSpec.generator_profile || project?.document.generator || 'seedance2.5';
+      const created = await studioApi.createStoryRun(projectId, { goal: mode === 'direct' ? 'script_storyboard' : 'full', workflow_mode: mode === 'direct' ? 'storyboard_from_source' : 'optimize_script_and_storyboard', strength: 'balanced', duration: currentSpec.duration, ratio: currentSpec.ratio, generator: generatorProfile, generator_profile: generatorProfile, shot_count_min: currentSpec.shot_count_min, shot_count_target: currentSpec.shot_count_target, shot_count_max: currentSpec.shot_count_max, audience: currentSpec.audience, platform: currentSpec.platform, language: currentSpec.language, brand_requirements: currentSpec.brand_requirements, must_preserve: currentSpec.must_preserve, must_avoid: currentSpec.must_avoid });
       const started = await studioApi.startStoryRun(created.id);
       setStoryRun(started.run);
-      setNotice('故事候选已生成，等待逐层接受');
+      setNotice(mode === 'direct' ? '原文直转分镜候选已生成，等待审阅' : '拍摄剧本与分镜候选已生成，等待逐层接受');
       void refreshDashboard(false);
     } catch (error) {
       setNotice((error as Error).message);
@@ -4482,7 +4358,9 @@ function Studio() {
     if (!storyRun) return;
     setBusy(true);
     try {
-      const result = storyRun.status === 'storyboard_review_required' ? await studioApi.acceptStoryboard(storyRun.id, scope, shotIds) : await studioApi.acceptRegulator(storyRun.id);
+      const directMode = String(storyRun.input?.workflow_mode || storyRun.storyboard_output?.workflowMode || '') === 'storyboard_from_source';
+      const effectiveScope = directMode && scope === 'all' ? 'shots_only' : scope;
+      const result = storyRun.status === 'storyboard_review_required' ? await studioApi.acceptStoryboard(storyRun.id, effectiveScope, shotIds) : await studioApi.acceptRegulator(storyRun.id);
       setStoryRun(result.run);
       const refreshed = await studioApi.story(projectId);
       setStory(refreshed);
@@ -4514,7 +4392,6 @@ function Studio() {
         setAssetLibrary(library);
         await refreshAssetBoard(true, library);
       }
-      setStoryDiff(null);
       setStoryDirty(false);
       setNotice(`已从 ${versionId} 创建回退版本`);
       void refreshDashboard(false);
@@ -5408,11 +5285,11 @@ function Studio() {
         </header>
         <div className="studio-content">
           {busy && <div className="progress-bar" />}
-          {mode === 'story' && <StoryView story={story} storyRun={storyRun} storyDiff={storyDiff} dirty={storyDirty} busy={busy} notice={notice} assetPromptRun={assetPromptRun} onChange={(next) => { setStory((current) => current ? { ...current, story: next } : current); markStoryDirty(); }} onSave={saveStory} onGenerate={generateStoryCandidate} onAccept={acceptStoryLayer} onRollback={rollbackStory} onOpenAssetBoard={openAssetBoard} onGenerateAssetPrompts={generateAssetPrompts} />}
+          {mode === 'story' && <StoryWorkbench story={story} storyRun={storyRun} dirty={storyDirty} busy={busy} notice={notice} assetPromptRun={assetPromptRun} onChange={(next) => { setStory((current) => current ? { ...current, story: next } : current); markStoryDirty(); }} onSave={saveStory} onGenerateOptimized={() => { void generateStoryCandidate('optimize'); }} onGenerateStoryboard={() => { void generateStoryCandidate('direct'); }} onAccept={acceptStoryLayer} onRollback={rollbackStory} onOpenAssetBoard={openAssetBoard} onGenerateAssetPrompts={generateAssetPrompts} />}
           {mode === 'home' && <HomeView dashboard={dashboard} error={dashboardError} currentProjectId={projectId} busy={busy} onSelectProject={(id) => { setProjectId(id); setMode('home'); }} onOpenTask={openDashboardTask} onOpenStage={openDashboardStage} onRefresh={() => { void refreshDashboard(); }} />}
           {mode === 'audio' && <AudioStudioView projectId={projectId} projectName={project?.document.name || '当前项目'} envelope={audioStudio} assetLibrary={assetLibrary} settings={settings} story={story} busy={busy} onSave={saveAudioStudio} onRefresh={refreshAudioStudio} onRefreshMinimaxCatalog={refreshMinimaxCatalog} onCreateAsset={createAudioAsset} onNotice={setNotice} onDirtyChange={(isDirty) => { if (!isDirty) setAudioDirty(false); }} onDocumentChange={handleAudioDocumentChange} onOpenStory={() => setMode('story')} />}
           {mode === 'timeline' && <TimelineView envelope={timelineEnvelope} preflight={timelinePreflight} story={story} assetLibrary={assetLibrary} renderJob={renderJob} busy={busy} onChange={(document) => { setTimelineEnvelope((current) => current ? { ...current, document } : current); markTimelineDirty(); }} onSave={saveTimeline} onAssemble={assembleTimeline} onPreview={previewTimeline} onRender={renderTimeline} />}
-          {mode === 'settings' && <SettingsView settings={settings} busy={busy} onRefresh={refreshSettings} onSaveProvider={saveSettingsProvider} onAddPreset={addSettingsPreset} onDeleteProvider={deleteSettingsProvider} onWriteCredential={writeSettingsCredential} onImportCredential={importSettingsCredential} onClearCredential={clearSettingsCredential} onProbe={probeSettingsProvider} onBind={bindSettingsCapability} onAutoMatch={autoMatchSettingsBindings} />}
+          {mode === 'settings' && <SettingsView settings={settings} busy={busy} onRefresh={refreshSettings} onSaveProvider={saveSettingsProvider} onAddPreset={addSettingsPreset} onDeleteProvider={deleteSettingsProvider} onWriteCredential={writeSettingsCredential} onImportCredential={importSettingsCredential} onClearCredential={clearSettingsCredential} onProbe={probeSettingsProvider} />}
           {mode === 'canvas' && (
             <section className="canvas-wrap asset-board-wrap" onMouseDownCapture={handleAssetBoardControlSelection}>
               <aside className={`asset-board-index ${assetBoardIndexOpen ? 'open' : ''} ${assetBoardIndexPosition.x > 520 ? 'dock-left' : ''} ${assetBoardIndexPosition.y > 420 ? 'dock-up' : ''}`} style={{ left: assetBoardIndexPosition.x, top: assetBoardIndexPosition.y }}>

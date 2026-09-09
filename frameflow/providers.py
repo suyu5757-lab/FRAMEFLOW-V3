@@ -38,6 +38,7 @@ MINIMAX_TTS_VOLUME_MIN = 0.0
 MINIMAX_TTS_VOLUME_MAX = 10.0
 MINIMAX_TTS_PITCH_MIN = -12
 MINIMAX_TTS_PITCH_MAX = 12
+MINIMAX_VOICE_DESIGN_PREVIEW_MAX_CHARS = 500
 MINIMAX_REGIONS = ("cn", "global")
 MINIMAX_DEFAULT_REGION = "cn"
 MINIMAX_REGION_BASE_URLS = {
@@ -364,6 +365,48 @@ async def minimax_speech(profile: dict[str, Any], api_key: str, request: dict[st
     }
 
 
+async def minimax_voice_design(
+    profile: dict[str, Any],
+    api_key: str,
+    prompt: str,
+    preview_text: str,
+    voice_id: str | None = None,
+) -> tuple[bytes, dict[str, Any]]:
+    """Create one MiniMax Voice Design preview without an automatic retry.
+
+    Voice Design creates a provider-side custom voice and bills for the preview.
+    Just like T2A, a transport failure is therefore intentionally surfaced as an
+    ambiguous execution instead of being retried behind the user's back.
+    """
+    clean_prompt = str(prompt or "").strip()
+    clean_preview = str(preview_text or "").strip()
+    if not clean_prompt:
+        raise ProviderError("MiniMax Voice Design 需要明确的音色描述。", "validation", 422)
+    if not clean_preview:
+        raise ProviderError("MiniMax Voice Design 需要试听文本。", "validation", 422)
+    if len(clean_preview) > MINIMAX_VOICE_DESIGN_PREVIEW_MAX_CHARS:
+        raise ProviderError("MiniMax Voice Design 的试听文本最多 500 个字符。", "validation", 422)
+    payload: dict[str, Any] = {"prompt": clean_prompt, "preview_text": clean_preview}
+    if voice_id:
+        payload["voice_id"] = str(voice_id)
+    try:
+        response = await request_json("POST", minimax_api_url(profile, "voice_design"), api_key, json=payload)
+    except (httpx.TimeoutException, httpx.RequestError) as exc:
+        raise ProviderError("MiniMax Voice Design 请求状态不确定，未自动重试；请先确认上游是否已经创建音色。", "execution-unknown", 504) from exc
+    _minimax_base_response_error(response)
+    generated_voice_id = str(response.get("voice_id") or "").strip()
+    audio_hex = response.get("trial_audio")
+    if not generated_voice_id:
+        raise ProviderError("MiniMax Voice Design 未返回可用于 TTS 的 voice_id。", "retryable", 502)
+    if not isinstance(audio_hex, str) or not audio_hex:
+        raise ProviderError("MiniMax Voice Design 未返回试听音频。", "retryable", 502)
+    try:
+        audio = bytes.fromhex(audio_hex)
+    except ValueError as exc:
+        raise ProviderError("MiniMax Voice Design 返回的试听音频无效。", "validation", 502) from exc
+    return audio, {"voice_id": generated_voice_id, "status": "candidate"}
+
+
 async def minimax_probe(profile: dict[str, Any], api_key: str) -> dict[str, Any]:
     started = time.perf_counter()
     endpoints = [minimax_api_url(profile, "get_voice")]
@@ -585,11 +628,55 @@ async def openai_assistant(profile: dict[str, Any], api_key: str, model: str, me
 
 
 
+STORYBOARD_CONTINUITY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "screenDirection": {"type": "string"},
+        "eyeline": {"type": "string"},
+        "motionVector": {"type": "string"},
+        "cutIn": {"type": "string"},
+        "cutOut": {"type": "string"},
+        "matchAction": {"type": "string"},
+        "editBridge": {"type": "string"},
+        "preRoll": {"type": "string"},
+        "postRoll": {"type": "string"},
+        "firstFrame": {"type": "string"},
+        "lastFrame": {"type": "string"},
+    },
+    "required": ["screenDirection", "eyeline", "motionVector", "cutIn", "cutOut", "matchAction", "editBridge", "preRoll", "postRoll", "firstFrame", "lastFrame"],
+    "additionalProperties": True,
+}
+
+STORYBOARD_SEEDANCE_PLAN_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "model": {"type": "string"},
+        "generationMode": {"type": "string"},
+        "targetDuration": {"type": "number"},
+        "aspectRatio": {"type": "string"},
+        "clipUnit": {"type": "string"},
+        "promptTimeline": {"type": "array", "items": {"type": "object", "additionalProperties": True}},
+        "startState": {"type": "string"},
+        "playableChange": {"type": "string"},
+        "endState": {"type": "string"},
+        "continuityStrategy": {"type": "string"},
+        "referenceAssignments": {"type": "array", "items": {"type": "object", "additionalProperties": True}},
+        "audioStrategy": {"type": "string"},
+        "mustPreserve": {"type": "array", "items": {"type": "string"}},
+        "mustAvoid": {"type": "array", "items": {"type": "string"}},
+        "riskFlags": {"type": "array", "items": {"type": "string"}},
+        "fallbackRoute": {"type": "string"},
+    },
+    "required": ["model", "generationMode", "targetDuration", "aspectRatio", "clipUnit", "promptTimeline", "startState", "playableChange", "endState", "continuityStrategy", "referenceAssignments", "audioStrategy", "mustPreserve", "mustAvoid", "riskFlags", "fallbackRoute"],
+    "additionalProperties": True,
+}
 
 STORYBOARD_OUTPUT_SCHEMA = {
     "type": "object",
     "properties": {
         "sourceScriptVersionId": {"type": ["string", "null"]},
+        "workflowMode": {"type": "string"},
+        "shotBudgetAssessment": {"type": "object", "additionalProperties": True},
         "proposedScript": {"type": "string"},
         "structure": {"type": "array", "items": {"type": "object", "additionalProperties": True}},
         "beats": {"type": "array", "items": {"type": "object", "additionalProperties": True}},
@@ -637,7 +724,7 @@ STORYBOARD_OUTPUT_SCHEMA = {
                     "lightingCausality": {"type": ["string", "object"], "additionalProperties": True},
                     "cameraExecution": {"type": "object", "additionalProperties": True},
                     "atmosphereBehavior": {"type": ["string", "object"], "additionalProperties": True},
-                    "continuity": {"type": ["string", "array"], "items": {"type": "string"}},
+                    "continuity": STORYBOARD_CONTINUITY_SCHEMA,
                     "referenceRoles": {"type": "array", "items": {"type": "object", "additionalProperties": True}},
                     "visualStyle": {"type": "object", "additionalProperties": True},
                     "dialogue": {"type": "string"},
@@ -646,8 +733,9 @@ STORYBOARD_OUTPUT_SCHEMA = {
                     "generationMethod": {"type": "string"},
                     "difficulty": {"type": "string"},
                     "risks": {"type": "array", "items": {"type": "string"}},
+                    "seedancePlan": STORYBOARD_SEEDANCE_PLAN_SCHEMA,
                 },
-                "required": ["id", "scene", "duration", "purpose", "size", "camera", "action"],
+                "required": ["id", "scene", "duration", "purpose", "size", "camera", "action", "visibleEvent", "eventConsequence", "continuity", "seedancePlan"],
                 "additionalProperties": True,
             },
         },
@@ -660,6 +748,8 @@ STORYBOARD_OUTPUT_SCHEMA = {
                 "props": {"type": "array", "items": {"type": "object", "additionalProperties": True}},
                 "soundRequirements": {"type": "array", "items": {"type": "object", "additionalProperties": True}},
                 "assetDependencyDraft": {"type": "array", "items": {"type": "object", "additionalProperties": True}},
+                "seedanceReferencePlans": {"type": "array", "items": {"type": "object", "additionalProperties": True}},
+                "shotAssetMatrix": {"type": "array", "items": {"type": "object", "additionalProperties": True}},
             },
             "additionalProperties": True,
         },

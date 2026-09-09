@@ -99,6 +99,27 @@ export type AudioVoiceProfile = {
   notes?: string;
 };
 
+export type AudioVoiceDesignCandidate = {
+  id: string;
+  status: 'candidate' | 'adopted' | 'expired' | string;
+  provider: 'minimax' | string;
+  provider_profile_id?: string | null;
+  provider_region?: MiniMaxRegion | string;
+  provider_voice_id: string;
+  provider_voice_name?: string;
+  source_type: 'design' | string;
+  prompt: string;
+  preview_text: string;
+  locale?: string | null;
+  language?: string | null;
+  character_id?: string | null;
+  artifact_id?: string | null;
+  url?: string | null;
+  created_at?: string | null;
+  expires_at?: string | null;
+  retention_notice?: string | null;
+};
+
 export type AudioVoiceReference = {
   id: string;
   voice_id?: string | null;
@@ -241,6 +262,7 @@ export type AudioStudioDocument = {
   schemaVersion?: 'minimax-speech-audio-v2' | string;
   selected_mode?: 'overview' | 'voices' | 'music' | 'sound' | 'handoff' | string;
   voices: AudioVoiceProfile[];
+  voice_design_candidates?: AudioVoiceDesignCandidate[];
   voice_references?: AudioVoiceReference[];
   auditions?: AudioAudition[];
   dialogues: AudioDialogueTask[];
@@ -299,6 +321,20 @@ export type SpeechGenerateInput = {
   take_id?: string;
   character_id?: string;
   operation?: string;
+};
+
+export type VoiceDesignGenerateInput = {
+  prompt: string;
+  preview_text: string;
+  provider_profile_id?: string;
+  provider_region?: MiniMaxRegion;
+  voice_id?: string;
+  name?: string;
+  locale?: string;
+  language?: string;
+  character_id?: string;
+  expected_revision: number;
+  confirmed: boolean;
 };
 
 export type ProjectCreateInput = {
@@ -754,6 +790,7 @@ export type RenderJob = {
 };
 
 export type StorySpec = {
+  workflow_mode?: 'optimize_script_and_storyboard' | 'storyboard_from_source' | string;
   creative_goal: string;
   audience: string;
   platform: string;
@@ -765,6 +802,12 @@ export type StorySpec = {
   must_avoid: string[];
   structure: Array<Record<string, unknown>>;
   beats: Array<Record<string, unknown>>;
+  shot_count_min?: number | null;
+  shot_count_target?: number | null;
+  shot_count_max?: number | null;
+  shot_budget_mode?: 'controlled' | 'high_tempo' | string;
+  shot_budget_source?: 'automatic' | 'manual' | string;
+  generator_profile?: string;
 };
 
 export type StoryShot = {
@@ -783,6 +826,7 @@ export type StoryDocument = {
   script: string;
   scenes: Array<Record<string, unknown>>;
   shots: StoryShot[];
+  asset_handoff_receipt?: Record<string, unknown> | null;
   script_versions: Array<Record<string, unknown>>;
   storyboard_versions: Array<Record<string, unknown>>;
 };
@@ -792,7 +836,7 @@ export type StoryChecks = {
   errors: number;
   warnings: number;
   issues: Array<{ code: string; severity: string; message: string; shot_id?: string; details?: Record<string, unknown> }>;
-  metrics: { scene_count: number; shot_count: number; total_duration: number; target_duration: number; estimated_dialogue_duration?: number };
+  metrics: { scene_count: number; shot_count: number; total_duration: number; target_duration: number; estimated_dialogue_duration?: number; shot_budget?: Record<string, unknown> };
 };
 
 export type StoryEnvelope = {
@@ -891,6 +935,8 @@ export type StoryRun = {
   project_id: string;
   status: string;
   active_step: string;
+  input?: Record<string, unknown> | null;
+  workflow_mode?: 'optimize_script_and_storyboard' | 'storyboard_from_source' | string;
   storyboard_output?: Record<string, unknown> | null;
   regulator_output?: Record<string, unknown> | null;
   error?: Record<string, unknown> | null;

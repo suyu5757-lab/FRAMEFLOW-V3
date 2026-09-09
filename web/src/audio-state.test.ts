@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { auditionReady, buildProviderNeutralPackage, extractAudioBrief } from './audio-state';
+import { auditionReady, buildProviderNeutralPackage, extractAudioBrief, voiceSupportsLanguage } from './audio-state';
 import type { AudioStudioDocument } from './types';
 
 describe('audio workflow helpers', () => {
@@ -31,5 +31,27 @@ describe('audio workflow helpers', () => {
     expect(pack.provider_neutral).toBe(true);
     expect(pack.auditions[0].artifact_id).toBeNull();
     expect(pack.auditions[0].status).toBe('external-execution-pending');
+  });
+
+  it('keeps matching and universal MiniMax voices while filtering other languages', () => {
+    const japanese = { voice_id: 'Japanese_SportyStudent', name: 'Sporty Student', source: 'system' } as any;
+    const multilingual = { voice_id: 'common', name: 'Universal voice', source: 'system', languages: ['Japanese', 'English'] } as any;
+    const unlabeled = { voice_id: 'generic', name: 'Generic voice', source: 'system' } as any;
+    const english = { voice_id: 'English_Trustworthy_Man', name: 'Trustworthy Man', source: 'system' } as any;
+    const chinese = { voice_id: 'male-qn-qingse', name: '青涩青年音色', source: 'system' } as any;
+    const dutch = { voice_id: 'Dutch_KindWoman', name: 'Kind Woman', source: 'system' } as any;
+    const vietnamese = { voice_id: 'Vietnamese_GentleWoman', name: 'Gentle Woman', source: 'system' } as any;
+    const chineseNamed = { voice_id: 'Arrogant_Miss', name: 'Arrogant Miss', source: 'system' } as any;
+    const chineseArmor = { voice_id: 'Robot_Armor', name: 'Robot Armor', source: 'system' } as any;
+    expect(voiceSupportsLanguage(japanese, 'Japanese')).toBe(true);
+    expect(voiceSupportsLanguage(multilingual, 'Japanese')).toBe(true);
+    expect(voiceSupportsLanguage(unlabeled, 'Japanese')).toBe(true);
+    expect(voiceSupportsLanguage(english, 'Japanese')).toBe(false);
+    expect(voiceSupportsLanguage(chinese, 'Japanese')).toBe(false);
+    expect(voiceSupportsLanguage(dutch, 'Japanese')).toBe(false);
+    expect(voiceSupportsLanguage(vietnamese, 'Japanese')).toBe(false);
+    expect(voiceSupportsLanguage(chineseNamed, 'Japanese')).toBe(false);
+    expect(voiceSupportsLanguage(chineseArmor, 'Japanese')).toBe(false);
+    expect(voiceSupportsLanguage(english, '')).toBe(true);
   });
 });

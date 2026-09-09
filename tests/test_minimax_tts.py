@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 import server
 from frameflow.provider_adapters import adapter_for_profile, provider_contract
-from frameflow.schemas import SpeechGenerate
+from frameflow.schemas import SpeechGenerate, VoiceDesignGenerate
 from frameflow.providers import (
     MINIMAX_DEFAULT_TTS_MODEL,
     MINIMAX_DEFAULT_VOICE_ID,
@@ -22,6 +22,7 @@ from frameflow.providers import (
     minimax_probe,
     minimax_speech,
     minimax_tts_payload,
+    minimax_voice_design,
 )
 
 
@@ -125,6 +126,43 @@ class MiniMaxProviderUnitTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(context.exception.kind, "execution-unknown")
         request.assert_awaited_once()
         self.assertFalse(server.provider_error_retryable(504, context.exception.kind))
+
+    def test_voice_design_schema_keeps_preview_separate_from_tts(self) -> None:
+        request = VoiceDesignGenerate(
+            prompt="A warm, clear young adult voice with natural conversational energy.",
+            preview_text="先輩、今日の放課後、一緒に帰りませんか？",
+            provider_region="global",
+            expected_revision=1,
+            confirmed=True,
+        )
+        self.assertEqual(request.provider_region, "global")
+        self.assertLessEqual(len(request.preview_text), 500)
+        with self.assertRaises(ValueError):
+            VoiceDesignGenerate(prompt="voice", preview_text="a" * 501, expected_revision=1, confirmed=True)
+
+    async def test_voice_design_decodes_trial_audio_and_keeps_voice_id(self) -> None:
+        with mock.patch("frameflow.providers.request_json", new=mock.AsyncMock(return_value={
+            "voice_id": "custom-voice-001",
+            "trial_audio": "52494646",
+            "base_resp": {"status_code": 0},
+        })) as request:
+            audio, metadata = await minimax_voice_design(
+                self.profile,
+                "secret-not-returned",
+                "A soft, bright young student voice with natural conversational energy.",
+                "先輩、今日の放課後、一緒に帰りませんか？",
+            )
+        self.assertEqual(audio, b"RIFF")
+        self.assertEqual(metadata["voice_id"], "custom-voice-001")
+        request.assert_awaited_once()
+        self.assertNotIn("secret-not-returned", repr(metadata))
+
+    async def test_voice_design_transport_failure_is_execution_unknown_without_retry(self) -> None:
+        with mock.patch("frameflow.providers.request_json", new=mock.AsyncMock(side_effect=httpx.ReadTimeout("upstream"))) as request:
+            with self.assertRaises(ProviderError) as context:
+                await minimax_voice_design(self.profile, "secret-not-returned", "voice", "试听文本")
+        self.assertEqual(context.exception.kind, "execution-unknown")
+        request.assert_awaited_once()
 
     async def test_minimax_probe_returns_models_and_sanitized_voice_directory(self) -> None:
         with mock.patch("frameflow.providers.request_json", new=mock.AsyncMock(return_value={
@@ -238,6 +276,73 @@ class MiniMaxTtsRouteTests(unittest.TestCase):
         self.assertEqual(payload["voice"], MINIMAX_DEFAULT_VOICE_ID)
         self.assertEqual(speech.await_args.args[2]["text"], "测试<#0.2#> MiniMax")
         speech.assert_awaited_once()
+
+    def test_voice_design_preview_is_saved_as_unadopted_candidate(self) -> None:
+        project_id = f"PRJ_VOICE_DESIGN_{uuid.uuid4().hex[:8]}"
+        project = {
+            "id": project_id,
+            "name": "MiniMax Voice Design route test",
+            "ratio": "16:9",
+            "duration": 10,
+            "generator": "Seedance 2.5",
+            "assets": [],
+            "audio": {"voices": [], "dialogues": [], "auditions": [], "takes": [], "handoff": {"status": "provisional", "approved_asset_ids": []}},
+        }
+        with tempfile.TemporaryDirectory(prefix="frameflow-voice-design-output-") as output_root:
+            output_dir = Path(output_root)
+            resource_dir = output_dir / "resource"
+            with mock.patch.object(server, "DATA_DIR", resource_dir), mock.patch.object(server, "GENERATED_DIR", output_dir / "generated"), mock.patch.object(server, "GENERATED_AUDIO_DIR", output_dir / "generated" / "audio"), mock.patch.object(server, "get_profile_secret", return_value="provider-secret"), mock.patch.object(server, "_minimax_secret", return_value="provider-secret"), mock.patch.object(server, "minimax_voice_design", new=mock.AsyncMock(return_value=(b"ID3", {"voice_id": "custom-voice-001"}))) as design:
+                created = self.client.put(f"/api/v2/projects/{project_id}", json={"document": project})
+                self.assertEqual(created.status_code, 200, created.text)
+                expected_revision = created.json()["revision"]
+                response = self.client.post(f"/api/v2/projects/{project_id}/audio/voice-design", json={
+                    "prompt": "A clear, soft young student voice with lively but natural energy.",
+                    "preview_text": "先輩、今日の放課後、一緒に帰りませんか？",
+                    "provider_profile_id": "minimax-default",
+                    "provider_region": "global",
+                    "locale": "ja-JP",
+                    "language": "Japanese",
+                    "character_id": "C001",
+                    "expected_revision": expected_revision,
+                    "confirmed": True,
+                })
+                self.assertEqual(response.status_code, 200, response.text)
+                payload = response.json()
+                self.assertEqual(payload["execution_status"], "candidate")
+                self.assertEqual(payload["candidate"]["provider_voice_id"], "custom-voice-001")
+                self.assertEqual(payload["candidate"]["status"], "candidate")
+                self.assertEqual(payload["candidate"]["provider_region"], "global")
+                self.assertEqual(len(payload["document"]["voice_design_candidates"]), 1)
+                self.assertEqual(payload["document"]["voices"], [])
+                self.assertIn("7 天", payload["candidate"]["retention_notice"])
+                replay = self.client.post(f"/api/v2/projects/{project_id}/audio/voice-design", json={
+                    "prompt": "A clear, soft young student voice with lively but natural energy.",
+                    "preview_text": "先輩、今日の放課後、一緒に帰りませんか？",
+                    "provider_profile_id": "minimax-default",
+                    "provider_region": "global",
+                    "locale": "ja-JP",
+                    "language": "Japanese",
+                    "character_id": "C001",
+                    "expected_revision": payload["revision"],
+                    "confirmed": True,
+                })
+                self.assertEqual(replay.status_code, 200, replay.text)
+                self.assertTrue(replay.json()["idempotent_reuse"])
+                design.assert_awaited_once()
+
+    def test_voice_design_requires_explicit_cost_confirmation(self) -> None:
+        project_id = f"PRJ_VOICE_DESIGN_GATE_{uuid.uuid4().hex[:8]}"
+        created = self.client.put(f"/api/v2/projects/{project_id}", json={"document": {"id": project_id, "name": "Voice Design gate", "ratio": "16:9", "duration": 10, "generator": "Seedance 2.5", "assets": [], "audio": {}}})
+        self.assertEqual(created.status_code, 200, created.text)
+        with mock.patch.object(server, "minimax_voice_design", new=mock.AsyncMock()) as design:
+            response = self.client.post(f"/api/v2/projects/{project_id}/audio/voice-design", json={
+                "prompt": "voice",
+                "preview_text": "试听文本",
+                "expected_revision": created.json()["revision"],
+                "confirmed": False,
+            })
+        self.assertEqual(response.status_code, 409, response.text)
+        design.assert_not_awaited()
 
     def test_system_voice_catalog_exposes_documented_candidates_without_claiming_live(self) -> None:
         response = self.client.get("/api/v2/providers/minimax-default/voices")

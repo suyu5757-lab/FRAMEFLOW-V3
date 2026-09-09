@@ -1,4 +1,4 @@
-import type { AudioAudition, AudioStudioDocument, StoryDocument } from './types';
+import type { AudioAudition, AudioStudioDocument, MiniMaxVoiceOption, StoryDocument } from './types';
 
 export type AudioBriefEntry = {
   id: string;
@@ -18,6 +18,76 @@ export type AudioBrief = {
 };
 
 const asText = (value: unknown): string => typeof value === 'string' ? value.trim() : '';
+
+const universalVoiceLanguageTerms = new Set(['all', 'any', 'auto', 'common', 'generic', 'multilingual', 'universal', '通用', '多语言']);
+const catalogLanguageAliases: Record<string, string[]> = {
+  chinese: ['chinese', 'mandarin', 'cantonese', 'zh', '中文', '普通话', '粤语'],
+  english: ['english', 'en', '英语', '英文'],
+  japanese: ['japanese', 'ja', '日语', '日文', '日本語'],
+  korean: ['korean', 'ko', '韩语', '韩文', '한국'],
+  french: ['french', 'fr', '法语', '法文'],
+  german: ['german', 'de', '德语', '德文'],
+  spanish: ['spanish', 'es', '西班牙语'],
+  portuguese: ['portuguese', 'pt', '葡萄牙语'],
+  italian: ['italian', 'it', '意大利语'],
+  russian: ['russian', 'ru', '俄语'],
+};
+const catalogLanguageMarkers: Array<[string, string[]]> = [
+  ['japanese', ['japanese', '日语', '日文', '日本語']],
+  ['korean', ['korean_', '한국', '韩语', '韩文']],
+  ['spanish', ['spanish_', '西班牙语']],
+  ['portuguese', ['portuguese_', '葡萄牙语']],
+  ['french', ['french_', '法语']],
+  ['german', ['german_', '德语']],
+  ['russian', ['russian_', '俄语']],
+  ['italian', ['italian_', '意大利语']],
+  ['dutch', ['dutch_', '荷兰']],
+  ['vietnamese', ['vietnamese_', '越南']],
+  ['indonesian', ['indonesian_', '印尼', '印度尼西亚']],
+  ['arabic', ['arabic_', '阿拉伯']],
+  ['turkish', ['turkish_', '土耳其']],
+  ['ukrainian', ['ukrainian_', '乌克兰']],
+  ['malay', ['malay_', '马来']],
+  ['filipino', ['filipino_', '菲律宾']],
+  ['thai', ['thai_', '泰语', '泰文']],
+  ['hindi', ['hindi_', '印地']],
+  ['hebrew', ['hebrew_', '希伯来']],
+  ['persian', ['persian_', '波斯']],
+  ['bengali', ['bengali_', '孟加拉']],
+  ['afrikaans', ['afrikaans_', '南非荷兰']],
+  ['catalan', ['catalan_', '加泰罗尼亚']],
+  ['serbian', ['serbian_', '塞尔维亚']],
+  ['polish', ['polish_', '波兰']],
+  ['romanian', ['romanian_', '罗马尼亚']],
+  ['czech', ['czech_', '捷克']],
+  ['greek', ['greek_', '希腊']],
+  ['hungarian', ['hungarian_', '匈牙利']],
+  ['swedish', ['swedish_', '瑞典']],
+  ['danish', ['danish_', '丹麦']],
+  ['finnish', ['finnish_', '芬兰']],
+  ['norwegian', ['norwegian_', '挪威']],
+  ['slovak', ['slovak_', '斯洛伐克']],
+  ['bulgarian', ['bulgarian_', '保加利亚']],
+  ['croatian', ['croatian_', '克罗地亚']],
+  ['tamil', ['tamil_', '泰米尔']],
+  ['telugu', ['telugu_', '泰卢固']],
+  ['chinese', ['chinese', 'mandarin', 'cantonese', '中文', '普通话', '粤语', 'male-qn-', 'female-', 'clever_boy', 'cute_boy', 'lovely_girl', 'cartoon_pig', 'bingjiao', 'junlang', 'chun zhen', 'chunzhen', 'lengdan', 'badao_', 'tianxin', 'qiaopi', 'wumei', 'diadia', 'danya', 'arrogant_miss', 'robot_armor', '青涩', '少女音色']],
+  ['english', ['english_', 'aussie', 'whispering', 'diligent man', 'gentle-voiced', 'trustworthy man', 'graceful lady', 'santa claus', 'grinch', 'rudolph', 'arnold', 'charming santa', 'charming lady', 'sweet girl', 'cute elf', 'attractive girl', 'serene woman']],
+];
+
+/** Match catalog declarations without hiding deliberately universal system voices. */
+export function voiceSupportsLanguage(voice: MiniMaxVoiceOption, language: string): boolean {
+  const target = asText(language).toLowerCase();
+  if (!target) return true;
+  const targetAliases = new Set([target, ...(catalogLanguageAliases[target] || [])]);
+  const declared = [voice.language, ...(voice.languages || [])]
+    .map((value) => asText(value).toLowerCase())
+    .filter(Boolean);
+  if (declared.length) return declared.some((value) => universalVoiceLanguageTerms.has(value) || value.includes('universal') || value.includes('multilingual') || [...targetAliases].some((alias) => value === alias || value.includes(alias) || alias.includes(value)));
+  const identity = `${asText(voice.voice_id)} ${asText(voice.name)}`.toLowerCase();
+  const inferred = catalogLanguageMarkers.find(([, markers]) => markers.some((marker) => identity.includes(marker)))?.[0];
+  return !inferred || inferred === target;
+}
 
 function listValue(value: unknown): string[] {
   if (Array.isArray(value)) return value.map(asText).filter(Boolean);

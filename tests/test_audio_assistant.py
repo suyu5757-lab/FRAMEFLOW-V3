@@ -6,6 +6,7 @@ import tempfile
 import time
 import unittest
 import uuid
+from copy import deepcopy
 from pathlib import Path
 from unittest import mock
 
@@ -151,7 +152,7 @@ class AudioAssistantBackendTests(unittest.TestCase):
         self.assertEqual(run.get("status"), "succeeded", run)
         return run
 
-    def start_voice_run(self, audio_document: dict) -> dict:
+    def start_voice_run(self, audio_document: dict, voice_design_only: bool = False) -> dict:
         response = self.client.post(f"/api/v2/projects/{self.project_id}/assistant/stream", json={
             "project_id": self.project_id,
             "assistant_mode": "voice-preparation",
@@ -162,6 +163,7 @@ class AudioAssistantBackendTests(unittest.TestCase):
             "context": {
                 "audio_focus": {"kind": "project", "shot_ids": ["SH001"]},
                 "audio_draft": audio_document,
+                "voice_design_only": voice_design_only,
             },
             "cost_boundary": {"currency": "USD", "confirmation_required": True},
             "client_message_id": "audio-" + uuid.uuid4().hex,
@@ -170,6 +172,57 @@ class AudioAssistantBackendTests(unittest.TestCase):
         match = re.search(r'"run_id":\s*"([^"]+)"', response.text)
         self.assertIsNotNone(match, response.text)
         return self.wait_for_run(str(match.group(1)))
+
+    def test_dialogue_inherits_language_context_from_its_only_voice_candidate(self) -> None:
+        structured = deepcopy(self.adapter.response["structured"])
+        dialogue = structured["proposal"]["dialogue_candidates"][0]
+        dialogue.pop("language")
+        dialogue.pop("locale")
+        dialogue.pop("dialect")
+        result = normalize_voice_preparation_result(
+            {"structured": structured},
+            project_document=project_document("P"),
+            audio_document=project_document("P")["audio"],
+            story_document={"shots": []},
+            catalog={
+                "status": "live",
+                "region": "cn",
+                "voices": [{"voice_id": "Japanese_SportyStudent", "name": "Sporty Student", "source": "system", "language": "Japanese"}],
+            },
+            focus={"kind": "project", "shot_ids": []},
+            contract_snapshot={"bundle_hash": "a" * 64},
+        )
+        candidate = result["proposal"]["dialogue_candidates"][0]
+        self.assertEqual(candidate["language"], "Japanese")
+        self.assertEqual(candidate["locale"], "ja-JP")
+        self.assertEqual(candidate["dialect"], "Standard Japanese")
+
+    def test_empty_dialogue_candidate_becomes_a_required_clarification_not_a_draft(self) -> None:
+        structured = deepcopy(self.adapter.response["structured"])
+        structured["proposal"]["dialogue_candidates"] = [
+            {"candidate_id": "dialogue-candidate-1"},
+            {"candidate_id": "dialogue-candidate-2", "source_text": ""},
+        ]
+        result = normalize_voice_preparation_result(
+            {"structured": structured},
+            project_document=project_document("P"),
+            audio_document=project_document("P")["audio"],
+            story_document={"shots": []},
+            catalog={
+                "status": "live",
+                "region": "cn",
+                "voices": [{"voice_id": "Japanese_SportyStudent", "name": "Sporty Student", "source": "system", "language": "Japanese"}],
+            },
+            focus={"kind": "project", "shot_ids": []},
+            contract_snapshot={"bundle_hash": "a" * 64},
+        )
+        proposal = result["proposal"]
+        self.assertEqual(proposal["state"], "needs_clarification")
+        self.assertEqual(proposal["dialogue_candidates"], [])
+        self.assertEqual(proposal["audition_matrix"], [])
+        self.assertTrue(any(question["id"] == "target-dialogue-required" for question in proposal["questions"]))
+        self.assertTrue(any(check["code"] == "target_dialogue" and check["status"] == "blocked" for check in proposal["checks"]))
+        self.assertFalse(any(item["content"].get("audio_target") == "dialogue" for item in result["patch"]["workspace_operations"]))
 
     def test_documented_voice_fallback_is_reference_only(self) -> None:
         result = normalize_voice_preparation_result(
@@ -185,6 +238,39 @@ class AudioAssistantBackendTests(unittest.TestCase):
         self.assertFalse(result["proposal"]["voice_candidates"][0]["selectable"])
         self.assertEqual(result["proposal"]["voice_profiles"], [])
         self.assertTrue(all(item["workspace"] == "audio" for item in result["patch"]["workspace_operations"]))
+
+    def test_voice_design_only_recovers_copy_ready_package_when_model_omits_it(self) -> None:
+        structured = deepcopy(self.adapter.response["structured"])
+        structured["proposal"].pop("voice_candidates")
+        structured["proposal"].pop("voice_design", None)
+        result = normalize_voice_preparation_result(
+            {"structured": structured},
+            project_document=project_document("P"),
+            audio_document=project_document("P")["audio"],
+            story_document={"shots": []},
+            catalog={"status": "live", "region": "cn", "voices": []},
+            focus={"kind": "project", "shot_ids": []},
+            contract_snapshot={"bundle_hash": "a" * 64},
+            user_message="我想要一位来自日本的女高中生，声音甜甜的、比较轻柔，同时有高中生的活力和朝气，不要太像动漫配音。她想说：前辈，今天放学要一起回家吗？",
+            voice_design_only=True,
+        )
+        design = result["proposal"]["voice_design"]
+        self.assertIn("Japanese", design["prompt"])
+        self.assertIn("young female high-school student", design["prompt"])
+        self.assertIn("anime-style", design["prompt"])
+        self.assertEqual(design["preview_text"], "先輩、今日の放課後、一緒に帰りませんか？")
+        self.assertEqual(design["language"], "Japanese")
+        self.assertEqual(design["locale"], "ja-JP")
+        self.assertEqual(result["proposal"]["voice_candidates"], [])
+        self.assertEqual(result["proposal"]["dialogue_candidates"][0]["locale"], "ja-JP")
+
+    def test_voice_design_only_run_marks_context_and_returns_design_package(self) -> None:
+        audio_document = self.client.get(f"/api/v2/projects/{self.project_id}/audio-studio").json()["document"]
+        run = self.start_voice_run(audio_document, voice_design_only=True)
+        self.assertEqual(run["status"], "succeeded")
+        self.assertTrue(run["result"]["audio_preparation"]["voice_design"]["prompt"])
+        self.assertTrue(run["result"]["audio_preparation"]["voice_design"]["preview_text"])
+        self.assertIn('"voice_design_only": true', self.adapter.calls[0][1]["input_text"])
 
     def test_voice_run_is_opencode_only_and_audio_draft_apply_is_not_persistent(self) -> None:
         audio = self.client.get(f"/api/v2/projects/{self.project_id}/audio-studio").json()

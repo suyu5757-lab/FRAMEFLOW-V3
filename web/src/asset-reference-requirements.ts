@@ -90,11 +90,29 @@ export function generationReferenceAssetsFromConfig(config: Record<string, unkno
   return [...target.values()];
 }
 
+/**
+ * Collapse the two legacy declarations into the one list the image agent
+ * needs to see.  The production gate still remains authoritative for
+ * enabling upload/QA actions; this helper only normalises what the operator
+ * should prepare as image references.
+ */
+export function mergeGenerationReferenceAssets(
+  references: GenerationReferenceAsset[],
+  prerequisiteAssets: unknown,
+  currentAssetId = '',
+): GenerationReferenceAsset[] {
+  const target = new Map<string, GenerationReferenceAsset>();
+  references.forEach((reference) => addReference(target, reference, currentAssetId));
+  addReference(target, prerequisiteAssets, currentAssetId);
+  return [...target.values()];
+}
+
 export function generationReferenceAssetsForAsset(asset: LibraryAsset | undefined): GenerationReferenceAsset[] {
   if (!asset) return [];
+  const metadata = asset.assetMetadata || {};
   return generationReferenceAssetsFromConfig({
-    prompt_pack: asset.promptPack || asset.assetMetadata?.prompt_pack || {},
-    reference_roles: asset.references || [],
-    generation_reference_assets: asset.generationReferenceAssets || asset.generation_reference_assets,
+    prompt_pack: asset.promptPack || metadata.prompt_pack || {},
+    reference_roles: asset.references || metadata.referenceRoles || metadata.reference_roles || [],
+    generation_reference_assets: asset.generationReferenceAssets || asset.generation_reference_assets || metadata.generationReferenceAssets || metadata.generation_reference_assets,
   }, asset.id);
 }

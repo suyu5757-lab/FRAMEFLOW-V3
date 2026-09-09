@@ -291,6 +291,22 @@ class SpeechGenerate(StrictModel):
     operation: str = Field(default="tts", max_length=80)
 
 
+class VoiceDesignGenerate(StrictModel):
+    """A paid MiniMax Voice Design preview, deliberately separate from TTS."""
+
+    prompt: str = Field(min_length=1, max_length=4000)
+    preview_text: str = Field(min_length=1, max_length=500)
+    provider_profile_id: str | None = Field(default=None, max_length=120)
+    provider_region: Literal["cn", "global"] | None = None
+    voice_id: str | None = Field(default=None, max_length=200)
+    name: str | None = Field(default=None, max_length=160)
+    locale: str | None = Field(default=None, max_length=32)
+    language: str | None = Field(default=None, max_length=80)
+    character_id: str | None = Field(default=None, max_length=120)
+    expected_revision: int = Field(ge=1)
+    confirmed: bool = False
+
+
 class SeedancePackageCreate(StrictModel):
     project_id: str
     shot_id: str
@@ -556,6 +572,7 @@ class AssetDuplicateV3(StrictModel):
 
 class StoryOptimizationCreate(StrictModel):
     goal: Literal["full", "script", "script_storyboard", "reaudit"] = "full"
+    workflow_mode: Literal["optimize_script_and_storyboard", "storyboard_from_source"] = "optimize_script_and_storyboard"
     strength: Literal["conservative", "balanced", "restructure"] = "conservative"
     duration: int | None = Field(default=None, ge=1, le=3600)
     ratio: str | None = None
@@ -568,6 +585,12 @@ class StoryOptimizationCreate(StrictModel):
     brand_requirements: list[str] = Field(default_factory=list)
     prohibited_content: list[str] = Field(default_factory=list)
     source_script_version_id: str | None = None
+    shot_count_min: int | None = Field(default=None, ge=1, le=240)
+    shot_count_target: int | None = Field(default=None, ge=1, le=240)
+    shot_count_max: int | None = Field(default=None, ge=1, le=240)
+    automatic_shot_count_min: int | None = Field(default=None, ge=1, le=240)
+    automatic_shot_count_max: int | None = Field(default=None, ge=1, le=240)
+    generator_profile: str | None = Field(default=None, max_length=120)
 
 
 class StoryboardAcceptRequest(StrictModel):
@@ -576,6 +599,7 @@ class StoryboardAcceptRequest(StrictModel):
 
 
 class StorySpecV3(StrictModel):
+    workflow_mode: Literal["optimize_script_and_storyboard", "storyboard_from_source"] = "optimize_script_and_storyboard"
     creative_goal: str = Field(default="", max_length=10000)
     audience: str = Field(default="", max_length=500)
     platform: str = Field(default="", max_length=120)
@@ -587,6 +611,14 @@ class StorySpecV3(StrictModel):
     must_avoid: list[str] = Field(default_factory=list)
     structure: list[dict[str, Any]] = Field(default_factory=list)
     beats: list[dict[str, Any]] = Field(default_factory=list)
+    shot_count_min: int | None = Field(default=None, ge=1, le=240)
+    shot_count_target: int | None = Field(default=None, ge=1, le=240)
+    shot_count_max: int | None = Field(default=None, ge=1, le=240)
+    automatic_shot_count_min: int | None = Field(default=None, ge=1, le=240)
+    automatic_shot_count_max: int | None = Field(default=None, ge=1, le=240)
+    shot_budget_mode: Literal["controlled", "high_tempo"] = "controlled"
+    shot_budget_source: Literal["automatic", "manual"] = "automatic"
+    generator_profile: str = Field(default="", max_length=120)
 
 
 class StoryDocumentUpdateV3(StrictModel):

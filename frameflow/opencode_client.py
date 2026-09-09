@@ -191,7 +191,12 @@ async def opencode_structured(
     body = {
         "system": instructions,
         "parts": [{"type": "text", "text": input_text}],
-        "format": {"type": "json_schema", "schema": schema, "retryCount": 2},
+        # OpenCode 1.18 validates OutputFormatJsonSchema strictly and rejects
+        # the retryCount extension even though some generated SDK typings list
+        # it as optional. Structured-output retries are handled by FrameFlow
+        # at the provider boundary; keep this payload compatible with the
+        # running local server.
+        "format": {"type": "json_schema", "schema": schema},
     }
     try:
         payload = await opencode_request_json(

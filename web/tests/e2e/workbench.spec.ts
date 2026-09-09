@@ -11,6 +11,7 @@ async function seedProject(page: Page, name = '浏览器验收项目'): Promise<
 async function openWorkbench(page: Page, expectedProjectName = '浏览器验收项目', projectId?: string) {
   await page.goto('/');
   await expect(page.locator('.brand')).toContainText('FRAMEFLOW');
+  await expect.poll(async () => (await page.locator('.project-title').textContent()) || '').not.toBe('尚未选择项目');
   if (!((await page.locator('.project-title').textContent()) || '').includes(expectedProjectName)) {
     await switchToProject(page, expectedProjectName, projectId);
   }
@@ -140,12 +141,27 @@ test.describe('FrameFlow V3 workbench', () => {
     await page.getByRole('button', { name: '设置与 Provider' }).click();
     await expect(page.getByRole('heading', { name: '设置与 Provider 控制面' })).toBeVisible();
     const removableProviderRow = page.locator('.settings-provider-item').filter({ hasText: removableProviderName });
+    await expect(page.getByRole('button', { name: 'Provider 管理' })).toHaveAttribute('aria-pressed', 'false');
+    await expect(removableProviderRow.getByRole('button', { name: `删除 ${removableProviderName}` })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Provider 管理' }).click();
+    await expect(page.getByRole('button', { name: 'Provider 管理' })).toHaveAttribute('aria-pressed', 'true');
     await expect(removableProviderRow.getByRole('button', { name: `删除 ${removableProviderName}` })).toBeVisible();
+    const providerCount = await page.locator('.settings-provider-item').count();
+    await expect(page.locator('.settings-provider-delete')).toHaveCount(providerCount);
+    await expect(page.locator('.settings-routing')).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: '当前运行路由' })).toBeVisible();
+    await expect(page.locator('.settings-route-summary')).toContainText(removableProviderName);
+    await expect(page.locator('.settings-route-summary')).toContainText('MiniMax TTS');
+    await expect(page.locator('.settings-presets button').filter({ hasText: 'MiniMax TTS' })).toContainText('实际链接：');
+    await expect(page.locator('.settings-presets button').filter({ hasText: 'OpenCode Go Plan Agent' })).toContainText('实际链接：');
     await removableProviderRow.getByRole('button', { name: `删除 ${removableProviderName}` }).click();
     const deleteProviderDialog = page.getByRole('dialog', { name: '确认删除 Provider' });
     await expect(deleteProviderDialog).toBeVisible();
     await deleteProviderDialog.getByRole('button', { name: '删除 Provider' }).click();
     await expect(removableProviderRow).toHaveCount(0);
+    await page.getByRole('button', { name: 'Provider 管理' }).click();
+    await expect(page.locator('.settings-provider-delete')).toHaveCount(0);
+    await expect(page.locator('.settings-route-summary')).toContainText('OpenCode Go Plan Agent');
     await expect(page.locator('.settings-presets')).toContainText('删除配置后仍可重新添加');
     await expect(page.locator('.settings-minimax-credentials')).toContainText('MiniMax TTS 接入');
     await expect(page.getByLabel('默认 TTS 模型')).toHaveCount(1);
@@ -331,15 +347,22 @@ test.describe('FrameFlow V3 workbench', () => {
     const projectId = await seedProject(page, name);
     await openWorkbench(page, name, projectId);
     await page.getByRole('button', { name: /声音资产工坊/ }).click();
+    await expect(page.getByText('把想法变成可试听的音色')).toBeVisible();
+    await page.getByRole('button', { name: '需要时打开完整流程' }).click();
+    await page.getByRole('button', { name: '制作概览' }).click();
     await expect(page.getByText('人物声音闭环向导')).toBeVisible();
     await expect(page.getByText(/provider-neutral 可继续规划/).first()).toBeVisible();
     await expect(page.getByText(/有文件只代表候选存在/)).toBeVisible();
 
-    await page.getByRole('button', { name: '人物声音' }).click();
+    await page.getByRole('button', { name: '完整声音制作' }).click();
     const minimaxRegionOptions = await page.getByLabel('执行区域').locator('option').allTextContents();
     expect(minimaxRegionOptions).toEqual(expect.arrayContaining(['cn · 中国区', 'global · 国际区']));
     await page.getByLabel('角色 / 旁白 ID').fill('C001');
     await page.getByLabel('声音名称').fill('C001 · Voice Design');
+    await page.getByLabel('声音来源').selectOption('design');
+    await page.getByRole('textbox', { name: '语言', exact: true }).fill('Japanese');
+    await page.locator('label').filter({ hasText: /^locale/ }).locator('select').selectOption('ja-JP');
+    await page.getByLabel('方言 / 口音').fill('Standard Japanese');
     await page.getByLabel('表演特征').fill('克制，近距离，句尾收住');
     await page.getByLabel('发音风险').fill('专有名词，数字');
     await page.getByRole('button', { name: /建立声音简报并创建三组 audition/ }).click();
@@ -353,6 +376,29 @@ test.describe('FrameFlow V3 workbench', () => {
     await expect((await download).suggestedFilename()).toContain('voice-auditions.json');
   });
 
+  test('audio creator exposes MiniMax web copy actions', async ({ page }) => {
+    const name = `MiniMax 网页复制验收项目-${Date.now()}`;
+    const projectId = await seedProject(page, name);
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: 'http://127.0.0.1:8791' });
+    await openWorkbench(page, name, projectId);
+    await page.getByRole('button', { name: /声音资产工坊/ }).click();
+
+    const designPrompt = page.getByRole('textbox', { name: 'MiniMax Voice Design Prompt' });
+    const designPreview = page.getByRole('textbox', { name: 'MiniMax Voice Design Text to Preview' });
+    await expect(page.getByRole('button', { name: '复制音色 Prompt' })).toHaveCount(1);
+    await expect(page.getByRole('button', { name: '复制试听台词' })).toHaveCount(1);
+    await designPrompt.fill('A soft, clear young adult voice with restrained warmth and natural conversational pacing.');
+    await designPreview.fill('先輩、今日の放課後、一緒に帰りませんか？');
+    await page.getByRole('button', { name: '复制音色 Prompt' }).last().click();
+    await expect.poll(async () => page.evaluate(() => navigator.clipboard.readText())).toContain('restrained warmth');
+    await page.getByRole('button', { name: '复制试听台词' }).last().click();
+    await expect.poll(async () => page.evaluate(() => navigator.clipboard.readText())).toBe('先輩、今日の放課後、一緒に帰りませんか？');
+    await expect(page.locator('a[href="https://www.minimax.io/audio/voice-design"]')).toHaveAttribute('target', '_blank');
+    await page.getByRole('button', { name: '复制完整填写包' }).last().click();
+    await expect.poll(async () => page.evaluate(() => navigator.clipboard.readText())).toContain('Text to Preview');
+    await expect(page.getByRole('button', { name: '生成音色候选' })).toBeVisible();
+  });
+
   test('embeds the voice preparation assistant inside the audio workbench', async ({ page }) => {
     const name = `声音前置 AI 内嵌验收项目-${Date.now()}`;
     const projectId = await seedProject(page, name);
@@ -361,17 +407,20 @@ test.describe('FrameFlow V3 workbench', () => {
 
     const panel = page.locator('.audio-assistant-panel');
     await expect(panel).toBeVisible();
-    await expect(panel).toContainText('VOICE PREP AI');
-    await expect(panel).toContainText('声音前置准备');
+    await expect(panel).toContainText('VOICE DESIGN AI');
+    await expect(panel).toContainText('先把想法整理好');
     await expect(panel).toContainText('规划');
     await expect(panel).toContainText('OpenCode');
     await expect(panel).toContainText('生成');
     await expect(panel).toContainText('MiniMax');
-    await expect(panel.getByRole('textbox', { name: '声音前置准备对话' })).toBeVisible();
+    await expect(panel.getByRole('textbox', { name: '声音想法输入' })).toBeVisible();
+    await expect(panel.getByRole('textbox', { name: '声音前置准备对话' })).toHaveCount(0);
+    await expect(panel).not.toContainText('声音准备会话');
+    await expect(panel).not.toContainText('RUN TRACE');
     await expect(page.getByRole('dialog', { name: /FRAMEFLOW AI Agent 工作台/ })).toHaveCount(0);
 
     await panel.getByRole('button', { name: '收起' }).click();
-    await expect(panel).toContainText('AI 声音方案');
+    await expect(panel).toContainText('AI 音色输入');
     await expect(panel.getByRole('button', { name: /展开继续/ })).toBeVisible();
   });
 
@@ -389,22 +438,22 @@ test.describe('FrameFlow V3 workbench', () => {
     await page.goto('/');
     await switchToProject(page, name, projectId);
     await page.locator('.studio-sidebar').getByRole('button', { name: /故事与分镜/ }).click();
-    await page.getByRole('button', { name: '＋ 新增场景' }).click();
-    const sceneRow = page.locator('.manual-scene-row').last();
-    await sceneRow.getByLabel('场景名称').fill('人工场景 A');
-    await sceneRow.getByLabel('空间/说明').fill('无 Provider 手工建立');
-    for (let index = 0; index < 3; index += 1) await page.getByRole('button', { name: '＋ 新增镜头' }).click();
-    const shotRows = page.locator('.shot-row');
+    await page.getByRole('button', { name: '＋ 场景' }).click();
+    const sceneCard = page.locator('[data-story-scene-id]').last();
+    await sceneCard.getByLabel('场景名称').fill('人工场景 A');
+    await sceneCard.getByLabel('地点').fill('无 Provider 手工建立');
+    for (let index = 0; index < 3; index += 1) await page.getByRole('button', { name: '＋ 镜头' }).click();
+    const shotRows = page.locator('.story-v2-shot-card');
     await expect(shotRows).toHaveCount(3);
-    const initialIds = await shotRows.locator('.shot-id b').allTextContents();
+    const initialIds = await shotRows.locator('.story-v2-shot-id').allTextContents();
     expect(new Set(initialIds).size).toBe(3);
     await shotRows.nth(1).getByRole('button', { name: '删除' }).click();
     await expect(shotRows).toHaveCount(2);
     await shotRows.first().getByRole('button', { name: '复制' }).click();
     await shotRows.first().getByRole('button', { name: '拆分' }).click();
     await expect(shotRows).toHaveCount(4);
-    await page.getByRole('button', { name: '保存镜头表' }).click();
-    await expect(page.locator('.story-section-status')).toContainText('故事与分镜已保存');
+    await page.getByRole('button', { name: '保存更改' }).click();
+    await expect(page.getByText(/故事与分镜已保存/)).toBeVisible();
     const story = await (await page.request.get(`/api/v2/projects/${projectId}/story`)).json() as { story: { scenes: Array<Record<string, unknown>>; shots: Array<{ id: string }> } };
     expect(story.story.scenes.some((scene) => scene.name === '人工场景 A')).toBeTruthy();
     expect(story.story.shots.map((shot) => shot.id)).toContain(initialIds[2]);
