@@ -2,13 +2,15 @@ import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRe
 import type { Connection, Edge, EdgeChange, Node, NodeChange, Viewport } from '@xyflow/react';
 import { StudioApiError, studioApi } from './api';
 import { AudioStudioView } from './AudioStudioView';
+import { AssistantWorkspace } from './AssistantWorkspace';
 import { EDGE_RELATIONS, autoLayoutNodes, edgeRelationPresentation, wouldCreateExecutionCycle, type EdgeRelation } from './graph-editor';
-import type { AgentPlan, AudioStudioDocument, AudioStudioEnvelope, AssetBoard, AssetBoardEdgeRelation, AssetBoardEnvelope, AssetBoardNode, AssetLibraryEnvelope, DashboardEnvelope, DashboardTask, GraphEnvelope, GraphNodeData, HomeStatus, LibraryAsset, ProjectCreateInput, ProjectDashboard, ProjectRecord, ProjectHomeSummary, RenderJob, RunEstimate, SettingsEnvelope, SettingsProvider, SettingsPreset, StoryChecks, StoryDiff, StoryDocument, StoryEnvelope, StoryRun, StoryShot, TimelineClip, TimelineDocument, TimelineEnvelope, TimelinePreflight, TimelinePreflightShot, WorkflowGraph, WorkflowManifest, WorkflowRun, WorkflowRunDetail } from './types';
+import type { AgentPlan, AudioStudioDocument, AudioStudioEnvelope, AssetBoard, AssetBoardEdgeRelation, AssetBoardEnvelope, AssetBoardNode, AssetLibraryEnvelope, DashboardEnvelope, DashboardTask, GraphEnvelope, GraphNodeData, HomeStatus, LibraryAsset, MiniMaxRegion, ProjectCreateInput, ProjectDashboard, ProjectRecord, ProjectHomeSummary, RenderJob, RunEstimate, SettingsEnvelope, SettingsProvider, SettingsPreset, StoryChecks, StoryDiff, StoryDocument, StoryEnvelope, StoryRun, StoryShot, TimelineClip, TimelineDocument, TimelineEnvelope, TimelinePreflight, TimelinePreflightShot, WorkflowGraph, WorkflowManifest, WorkflowRun, WorkflowRunDetail } from './types';
 import { dashboardHasActiveWork, progressLabel, stageProgress, statusClass, statusIcon, statusLabel, taskPriorityLabel } from './dashboard-state';
 import { assetClassLabels as sharedAssetClassLabels, assetStatusLabels as sharedAssetStatusLabels } from './asset-state';
+import { buildAssetGenerationOrder, type AssetGenerationOrderItem } from './asset-generation-order';
 import { applyAssetBoardSelection, assetBoardSelectionKey, selectedAssetBoardCards as getSelectedAssetBoardCards, singleSelectedAssetBoardCard, type AssetBoardSelectionKey } from './asset-board-selection';
 import { VirtualAssetList } from './components/VirtualAssetList';
-import { PROMPT_CONTRACT_VERSION, PROMPT_WORKFLOW_ID, buildNaturalLanguagePrompt, normalizePromptPack, renderPromptValue } from './prompt-design';
+import { PROMPT_CONTRACT_VERSION, PROMPT_WORKFLOW_ID, buildMiniMaxWebPromptPackage, buildNaturalLanguagePrompt, formatMiniMaxWebPromptPackage, normalizePromptPack, renderPromptValue } from './prompt-design';
 
 type StudioMode = 'home' | 'story' | 'canvas' | 'timeline' | 'audio' | 'settings';
 type AssetPromptRunState = {
@@ -952,6 +954,10 @@ function composeAssetPrompt(asset: LibraryAsset, story: StoryEnvelope | null, pr
     mustAvoid: asset.mustAvoid || metadata.must_avoid || [],
     context: { shots, references: asset.references || [] },
   });
+  if (asset.assetClass === 'audio') {
+    const webPackage = buildMiniMaxWebPromptPackage(promptPack, prompt, { shots, references: asset.references || [] });
+    return formatMiniMaxWebPromptPackage(webPackage, asset.name || '', asset.id);
+  }
   const compiledPrompt = buildNaturalLanguagePrompt(asset.assetClass, promptPack, prompt, { shots, references: asset.references || [] });
   const deps = (asset.dependencies || []).map((item) => `${item.shot_id || '未指定镜头'} · ${item.role || '依赖'}`).join('；');
   const storyGoal = story?.story.spec.creative_goal || '';
@@ -1034,6 +1040,9 @@ const promptDetailLabels: Record<string, string> = {
   objectIdentity: '物体身份', silhouetteAndProportions: '轮廓与比例', structureAndFunction: '结构与功能', materialAndCondition: '材质与状态', colorMarkingsAndLabelPolicy: '颜色标记与文字策略', scaleAndInteraction: '尺度与交互',
   fusionModule: '融合模块', shotUsage: '镜头用途', seedanceReferenceRole: 'Seedance 参考用途', styleAndLightingAuthority: '风格与光线权威', characterIdentityLock: '角色身份锁', itemIdentityLock: '道具身份锁', sceneIdentityLock: '场景身份锁', interactionAndContact: '交互与接触', placementScaleAndCamera: '位置尺度与摄影机', lightingShadowsAndMaterialIntegration: '光影与材质整合', compositionAndDepth: '构图与景深', motionContinuityNotes: '运动连续性',
   generationNotes: '生成说明', suggestedSize: '建议尺寸', negativePrompt: '负向约束', mustPreserve: '必须保留', mustAvoid: '必须避免',
+  audioDetails: '声音制作字段', operation: '操作', sourceText: '朗读文本', textStatus: '文本状态', voiceIdentity: '声音身份', language: '语言', dialect: '方言 / 口音',
+  performanceDirection: '表演方向', emotion: '情绪', intensity: '强度', pace: '语速 / 节奏', pausePlan: '停顿计划', pronunciation: '发音标注', soundTags: '语气 / 声音标签',
+  provider: 'Provider', model: '模型', voiceId: '音色 ID', speed: '语速参数', pitch: '音调参数', volume: '音量参数', languageBoost: '语言增强', format: '格式', sampleRate: '采样率', bitrate: '比特率', channel: '声道', targetDuration: '目标时长', relevantShots: '关联镜头', stems: '分轨', distance: '投射距离',
 };
 
 function isPromptDetailRecord(value: unknown): value is Record<string, unknown> {
@@ -1075,6 +1084,7 @@ function PromptDetailsPanel({ asset, promptPack, promptQuality }: { asset: Libra
   const isCharacterAsset = asset.assetClass === 'character';
   const isSceneAsset = ['scene', 'environment', 'environment_state', 'environment_prop'].includes(asset.assetClass);
   const isPropAsset = ['prop', 'product', 'item', 'vfx'].includes(asset.assetClass);
+  const isAudioAsset = asset.assetClass === 'audio';
   const isFusionAsset = asset.assetClass === 'fusion';
   const hasExplicitCharacterDetails = isPromptDetailRecord(pack.characterDetails);
   const hasExplicitSceneDetails = isPromptDetailRecord(pack.sceneDetails);
@@ -1106,31 +1116,44 @@ function PromptDetailsPanel({ asset, promptPack, promptQuality }: { asset: Libra
     colorMarkingsAndLabelPolicy: pack.colorMarkingsAndLabelPolicy || pack.color || pack.markings,
     scaleAndInteraction: pack.scaleAndInteraction || pack.scale || pack.interaction,
   } : {};
-  if (isCharacterAsset || hasExplicitCharacterDetails) pushGroup('人物细节', characterDetails);
-  if (isSceneAsset || hasExplicitSceneDetails) pushGroup('场景细节', sceneDetails);
-  if (isPropAsset || hasExplicitPropDetails) pushGroup('道具 / 物体细节', propDetails);
-  if (isFusionAsset || hasExplicitFusionDetails) pushGroup('融合细节', pack.fusionDetails);
-  pushGroup('提示词意图与执行', {
-    promptIntent: pack.promptIntent,
-    referenceRoles: pack.referenceRoles,
-    identityLock: pack.identityLock,
-    visibleEvent: pack.visibleEvent,
-    spatialGeography: pack.spatialGeography,
-    materialEvidence: pack.materialEvidence,
-    lightingCausality: pack.lightingCausality,
-    cameraExecution: pack.cameraExecution,
-    atmosphereBehavior: pack.atmosphereBehavior,
-    generationNotes: pack.generationNotes,
-    suggestedSize: pack.suggestedSize,
-  });
-  pushGroup('镜头 / 光线 / 连续性', {
-    identityAnchor: pack.identityAnchor,
-    shotPlan: pack.shotPlan,
-    visualStyle: pack.visualStyle,
-    referenceStrategy: pack.referenceStrategy,
-    continuityChecklist: pack.continuityChecklist,
-    negativePrompt: pack.negativePrompt,
-  });
+  if (isAudioAsset) {
+    pushGroup('MiniMax Speech 2.8 Web 控制字段', pack.audioDetails);
+    pushGroup('FRAMEFLOW 声音生产元数据', {
+      promptIntent: pack.promptIntent,
+      identityAnchor: pack.identityAnchor,
+      shotPlan: pack.shotPlan,
+      continuityChecklist: pack.continuityChecklist,
+      mustPreserve: pack.mustPreserve,
+      mustAvoid: pack.mustAvoid || pack.negativePrompt,
+      generationNotes: pack.generationNotes,
+    });
+  } else {
+    if (isCharacterAsset || hasExplicitCharacterDetails) pushGroup('人物细节', characterDetails);
+    if (isSceneAsset || hasExplicitSceneDetails) pushGroup('场景细节', sceneDetails);
+    if (isPropAsset || hasExplicitPropDetails) pushGroup('道具 / 物体细节', propDetails);
+    if (isFusionAsset || hasExplicitFusionDetails) pushGroup('融合细节', pack.fusionDetails);
+    pushGroup('提示词意图与执行', {
+      promptIntent: pack.promptIntent,
+      referenceRoles: pack.referenceRoles,
+      identityLock: pack.identityLock,
+      visibleEvent: pack.visibleEvent,
+      spatialGeography: pack.spatialGeography,
+      materialEvidence: pack.materialEvidence,
+      lightingCausality: pack.lightingCausality,
+      cameraExecution: pack.cameraExecution,
+      atmosphereBehavior: pack.atmosphereBehavior,
+      generationNotes: pack.generationNotes,
+      suggestedSize: pack.suggestedSize,
+    });
+    pushGroup('镜头 / 光线 / 连续性', {
+      identityAnchor: pack.identityAnchor,
+      shotPlan: pack.shotPlan,
+      visualStyle: pack.visualStyle,
+      referenceStrategy: pack.referenceStrategy,
+      continuityChecklist: pack.continuityChecklist,
+      negativePrompt: pack.negativePrompt,
+    });
+  }
   const quality = promptQuality || asset.promptQuality;
   const coverage = quality?.coverage;
   const coverageLabel = coverage && Number.isFinite(Number(coverage.passed)) && Number.isFinite(Number(coverage.total))
@@ -1142,6 +1165,13 @@ function PromptDetailsPanel({ asset, promptPack, promptQuality }: { asset: Libra
     {quality?.missing?.length ? <p className="asset-prompt-details-warning">建议补充：{quality.missing.join('、')}</p> : null}
     <div className="asset-prompt-detail-groups">{groups.map((group) => <section key={group.title}><h4>{group.title}</h4><PromptDetailRows value={group.value} /></section>)}</div>
   </details>;
+}
+
+function AssetGenerationOrder({ items, selectedAssetId, onFocusAsset }: { items: AssetGenerationOrderItem[]; selectedAssetId?: string; onFocusAsset: (assetId: string) => void }) {
+  return <section className="asset-generation-order" aria-labelledby="asset-generation-order-title">
+    <div className="asset-generation-order-heading"><div><span>ASSET ORDER</span><h3 id="asset-generation-order-title">建议资产生成顺序</h3></div><small>{items.length ? `${items.length} 项` : '暂无视觉资产'}</small></div>
+    {items.length ? <ol>{items.map((item, index) => <li key={item.assetId} className={selectedAssetId === item.assetId ? 'selected' : ''}><span className="asset-generation-order-number">{String(index + 1).padStart(2, '0')}</span><span className={`asset-generation-status-light ${item.status}`} title={item.statusTitle} aria-label={item.statusTitle} /><button type="button" onClick={() => onFocusAsset(item.assetId)}>{item.label}</button></li>)}</ol> : <p className="asset-generation-order-empty">当前项目还没有可排序的视觉资产。</p>}
+  </section>;
 }
 
 function AssetProductionPanel({ asset, story, fusionSources, busy, projectRevision, assetBoardDirty, promptDraft, promptPackDraft, promptQualityDraft, selectedCardType, onSave, onHandoff, onImport, onStartQa, onApprove, onRegister, onApprovePromptCard, onGenerateImageCard, onGeneratePrompt, onGenerateFusionPrompt, onManualProductionApproval, onDraftChange }: { asset?: LibraryAsset; story: StoryEnvelope | null; fusionSources: LibraryAsset[]; busy: boolean; projectRevision?: number; assetBoardDirty: boolean; promptDraft?: string; promptPackDraft?: Record<string, unknown>; promptQualityDraft?: LibraryAsset['promptQuality']; selectedCardType?: 'asset' | 'handoff' | 'artifact'; onSave: (assetId: string, body: Record<string, unknown>) => void; onHandoff: (asset: LibraryAsset, prompt: string) => void; onImport: (asset: LibraryAsset, file: File) => void; onStartQa: (artifactId: string, qaType?: AssetQaType) => void; onApprove: (artifactId: string) => void; onRegister: (artifactId: string) => void; onApprovePromptCard: (assetId: string) => void; onGenerateImageCard: (assetId: string) => void; onGeneratePrompt?: (assetId: string) => void; onGenerateFusionPrompt: (assetId: string, sourceAssetIds: string[], shotId: string) => void; onManualProductionApproval?: (assetId: string, approved: boolean, reason: string, artifactId: string) => void; onDraftChange?: (assetId: string, draft: AssetEditorDraft) => void }) {
@@ -1191,6 +1221,7 @@ function AssetProductionPanel({ asset, story, fusionSources, busy, projectRevisi
   const currentArtifactId = String(asset.artifactId || asset.artifact_id || currentArtifact?.id || '');
   const currentFileId = currentArtifactId || '当前登记文件';
   const manualApprovalActive = Boolean(asset.readiness.manual_approval_active);
+  const isAudioAsset = asset.assetClass === 'audio';
   const isFusion = asset.assetClass === 'fusion';
   const fusionPromptReady = !isFusion || asset.fusionPromptSource === 'fusion-connection-agent';
   const fusionShotId = String(asset.fusionPlan?.shot_id || asset.promptRelevantShots?.[0] || String(asset.id).match(/SH\d+/i)?.[0] || '').toUpperCase();
@@ -1205,6 +1236,14 @@ function AssetProductionPanel({ asset, story, fusionSources, busy, projectRevisi
   const prerequisiteBlockedDependencies = prerequisiteItems.filter((item: Record<string, any>) => item.production_ready !== true);
   const prerequisiteIncompleteSummary = prerequisiteBlockedDependencies.map((item: Record<string, any>) => `${String(item.name || item.asset_id || '前置资产')}（${String(item.next_action || '完成审核')}）`).join('；');
   const fusionCanGenerate = isFusion && prerequisiteGateAllowed && fusionSources.length >= 2 && fusionBlockedSources.length === 0 && fusionGateAllowed && Boolean(fusionShotId);
+  const audioPromptShotIds = Array.isArray(asset.promptRelevantShots) ? asset.promptRelevantShots.map(String) : [];
+  const audioPromptShots = (story?.story.shots || []).filter((shot) => !audioPromptShotIds.length || audioPromptShotIds.includes(String(shot.id))) as unknown as Record<string, unknown>[];
+  const minimaxWebPackage = isAudioAsset ? buildMiniMaxWebPromptPackage(promptPackDraft || asset.promptPack || asset.assetMetadata?.prompt_pack || {}, prompt, { shots: audioPromptShots, references: asset.references || [] }) : null;
+  const minimaxWebPackageText = minimaxWebPackage ? formatMiniMaxWebPromptPackage(minimaxWebPackage, asset.name || '', asset.id) : '';
+  const copyMiniMaxText = async () => {
+    if (!minimaxWebPackage?.copyText) return;
+    try { await navigator.clipboard.writeText(minimaxWebPackage.copyText); } catch { /* The package remains visible for manual copying. */ }
+  };
   const save = () => {
     try {
       const parsedSpec = parseObjectText(assetSpec);
@@ -1215,10 +1254,11 @@ function AssetProductionPanel({ asset, story, fusionSources, busy, projectRevisi
   };
   const selectionContextLabel = selectedCardType === 'handoff' ? 'Prompt / 图片卡' : selectedCardType === 'artifact' ? '候选版本卡' : '资产卡';
   return <section className="asset-production-panel">
-    <header><span>{selectionContextLabel} · {assetClassLabels[asset.assetClass] || asset.assetClass} · {asset.id}</span><h2>{asset.name || asset.id}</h2><p>{assetBoardStatusLabel(asset.readiness.status)} · 等级 {asset.grade || 'B'}{shotLabels ? ` · 镜头 ${shotLabels}` : ''}{isFusion && asset.fusionPromptStale ? ' · 融合输入已变化' : ''}</p>{asset.assetClass === 'character' && <div className="character-reference-plan-note"><strong>首轮角色参考图 · 1 张</strong><span>一张合成图包含面部 / 上半身特写 + 正面、侧面、背面全身视图。融合效果不理想时，再按需追加镜头化图片。</span></div>}{prerequisiteItems.length > 0 && <div className={`asset-prerequisite-panel-summary ${prerequisiteGateAllowed ? 'ready' : 'blocked'}`} role="status"><strong>生成所需前置资产</strong><span>前置资产：{prerequisiteAssetSummary}</span><small>{prerequisiteIncompleteSummary ? `当前未完成：${prerequisiteIncompleteSummary}` : '当前：全部完成，可进入生产'}</small>{!prerequisiteGateAllowed && <small>Prompt 仍可查看、编辑和复制；上传候选、图片生成、媒体 QA 与登记会在前置资产完成后开放。</small>}</div>}{!prerequisiteGateAllowed && prerequisiteItems.length === 0 && <div className="asset-prerequisite-panel-warning" role="status"><strong>前置资产未完成</strong><span>{prerequisiteBlockedReason}</span></div>}{asset.prompt && (!isFusion || fusionPromptReady) && <div className="asset-prompt-gate"><span>Prompt QA：{String(asset.promptQaDecision || 'Pending')} · 图像：{String(asset.generationStatus || 'planned')}</span><div>{asset.promptQaDecision !== 'Approved' && <button onClick={() => onApprovePromptCard(asset.id)} disabled={busy}>通过 Prompt QA</button>}{asset.promptQaDecision === 'Approved' && asset.imageGenerationEligible !== false && asset.generationStatus !== 'generated-pending-qa' && <button className="asset-prompt-gate-primary" onClick={() => onGenerateImageCard(asset.id)} disabled={busy || !prerequisiteGateAllowed}>{asset.assetClass === 'character' ? '确认并生成角色结构参考图' : '确认并生成图像'}</button>}</div></div>}{asset.readiness.registered_ready && !asset.readiness.production_ready && <div className="manual-production-gate"><strong>已登记资产可人工确认</strong><small>仅豁免 Prompt / Prompt QA，当前登记文件、图片 QA、授权与融合门仍然有效。</small><textarea value={manualApprovalReason} onChange={(event) => setManualApprovalReason(event.target.value)} placeholder="填写人工审核原因" rows={2} /><button onClick={() => onManualProductionApproval?.(asset.id, true, manualApprovalReason.trim(), currentFileId)} disabled={busy || !manualApprovalReason.trim() || !currentArtifactId || !onManualProductionApproval}>人工通过可入镜</button></div>}{manualApprovalActive && <div className="manual-production-active"><span>当前登记文件已人工通过可入镜</span><button onClick={() => onManualProductionApproval?.(asset.id, false, '撤销人工通过', currentFileId)} disabled={busy || !onManualProductionApproval}>撤销人工通过</button></div>}</header>
-     <div className="asset-production-actions"><button onClick={save} disabled={busy}>保存 Prompt / 规格</button>{!isFusion && <button className="asset-ai-prompt-button" onClick={() => onGeneratePrompt?.(asset.id)} disabled={busy || !onGeneratePrompt}>AI 编写 Prompt</button>}<button className="asset-chatgpt-button" onClick={() => onHandoff({ ...asset, promptPack: promptPackDraft || asset.promptPack }, prompt)} disabled={busy || !prompt.trim() || (isFusion && !fusionPromptReady)}>{isFusion && !fusionPromptReady ? '历史融合 Prompt 不可执行' : '复制 Prompt'}</button></div>
+    <header><span>{selectionContextLabel} · {assetClassLabels[asset.assetClass] || asset.assetClass} · {asset.id}</span><h2>{asset.name || asset.id}</h2><p>{assetBoardStatusLabel(asset.readiness.status)} · 等级 {asset.grade || 'B'}{shotLabels ? ` · 镜头 ${shotLabels}` : ''}{isFusion && asset.fusionPromptStale ? ' · 融合输入已变化' : ''}</p>{asset.assetClass === 'character' && <div className="character-reference-plan-note"><strong>首轮角色参考图 · 1 张</strong><span>一张合成图包含面部 / 上半身特写 + 正面、侧面、背面全身视图。融合效果不理想时，再按需追加镜头化图片。</span></div>}{prerequisiteItems.length > 0 && <div className={`asset-prerequisite-panel-summary ${prerequisiteGateAllowed ? 'ready' : 'blocked'}`} role="status"><strong>生成所需前置资产</strong><span>前置资产：{prerequisiteAssetSummary}</span><small>{prerequisiteIncompleteSummary ? `当前未完成：${prerequisiteIncompleteSummary}` : '当前：全部完成，可进入生产'}</small>{!prerequisiteGateAllowed && <small>Prompt 仍可查看、编辑和复制；上传候选、图片生成、媒体 QA 与登记会在前置资产完成后开放。</small>}</div>}{!prerequisiteGateAllowed && prerequisiteItems.length === 0 && <div className="asset-prerequisite-panel-warning" role="status"><strong>前置资产未完成</strong><span>{prerequisiteBlockedReason}</span></div>}{asset.prompt && !isAudioAsset && (!isFusion || fusionPromptReady) && <div className="asset-prompt-gate"><span>Prompt QA：{String(asset.promptQaDecision || 'Pending')} · 图像：{String(asset.generationStatus || 'planned')}</span><div>{asset.promptQaDecision !== 'Approved' && <button onClick={() => onApprovePromptCard(asset.id)} disabled={busy}>通过 Prompt QA</button>}{asset.promptQaDecision === 'Approved' && asset.imageGenerationEligible !== false && asset.generationStatus !== 'generated-pending-qa' && <button className="asset-prompt-gate-primary" onClick={() => onGenerateImageCard(asset.id)} disabled={busy || !prerequisiteGateAllowed}>{asset.assetClass === 'character' ? '确认并生成角色结构参考图' : '确认并生成图像'}</button>}</div></div>}{asset.readiness.registered_ready && !asset.readiness.production_ready && <div className="manual-production-gate"><strong>已登记资产可人工确认</strong><small>仅豁免 Prompt / Prompt QA，当前登记文件、图片 QA、授权与融合门仍然有效。</small><textarea value={manualApprovalReason} onChange={(event) => setManualApprovalReason(event.target.value)} placeholder="填写人工审核原因" rows={2} /><button onClick={() => onManualProductionApproval?.(asset.id, true, manualApprovalReason.trim(), currentFileId)} disabled={busy || !manualApprovalReason.trim() || !currentArtifactId || !onManualProductionApproval}>人工通过可入镜</button></div>}{manualApprovalActive && <div className="manual-production-active"><span>当前登记文件已人工通过可入镜</span><button onClick={() => onManualProductionApproval?.(asset.id, false, '撤销人工通过', currentFileId)} disabled={busy || !onManualProductionApproval}>撤销人工通过</button></div>}</header>
+     <div className="asset-production-actions"><button onClick={save} disabled={busy}>{isAudioAsset ? '保存声音字段 / 规格' : '保存 Prompt / 规格'}</button>{!isFusion && <button className="asset-ai-prompt-button" onClick={() => onGeneratePrompt?.(asset.id)} disabled={busy || !onGeneratePrompt}>AI 编写 Prompt</button>}<button className="asset-chatgpt-button" onClick={() => onHandoff({ ...asset, promptPack: promptPackDraft || asset.promptPack }, prompt)} disabled={busy || (!prompt.trim() && !isAudioAsset) || (isAudioAsset && !minimaxWebPackage?.copyText) || (isFusion && !fusionPromptReady)}>{isFusion && !fusionPromptReady ? '历史融合 Prompt 不可执行' : isAudioAsset ? '复制 MiniMax Web 包' : '复制 Prompt'}</button></div>
     {isFusion && <section className="fusion-inputs-panel"><div><span>FUSION WORKFLOW</span><h3>{fusionPromptReady ? '正式融合 Prompt' : '等待基础资产就绪'}</h3><p>{String(asset.fusionPromptBlockedReason || asset.fusionPlan?.shot_intent || '系统已根据当前分镜自动关联角色、场景和道具；前置资产全部成为正式资产后才能生成融合 Prompt。')}</p></div><div className="fusion-plan-summary"><span>目标镜头：{fusionShotId || '未绑定'}</span><span>规划状态：{fusionPromptReady ? (asset.fusionPromptStale ? '输入已变化 · 待重新融合' : '已生成正式 Prompt') : fusionSlot ? '自动关联 · 等待前置资产' : '等待基础资产就绪'}</span></div><div className="fusion-input-list">{fusionSources.length ? fusionSources.map((source) => <span key={source.id} className={source.readiness?.production_ready === true || source.production_ready === true ? 'ready' : 'blocked'}>{assetClassLabels[source.assetClass] || source.assetClass} · {source.name || source.id}{source.readiness?.production_ready === true || source.production_ready === true ? ' · 已就绪' : ` · ${source.readiness?.next_action || '未就绪'}`}</span>) : <small>系统尚未从当前分镜解析到可融合的基础资产，请先完成对应分镜资产需求。</small>}</div>{assetBoardDirty && <p className="fusion-connection-warning">当前工作区布局尚未保存；点击生成时会先保存最新工作区状态。</p>}{fusionBlockedSources.length > 0 && <p className="fusion-connection-warning">存在未达到 production_ready 的输入资产：{fusionBlockedSources.map((source) => source.name || source.id).join('、')}</p>}{!fusionGateAllowed && asset.fusionPromptBlockedReason && <p className="fusion-connection-warning">{asset.fusionPromptBlockedReason}</p>}{!fusionShotId && <p className="fusion-connection-warning">该融合资产尚未绑定有效镜头。</p>}<div className="fusion-input-actions"><button className="fusion-compose-button" onClick={() => setPrompt(composeFusionPrompt(asset, fusionSources, story))} disabled={busy || fusionSources.length < 2}>预览融合输入</button><button className="fusion-compose-button fusion-ai-button" onClick={() => onGenerateFusionPrompt(asset.id, fusionSourceIds, fusionShotId)} disabled={busy || !fusionCanGenerate}>生成融合 Prompt（AI）</button></div></section>}
-    <label>Prompt<textarea data-asset-production-prompt value={prompt} readOnly={isFusion} onChange={(event) => setPrompt(event.target.value)} placeholder="描述这个资产的身份、结构、材质、镜头用途和视觉要求…" /></label>
+    {minimaxWebPackage && <section className="asset-minimax-web-panel"><div className="asset-minimax-web-heading"><div><span>MINIMAX SPEECH 2.8 WEB</span><h3>可直接测试的声音输入包</h3></div><b className={minimaxWebPackage.copyText ? 'ready' : 'blocked'}>{minimaxWebPackage.copyText ? '朗读文本已确认' : '先确认唯一台词'}</b></div><p>文本框只粘贴“朗读文本”一段；音色、情绪、语速、音调和音量在 MiniMax Web 页面设置。资产 ID、镜头、QA、环境声和混音说明不会进入朗读文本。</p><pre>{minimaxWebPackageText}</pre><div className="asset-minimax-web-actions"><button type="button" className="asset-minimax-copy-package" onClick={() => onHandoff({ ...asset, promptPack: promptPackDraft || asset.promptPack }, prompt)} disabled={!minimaxWebPackage.copyText}>复制 MiniMax Web 测试包</button><button type="button" onClick={() => void copyMiniMaxText()} disabled={!minimaxWebPackage.copyText}>复制已确认朗读文本</button><a href="https://www.minimax.io/audio" target="_blank" rel="noreferrer">打开 MiniMax Web</a></div></section>}
+    <label>{isAudioAsset ? '声音资产内部状态（不直接粘贴到 MiniMax）' : 'Prompt'}<textarea data-asset-production-prompt value={prompt} readOnly={isFusion} onChange={(event) => setPrompt(event.target.value)} placeholder={isAudioAsset ? 'AI 生成后会显示文本确认状态；实际朗读文本请在 MiniMax Web 测试包中查看。' : '描述这个资产的身份、结构、材质、镜头用途和视觉要求…'} /></label>
     <PromptDetailsPanel asset={asset} promptPack={promptPackDraft} promptQuality={promptQualityDraft} />
     {jsonError && <p className="asset-form-error" role="alert">{jsonError}</p>}
     <label>资产生产规格 JSON<textarea className={jsonError ? 'invalid' : ''} value={assetSpec} onChange={(event) => { setAssetSpec(event.target.value); setJsonError(''); }} spellCheck={false} /></label>
@@ -1717,28 +1757,29 @@ type AssetRejectFeedbackDraft = {
 function AssetRejectFeedbackModal({ draft, busy, onChange, onClose, onSubmit }: { draft: AssetRejectFeedbackDraft; busy: boolean; onChange: (value: string) => void; onClose: () => void; onSubmit: () => void }) {
   const dialogFocus = useDialogFocus(true);
   const trimmedValue = draft.value.trim();
+  const hasArtifact = Boolean(draft.artifactId);
   const placeholder = '例如：\n• 脸部身份漂移，左眉尾的微特征消失\n• 右手与武器接触不自然，握持方向错误\n• 雨光从右侧打来，但场景固定光源应从左向右\n• 背景护栏位置和上一镜头不一致';
   return <div className="modal-backdrop feedback-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <section ref={dialogFocus.dialogRef} onKeyDown={dialogFocus.onKeyDown} className="confirm-dialog feedback-dialog" role="dialog" aria-modal="true" aria-labelledby="asset-reject-feedback-title" aria-describedby="asset-reject-feedback-description">
       <header className="feedback-dialog-heading">
         <div className="feedback-dialog-title">
-          <span>MEDIA QA · PROMPT REBUILD</span>
-          <h2 id="asset-reject-feedback-title">退回并重写 Prompt</h2>
+          <span>{hasArtifact ? 'MEDIA QA · PROMPT REBUILD' : 'PROMPT · REWRITE'}</span>
+          <h2 id="asset-reject-feedback-title">{hasArtifact ? '退回并重写 Prompt' : '重写 Prompt'}</h2>
           <p>{draft.assetId} · {draft.assetName}</p>
         </div>
-        <div className="feedback-dialog-status" aria-label="图片审核不通过"><i aria-hidden="true">!</i><span>图片审核不通过</span></div>
+        <div className="feedback-dialog-status" aria-label={hasArtifact ? '图片审核不通过' : 'Prompt 重写'}><i aria-hidden="true">{hasArtifact ? '!' : '↻'}</i><span>{hasArtifact ? '图片审核不通过' : 'Prompt 重写'}</span></div>
         <button type="button" className="close-button" onClick={onClose} aria-label="关闭审核反馈窗口">×</button>
       </header>
       <div className="feedback-dialog-intro" id="asset-reject-feedback-description">
-        <span className="feedback-dialog-intro-mark" aria-hidden="true">QA</span>
-        <div><strong>这次需要修正什么？</strong><p>请写下画面中可以被观察和验证的具体问题。系统会按新的 Prompt Contract 与 skill-v2 规则重写草稿，并保留历史 Prompt。</p></div>
+        <span className="feedback-dialog-intro-mark" aria-hidden="true">{hasArtifact ? 'QA' : 'P'}</span>
+        <div><strong>这次需要修正什么？</strong><p>{hasArtifact ? '请写下画面中可以被观察和验证的具体问题。系统会按新的 Prompt Contract 与 skill-v2 规则重写草稿，并保留历史 Prompt。' : '请写下希望调整的内容、参考图要求或连续性问题。系统会按新的 Prompt Contract 与 skill-v2 规则重写草稿，并保留历史 Prompt。'}</p></div>
       </div>
       {draft.shotIds.length > 0 && <div className="feedback-dialog-meta"><span>影响镜头</span><div>{draft.shotIds.map((shotId) => <b key={shotId}>{shotId}</b>)}</div></div>}
       <label className="feedback-dialog-field" htmlFor="asset-reject-feedback-input"><span>问题描述 / 修改方向 <em>必填</em></span><textarea id="asset-reject-feedback-input" name="asset-reject-feedback-input" autoFocus data-dialog-initial-focus value={draft.value} onChange={(event) => onChange(event.target.value)} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && trimmedValue && !busy) { event.preventDefault(); onSubmit(); } }} placeholder={placeholder} maxLength={2000} rows={7} /></label>
       <div className="feedback-dialog-helper"><span>建议包含：人物身份 · 动作与接触 · 场景空间 · 光线连续性</span><strong>{draft.value.length}/2000</strong></div>
       <footer className="feedback-dialog-actions">
         <span className="feedback-dialog-shortcut">Esc 取消 · ⌘/Ctrl + Enter 提交</span>
-        <div><button type="button" onClick={onClose} disabled={busy}>取消</button><button type="button" className="primary-button" onClick={onSubmit} disabled={busy || !trimmedValue}>{busy ? '正在提交…' : '提交审核并重写'}</button></div>
+        <div><button type="button" onClick={onClose} disabled={busy}>取消</button><button type="button" className="primary-button" onClick={onSubmit} disabled={busy || !trimmedValue}>{busy ? '正在提交…' : hasArtifact ? '提交审核并重写' : '提交并重写 Prompt'}</button></div>
       </footer>
     </section>
   </div>;
@@ -1749,7 +1790,7 @@ function AssetContextMenu({ menu, shots, busy, onClose, onDelete, onMove, onCopy
   const left = Math.min(menu.x, Math.max(12, window.innerWidth - 292));
   const top = Math.min(menu.y, Math.max(12, window.innerHeight - 360));
   return <div className="asset-context-menu" style={{ left, top }} role="menu" onPointerDown={(event) => event.stopPropagation()} onContextMenu={(event) => event.preventDefault()}>
-    <header><div><span>ASSET ACTIONS</span><strong>{menu.target.label}</strong><small>{menu.target.assetId} · {menu.target.nodeType === 'artifact' ? '候选版本' : menu.target.nodeType === 'handoff' ? '人工桥接' : '逻辑资产'}</small></div><button onClick={onClose} aria-label="关闭资产菜单">×</button></header>
+    <header><div><span>ASSET ACTIONS</span><strong>{menu.target.label}</strong><small>{menu.target.assetId} · {menu.target.nodeType === 'artifact' ? '候选版本' : menu.target.nodeType === 'handoff' ? 'Prompt / 图片卡' : '逻辑资产'}</small></div><button onClick={onClose} aria-label="关闭资产菜单">×</button></header>
     <button className="asset-context-command danger" onClick={onDelete} disabled={busy}>删除逻辑资产及画布内容</button>
     <div className="asset-context-section"><span>移动到目标分镜</span>{shots.length ? shots.map((shot) => { const shotId = String(shot.id).toUpperCase(); return <button key={shot.id} className="asset-context-shot" onClick={() => onMove(shotId)} disabled={busy || shotId === currentShot}><b>{shotId}</b><small>{shot.scene} · {shot.purpose}</small>{shotId === currentShot && <i>当前位置</i>}</button>; }) : <p>当前项目还没有分镜。</p>}</div>
     <button className="asset-context-command" onClick={onCopy} disabled={busy}>复制资产及相关内容</button>
@@ -1792,7 +1833,7 @@ function ProjectManager({ projects, archivedProjects, currentId, busy, onClose, 
       <div className="project-manager-list">
         {projects.map((item, index) => {
           const current = item.document.id === currentId;
-          return <article className={`project-manager-row ${current ? 'current' : ''}`} key={item.document.id}>
+          return <article className={`project-manager-row ${current ? 'current' : ''}`} data-project-id={item.document.id} key={item.document.id}>
             <div className="project-manager-info"><div className="project-manager-name"><strong>{item.document.name}</strong>{current && <span className="project-current-badge">当前项目</span>}</div><small>{item.document.ratio || '—'} · {item.document.duration || 0}s · 修订版 v{item.revision}</small></div>
             <div className="project-manager-actions">
               <button onClick={() => onMove(index, -1)} disabled={busy || index === 0} title="上移项目">↑</button>
@@ -1804,7 +1845,7 @@ function ProjectManager({ projects, archivedProjects, currentId, busy, onClose, 
           </article>;
         })}
         {!projects.length && <p className="muted">暂无项目。</p>}
-        {archivedProjects.length > 0 && <section className="archived-projects" aria-label="已归档项目"><h3>已归档项目</h3>{archivedProjects.map((item) => <article className="project-manager-row archived" key={item.document.id}><div className="project-manager-info"><div className="project-manager-name"><strong>{item.document.name}</strong><span className="project-status archived">已归档</span></div><small>{item.document.ratio || '—'} · {item.document.duration || 0}s · 修订版 v{item.revision}</small></div><div className="project-manager-actions"><button onClick={() => onRestore(item)} disabled={busy}>恢复</button><button className="danger-button" onClick={() => onDelete(item)} disabled={busy}>删除</button></div></article>)}</section>}
+        {archivedProjects.length > 0 && <section className="archived-projects" aria-label="已归档项目"><h3>已归档项目</h3>{archivedProjects.map((item) => <article className="project-manager-row archived" data-project-id={item.document.id} key={item.document.id}><div className="project-manager-info"><div className="project-manager-name"><strong>{item.document.name}</strong><span className="project-status archived">已归档</span></div><small>{item.document.ratio || '—'} · {item.document.duration || 0}s · 修订版 v{item.revision}</small></div><div className="project-manager-actions"><button onClick={() => onRestore(item)} disabled={busy}>恢复</button><button className="danger-button" onClick={() => onDelete(item)} disabled={busy}>删除</button></div></article>)}</section>}
       </div>
       {createOpen && <form className="project-create-form" onSubmit={submitCreate}>
         <div className="project-create-heading"><div><span>NEW PROJECT</span><h3>新建项目</h3><p>创建一个空白项目，从创意目标和剧本开始编辑。</p></div><button type="button" className="close-button" onClick={() => setCreateOpen(false)} aria-label="关闭新建项目表单">×</button></div>
@@ -2050,7 +2091,8 @@ const settingsProviderLabels: Record<string, string> = {
   openai: 'OpenAI', openai_compatible: 'OpenAI-compatible', jimeng_cli: '即梦官方 CLI', opencode: 'OpenCode Agent', comfyui: 'ComfyUI 本地', minimax: 'MiniMax TTS',
 };
 const settingsProviderTypes = ['openai', 'openai_compatible', 'jimeng_cli', 'opencode', 'comfyui', 'minimax'];
-const settingsEnvForType: Record<string, string> = { openai: 'OPENAI_API_KEY', openai_compatible: 'DEEPSEEK_API_KEY', opencode: 'OPENCODE_SERVER_PASSWORD', comfyui: 'COMFYUI_API_KEY', minimax: 'MINIMAX_API_KEY' };
+const settingsProtectedProviderIds = new Set(['openai-default', 'jimeng-default', 'opencode-default', 'minimax-default']);
+const settingsEnvForType: Record<string, string> = { openai: 'OPENAI_API_KEY', openai_compatible: 'DEEPSEEK_API_KEY', opencode: 'OPENCODE_SERVER_PASSWORD', comfyui: 'COMFYUI_API_KEY', minimax: 'MINIMAX_CN_API_KEY' };
 const settingsProviderCapabilities: Record<string, string[]> = {
   openai: ['orchestrator', 'vision', 'image', 'image_edit'],
   openai_compatible: ['orchestrator'],
@@ -2106,7 +2148,56 @@ const OPEN_CODE_GO_MODELS: OpenCodeGoModel[] = [
   { id: 'hy3', name: 'Hy3', focus: '快速创意 / Prompt 变体', note: '适合批量探索画面方向、镜头动作和短提示词变体。', quota: '4,300' },
 ];
 
-type SettingsDraft = { providerType: string; displayName: string; baseUrl: string; capabilities: string[]; enabled: boolean; modelConfig: string; serverUsername: string; agent: string; preferredModel: string; thinkingStrength: string; cliExecutable: string };
+const minimaxRegionLabels: Record<MiniMaxRegion, { name: string; baseUrl: string; environmentVariable: string }> = {
+  cn: { name: '中国区', baseUrl: 'https://api.minimax.cn/v1', environmentVariable: 'MINIMAX_CN_API_KEY' },
+  global: { name: '国际区', baseUrl: 'https://api.minimax.io/v1', environmentVariable: 'MINIMAX_GLOBAL_API_KEY' },
+};
+const minimaxRegions: MiniMaxRegion[] = ['cn', 'global'];
+
+function MiniMaxCredentialPanel({ selected, activeRegion, preferredModel, modelOptions, secrets, environmentVariables, busy, onModelChange, onSecretChange, onEnvironmentChange, onWrite, onImport, onClear, onSelectRegion }: {
+  selected?: SettingsProvider;
+  activeRegion: MiniMaxRegion;
+  preferredModel: string;
+  modelOptions: Array<{ id: string; description: string }>;
+  secrets: Record<MiniMaxRegion, string>;
+  environmentVariables: Record<MiniMaxRegion, string>;
+  busy: boolean;
+  onModelChange: (model: string) => void;
+  onSecretChange: (region: MiniMaxRegion, value: string) => void;
+  onEnvironmentChange: (region: MiniMaxRegion, value: string) => void;
+  onWrite: (region: MiniMaxRegion) => void;
+  onImport: (region: MiniMaxRegion) => void;
+  onClear: (region: MiniMaxRegion) => void;
+  onSelectRegion: (region: MiniMaxRegion) => void;
+}) {
+  const canManageCredentials = Boolean(selected);
+  return <section className="settings-credential-card settings-minimax-credentials">
+    <div className="settings-subheading"><small>MINIMAX TTS · REGION AWARE</small><h4>MiniMax TTS 接入</h4><p>{canManageCredentials ? '模型、执行区域和 API Key 集中管理；中国区和国际区使用两个独立的系统凭据槽位。' : '先保存 MiniMax Provider 配置；保存后即可在这里分别管理两个区域的系统凭据。'}</p></div>
+    <div className="settings-minimax-model-config">
+      <label>默认 TTS 模型<select aria-label="默认 TTS 模型" value={preferredModel || 'speech-2.8-hd'} onChange={(event) => onModelChange(event.target.value)}>{modelOptions.map((model) => <option key={model.id} value={model.id}>{model.id} · {model.description}</option>)}</select></label>
+      <div className="settings-minimax-runtime-summary"><span>当前执行区域</span><strong>{minimaxRegionLabels[activeRegion].name}</strong><small>{activeRegion} · {minimaxRegionLabels[activeRegion].baseUrl}</small></div>
+    </div>
+    <div className="settings-minimax-section-heading"><div><small>REGION CREDENTIALS</small><strong>双区域 API Key</strong></div><span>在区域卡片中选择当前执行区</span></div>
+    <div className="settings-minimax-region-grid">
+      {minimaxRegions.map((region) => {
+        const label = minimaxRegionLabels[region];
+        const status = selected?.credential_regions?.[region];
+        const configured = Boolean(status?.configured);
+        const active = activeRegion === region;
+        const environmentOptions = region === 'cn' ? ['MINIMAX_CN_API_KEY', 'MINIMAX_API_KEY'] : ['MINIMAX_GLOBAL_API_KEY'];
+        return <article className={`settings-minimax-region-card ${active ? 'active' : ''}`} key={region}>
+          <div className="settings-minimax-region-heading"><div><strong>{label.name}</strong><small>{region} · {label.baseUrl}</small></div><span className={configured ? 'configured' : ''}>{configured ? `已配置 ${status?.credential_mask || '••••••••'}` : '未配置'}</span></div>
+          <label>该区域 API Key<input type="password" value={secrets[region]} onChange={(event) => onSecretChange(region, event.target.value)} placeholder={`输入${label.name} API Key`} aria-label={`${label.name} MiniMax API Key`} autoComplete="off" disabled={!canManageCredentials} /></label>
+          <div className="settings-minimax-region-actions"><button type="button" onClick={() => onWrite(region)} disabled={busy || !canManageCredentials || !secrets[region]}>保存此区 Key</button><button type="button" className={active ? 'settings-region-active' : ''} onClick={() => onSelectRegion(region)} disabled={active}>{active ? '当前执行区' : '选择此区'}</button></div>
+          <div className="settings-credential-actions settings-minimax-import-actions"><select value={environmentVariables[region]} onChange={(event) => onEnvironmentChange(region, event.target.value)} aria-label={`${label.name} 环境变量`} disabled={!canManageCredentials}><option value={environmentOptions[0]}>{environmentOptions[0]}</option>{environmentOptions.slice(1).map((name) => <option key={name} value={name}>{name}（兼容）</option>)}</select><button type="button" onClick={() => onImport(region)} disabled={busy || !canManageCredentials}>导入变量</button><button type="button" className="danger-button" onClick={() => onClear(region)} disabled={busy || !canManageCredentials || !configured}>清除该区 Key</button></div>
+        </article>;
+      })}
+    </div>
+    <small className="settings-security-note">Key 只写入系统凭据库，不进入 Provider JSON、项目文件、运行快照、日志或浏览器存储。切换区域或模型后，请点击下方“保存 Provider 配置”写入运行时；连接探测、音色目录和 TTS 生成都会使用这里显示的当前区域与模型。</small>
+  </section>;
+}
+
+type SettingsDraft = { providerType: string; displayName: string; baseUrl: string; capabilities: string[]; enabled: boolean; modelConfig: string; serverUsername: string; agent: string; preferredModel: string; thinkingStrength: string; cliExecutable: string; minimaxRegion: 'cn' | 'global' };
 
 function SettingsView({ settings, busy, onRefresh, onSaveProvider, onAddPreset, onDeleteProvider, onWriteCredential, onImportCredential, onClearCredential, onProbe, onBind, onAutoMatch }: {
   settings: SettingsEnvelope | null;
@@ -2115,9 +2206,9 @@ function SettingsView({ settings, busy, onRefresh, onSaveProvider, onAddPreset, 
   onSaveProvider: (providerId: string | null, body: Record<string, unknown>) => Promise<boolean>;
   onAddPreset: (presetId: string) => void;
   onDeleteProvider: (providerId: string) => void;
-  onWriteCredential: (providerId: string, value: string) => void;
-  onImportCredential: (providerId: string, environmentVariable: string) => void;
-  onClearCredential: (providerId: string) => void;
+  onWriteCredential: (providerId: string, value: string, region?: MiniMaxRegion) => void;
+  onImportCredential: (providerId: string, environmentVariable: string, region?: MiniMaxRegion) => void;
+  onClearCredential: (providerId: string, region?: MiniMaxRegion) => void;
   onProbe: (providerId: string) => Promise<boolean>;
   onBind: (capability: string, providerId: string, model: string | null) => void;
   onAutoMatch: () => void;
@@ -2127,7 +2218,9 @@ function SettingsView({ settings, busy, onRefresh, onSaveProvider, onAddPreset, 
   const [isCreating, setIsCreating] = useState(false);
   const [secret, setSecret] = useState('');
   const [environmentVariable, setEnvironmentVariable] = useState('OPENAI_API_KEY');
-  const [draft, setDraft] = useState<SettingsDraft>({ providerType: 'openai', displayName: '', baseUrl: 'https://api.openai.com/v1', capabilities: ['orchestrator'], enabled: true, modelConfig: '{}', serverUsername: 'opencode', agent: 'build', preferredModel: '', thinkingStrength: 'max', cliExecutable: 'dreamina' });
+  const [minimaxSecrets, setMinimaxSecrets] = useState<Record<MiniMaxRegion, string>>({ cn: '', global: '' });
+  const [minimaxEnvironmentVariables, setMinimaxEnvironmentVariables] = useState<Record<MiniMaxRegion, string>>({ cn: 'MINIMAX_CN_API_KEY', global: 'MINIMAX_GLOBAL_API_KEY' });
+  const [draft, setDraft] = useState<SettingsDraft>({ providerType: 'openai', displayName: '', baseUrl: 'https://api.openai.com/v1', capabilities: ['orchestrator'], enabled: true, modelConfig: '{}', serverUsername: 'opencode', agent: 'build', preferredModel: '', thinkingStrength: 'max', cliExecutable: 'dreamina', minimaxRegion: 'cn' });
   const [bindingDraft, setBindingDraft] = useState<Record<string, { providerId: string; model: string }>>({});
   const [saveFeedback, setSaveFeedback] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
   const [probePendingId, setProbePendingId] = useState<string | null>(null);
@@ -2174,9 +2267,18 @@ function SettingsView({ settings, busy, onRefresh, onSaveProvider, onAddPreset, 
   const probeModels = Array.isArray(probe?.models) ? probe.models : [];
   const probeCapabilities = Array.isArray(probe?.capabilities) ? probe.capabilities : [];
   const probeVoices = Array.isArray(probe?.voices) ? probe.voices as Array<Record<string, unknown>> : [];
+  const minimaxModelOptions = selected?.models.length
+    ? selected.models.map((id) => ({ id, description: '最近探测到的模型' }))
+    : MINIMAX_TTS_MODELS;
   const probePending = Boolean(selected && probePendingId === selected.id);
-  const probeStatus = probePending ? '正在检测' : probe?.ok === true ? '连接正常' : probe?.ok === false ? '连接失败' : '尚未检测';
-  const probeStatusClass = probePending ? 'checking' : probe?.ok === true ? 'success' : probe?.ok === false ? 'error' : 'pending';
+  const currentCredentialMissing = selected?.provider_type === 'minimax' && !selected.credential_configured;
+  const probeStatus = probePending ? '正在检测' : currentCredentialMissing ? '缺少凭据' : probe?.error_kind === 'auth' ? '凭据无效' : probe?.ok === true ? '连接正常' : probe?.ok === false ? '连接失败' : '尚未检测';
+  const probeStatusClass = probePending ? 'checking' : currentCredentialMissing || probe?.ok === false ? 'error' : probe?.ok === true ? 'success' : 'pending';
+  const runtimeMinimaxRegion: MiniMaxRegion = selected?.provider_type === 'minimax' ? (selected.active_region === 'global' ? 'global' : 'cn') : draft.minimaxRegion;
+  const activeMinimaxRegion: MiniMaxRegion = draft.providerType === 'minimax' ? draft.minimaxRegion : runtimeMinimaxRegion;
+  const runtimeMinimaxLabel = minimaxRegionLabels[runtimeMinimaxRegion].name;
+  const runtimeMinimaxEnvironment = minimaxRegionLabels[runtimeMinimaxRegion].environmentVariable;
+  const authCredentialHint = selected?.provider_type === 'minimax' ? `凭据无效（auth）：请更新 ${runtimeMinimaxEnvironment}（${runtimeMinimaxLabel}）后重新检测。` : `凭据无效（auth）：请更新 ${settingsEnvForType[selected?.provider_type || ''] || '对应凭据'} 后重新检测。`;
 
   useEffect(() => {
     if (isCreating) return;
@@ -2187,9 +2289,11 @@ function SettingsView({ settings, busy, onRefresh, onSaveProvider, onAddPreset, 
   useEffect(() => {
     if (!selected) return;
     const config = selected.model_config || {};
-    setDraft({ providerType: selected.provider_type, displayName: selected.display_name, baseUrl: selected.base_url, capabilities: [...selected.capabilities], enabled: selected.enabled, modelConfig: JSON.stringify(config, null, 2), serverUsername: String(config.server_username || 'opencode'), agent: String(config.agent || 'build'), preferredModel: String(config.model_version || config.orchestrator_model || config.preferred_model || config.tts_model || ''), thinkingStrength: String(config.thinking_strength || config.reasoning_effort || 'max'), cliExecutable: String(config.executable || 'dreamina') });
+    setDraft({ providerType: selected.provider_type, displayName: selected.display_name, baseUrl: selected.base_url, capabilities: [...selected.capabilities], enabled: selected.enabled, modelConfig: JSON.stringify(config, null, 2), serverUsername: String(config.server_username || 'opencode'), agent: String(config.agent || 'build'), preferredModel: String(config.model_version || config.orchestrator_model || config.preferred_model || config.tts_model || ''), thinkingStrength: String(config.thinking_strength || config.reasoning_effort || 'max'), cliExecutable: String(config.executable || 'dreamina'), minimaxRegion: selected.active_region === 'global' || config.region === 'global' || selected.base_url.includes('minimax.io') ? 'global' : 'cn' });
     setSecret('');
     setEnvironmentVariable(settingsEnvForType[selected.provider_type] || 'OPENAI_API_KEY');
+    setMinimaxSecrets({ cn: '', global: '' });
+    setMinimaxEnvironmentVariables({ cn: 'MINIMAX_CN_API_KEY', global: 'MINIMAX_GLOBAL_API_KEY' });
   }, [selected?.id, selected?.model_config]);
 
   useEffect(() => {
@@ -2199,7 +2303,7 @@ function SettingsView({ settings, busy, onRefresh, onSaveProvider, onAddPreset, 
   }, [settings?.bindings]);
 
   const selectProvider = (provider: SettingsProvider) => { setIsCreating(false); setSelectedId(provider.id); setSaveFeedback(null); };
-  const startCreate = () => { setIsCreating(true); setSelectedId(''); setSecret(''); setSaveFeedback(null); setDraft({ providerType: 'openai', displayName: '新 Provider', baseUrl: 'https://api.openai.com/v1', capabilities: ['orchestrator'], enabled: true, modelConfig: '{}', serverUsername: 'opencode', agent: 'build', preferredModel: '', thinkingStrength: 'max', cliExecutable: 'dreamina' }); };
+  const startCreate = () => { setIsCreating(true); setSelectedId(''); setSecret(''); setMinimaxSecrets({ cn: '', global: '' }); setMinimaxEnvironmentVariables({ cn: 'MINIMAX_CN_API_KEY', global: 'MINIMAX_GLOBAL_API_KEY' }); setSaveFeedback(null); setDraft({ providerType: 'openai', displayName: '新 Provider', baseUrl: 'https://api.openai.com/v1', capabilities: ['orchestrator'], enabled: true, modelConfig: '{}', serverUsername: 'opencode', agent: 'build', preferredModel: '', thinkingStrength: 'max', cliExecutable: 'dreamina', minimaxRegion: 'cn' }); };
   const toggleCapability = (capability: string) => {
     if (!supportedCapabilities.includes(capability)) return;
     setDraft((current) => ({ ...current, capabilities: current.capabilities.includes(capability) ? current.capabilities.filter((item) => item !== capability) : [...current.capabilities, capability] }));
@@ -2213,8 +2317,8 @@ function SettingsView({ settings, busy, onRefresh, onSaveProvider, onAddPreset, 
       Object.assign(config, { server_username: draft.serverUsername, agent: draft.agent, thinking_strength: draft.thinkingStrength || 'auto', ...(draft.preferredModel ? { orchestrator_model: draft.preferredModel } : {}) });
     }
     if (draft.providerType === 'jimeng_cli') Object.assign(config, { executable: draft.cliExecutable.trim() || 'dreamina', model_version: draft.preferredModel || 'seedance2.0fast', models: JIMENG_VIDEO_MODELS.map((model) => model.id) });
-    if (draft.providerType === 'minimax') Object.assign(config, { tts_model: draft.preferredModel || 'speech-2.8-hd' });
-    const body: Record<string, unknown> = { display_name: draft.displayName.trim(), base_url: draft.providerType === 'jimeng_cli' ? 'cli://dreamina' : draft.baseUrl.trim(), capabilities: draft.capabilities.filter((capability) => supportedCapabilities.includes(capability)), enabled: draft.enabled, model_config: config };
+    if (draft.providerType === 'minimax') Object.assign(config, { region: draft.minimaxRegion, tts_model: draft.preferredModel || 'speech-2.8-hd', language_boost: null });
+    const body: Record<string, unknown> = { display_name: draft.displayName.trim(), base_url: draft.providerType === 'jimeng_cli' ? 'cli://dreamina' : draft.providerType === 'minimax' ? (draft.minimaxRegion === 'global' ? 'https://api.minimax.io/v1' : 'https://api.minimax.cn/v1') : draft.baseUrl.trim(), capabilities: draft.capabilities.filter((capability) => supportedCapabilities.includes(capability)), enabled: draft.enabled, model_config: config };
     if (isCreating) body.provider_type = draft.providerType;
     const saved = await onSaveProvider(isCreating ? null : selectedId, body);
     if (saved) setDraft((current) => ({ ...current, modelConfig: JSON.stringify(config, null, 2) }));
@@ -2230,25 +2334,28 @@ function SettingsView({ settings, busy, onRefresh, onSaveProvider, onAddPreset, 
       <article className="settings-health-card"><small>运行时</small><strong>{settings.system.runtime.toUpperCase()}</strong><span>FrameFlow {settings.system.version} · Schema {settings.system.schema_version}</span></article>
       <article className={`settings-health-card ${settings.system.keyring.available ? 'ok' : 'danger'}`}><small>系统凭据库</small><strong>{settings.system.keyring.available ? '可用' : '不可用'}</strong><span>{settings.system.keyring.backend || '未发现可用后端'}</span></article>
       <article className={`settings-health-card ${settings.system.media.ffmpeg && settings.system.media.ffprobe ? 'ok' : 'warn'}`}><small>媒体工具链</small><strong>{settings.system.media.ffmpeg && settings.system.media.ffprobe ? 'FFmpeg 就绪' : '需要补齐'}</strong><span>ffmpeg / ffprobe · {Math.round(settings.system.disk_free_bytes / 1024 / 1024 / 1024)} GB 可用</span></article>
-      <article className={`settings-health-card ${settings.system.minimax?.credential_configured ? 'ok' : 'warn'}`}><small>MiniMax TTS</small><strong>{settings.system.minimax?.credential_configured ? '已配置' : '未配置'}</strong><span>{settings.system.provider_count} 个 Provider 配置 · TTS 唯一路由</span></article>
+      <article className={`settings-health-card ${settings.system.minimax?.credential_configured ? 'ok' : 'warn'}`}><small>MiniMax TTS</small><strong>{settings.system.minimax?.credential_configured ? '已配置' : '未配置'}</strong><span>{settings.system.minimax?.active_region === 'global' ? '当前执行区：国际区' : '当前执行区：中国区'} · 两区凭据独立</span></article>
     </div>
     <div className="settings-layout">
       <aside className="settings-provider-column"><div className="settings-column-heading"><div><small>PROVIDERS</small><h3>接入目录</h3></div><button onClick={startCreate}>＋ 新配置</button></div>
-        {providers.map((provider) => <button key={provider.id} className={`settings-provider-item ${!isCreating && provider.id === selectedId ? 'active' : ''}`} onClick={() => selectProvider(provider)}><span className="settings-provider-status">{provider.enabled ? '●' : '○'}</span><span><b>{provider.display_name}</b><small>{settingsProviderLabels[provider.provider_type] || provider.provider_type}</small></span><i className={provider.healthy === true ? 'ok' : provider.healthy === false ? 'danger' : ''}>{provider.credential_configured ? '已接入' : provider.provider_type === 'comfyui' || provider.provider_type === 'opencode' || provider.provider_type === 'jimeng_cli' ? '待连接' : '缺凭据'}</i></button>)}
-        <div className="settings-presets"><small>快速接入预设</small>{settings.presets.map((preset: SettingsPreset) => <button key={preset.preset_id} onClick={() => onAddPreset(preset.preset_id)} disabled={busy}><b>{preset.display_name}</b><span>{settingsProviderLabels[preset.provider_type] || preset.provider_type} · 添加独立配置</span></button>)}</div>
+        {providers.map((provider) => <div key={provider.id} className={`settings-provider-item ${!isCreating && provider.id === selectedId ? 'active' : ''} ${settingsProtectedProviderIds.has(provider.id) ? '' : 'deletable'}`} role="group">
+          <button type="button" className="settings-provider-select" onClick={() => selectProvider(provider)}><span className="settings-provider-status">{provider.enabled ? '●' : '○'}</span><span><b>{provider.display_name}</b><small>{settingsProviderLabels[provider.provider_type] || provider.provider_type}</small></span><i className={provider.healthy === true ? 'ok' : provider.healthy === false ? 'danger' : ''}>{provider.credential_configured ? '已接入' : provider.provider_type === 'comfyui' || provider.provider_type === 'opencode' || provider.provider_type === 'jimeng_cli' ? '待连接' : '缺凭据'}</i></button>
+          {!settingsProtectedProviderIds.has(provider.id) && <button type="button" className="settings-provider-delete" aria-label={`删除 ${provider.display_name}`} title="删除此 Provider" onClick={() => onDeleteProvider(provider.id)} disabled={busy}>×</button>}
+        </div>)}
+        <div className="settings-presets"><div className="settings-presets-heading"><small>快速接入预设</small><span>删除配置后仍可重新添加</span></div>{settings.presets.map((preset: SettingsPreset) => <button key={preset.preset_id} onClick={() => onAddPreset(preset.preset_id)} disabled={busy}><b>{preset.display_name}</b><span>{settingsProviderLabels[preset.provider_type] || preset.provider_type} · 添加独立配置</span></button>)}</div>
       </aside>
         <div className="settings-editor">
-          <div className="settings-editor-heading"><div><small>{isCreating ? 'NEW PROVIDER' : 'PROVIDER PROFILE'}</small><h3>{isCreating ? '创建新的 V3 Provider' : selected?.display_name || '选择 Provider'}</h3></div>{selected && <div className="settings-editor-actions"><button onClick={async () => { setProbePendingId(selected.id); try { await onProbe(selected.id); } finally { setProbePendingId(null); } }} disabled={busy}>连接探测</button>{!['openai-default', 'jimeng-default', 'opencode-default', 'minimax-default'].includes(selected.id) && <button className="danger-button" onClick={() => onDeleteProvider(selected.id)} disabled={busy}>删除配置</button>}</div>}</div>
-         {selected && <section className={`settings-connection-result ${probeStatusClass}`} role="status" aria-live="polite"><div className="settings-connection-heading"><small>CONNECTION STATUS</small><strong>{probeStatus}</strong><span>{probe?.error ? String(probe.error) : probePending ? '正在验证接入点、认证与可用模型，请稍候…' : probe?.ok === true ? 'Provider 已响应，下面的数据来自最近一次探测。' : '点击右上角“连接探测”获取实时状态。'}</span></div><dl><div><dt>延迟</dt><dd>{probe?.latency_ms != null ? `${Number(probe.latency_ms)} ms` : '—'}</dd></div><div><dt>可用模型</dt><dd>{probeModels.length ? `${probeModels.length} 个` : '—'}</dd></div><div><dt>声明能力</dt><dd>{probeCapabilities.length ? probeCapabilities.map((capability) => settingsCapabilityLabels[String(capability)] || String(capability)).join('、') : '—'}</dd></div>{selected.provider_type === 'minimax' && <div><dt>可用音色</dt><dd>{probeVoices.length ? `${probeVoices.length} 个` : '—'}</dd></div>}<div><dt>最近检测</dt><dd>{probe?.checked_at ? new Date(Number(probe.checked_at) * 1000).toLocaleString('zh-CN') : '—'}</dd></div>{probe?.server_version != null && <div><dt>Server 版本</dt><dd>{String(probe.server_version)}</dd></div>}</dl>{selected.provider_type === 'minimax' && probeVoices.length > 0 && <p className="settings-help">音色 ID：{probeVoices.slice(0, 12).map((voice) => String(voice.voice_id || voice.id || '')).filter(Boolean).join('、')}{probeVoices.length > 12 ? ' …' : ''}</p>}</section>}
+          <div className="settings-editor-heading"><div><small>{isCreating ? 'NEW PROVIDER' : 'PROVIDER PROFILE'}</small><h3>{isCreating ? '创建新的 V3 Provider' : selected?.display_name || '选择 Provider'}</h3></div>{selected && <div className="settings-editor-actions"><button onClick={async () => { setProbePendingId(selected.id); try { await onProbe(selected.id); } finally { setProbePendingId(null); } }} disabled={busy}>连接探测</button>{!settingsProtectedProviderIds.has(selected.id) && <button className="danger-button" onClick={() => onDeleteProvider(selected.id)} disabled={busy}>删除配置</button>}</div>}</div>
+         {selected && <section className={`settings-connection-result ${probeStatusClass}`} role="status" aria-live="polite"><div className="settings-connection-heading"><small>CONNECTION STATUS</small><strong>{probeStatus}</strong><span>{currentCredentialMissing ? `当前${runtimeMinimaxLabel}尚未配置独立 API Key，请在下方凭据卡写入后再探测。` : probe?.error_kind === 'auth' ? authCredentialHint : probe?.error ? String(probe.error) : probePending ? '正在验证接入点、认证与可用模型，请稍候…' : probe?.ok === true ? `Provider 已响应，当前区域：${selected.provider_type === 'minimax' ? runtimeMinimaxLabel : '默认接入点'}。下面的数据来自最近一次探测。` : '点击右上角“连接探测”获取实时状态。'}</span></div><dl><div><dt>延迟</dt><dd>{probe?.latency_ms != null ? `${Number(probe.latency_ms)} ms` : '—'}</dd></div><div><dt>可用模型</dt><dd>{probeModels.length ? `${probeModels.length} 个` : '—'}</dd></div><div><dt>声明能力</dt><dd>{probeCapabilities.length ? probeCapabilities.map((capability) => settingsCapabilityLabels[String(capability)] || String(capability)).join('、') : '—'}</dd></div>{selected.provider_type === 'minimax' && <div><dt>可用音色</dt><dd>{probeVoices.length ? `${probeVoices.length} 个` : '—'}</dd></div>}<div><dt>最近检测</dt><dd>{probe?.checked_at ? new Date(Number(probe.checked_at) * 1000).toLocaleString('zh-CN') : '—'}</dd></div>{probe?.server_version != null && <div><dt>Server 版本</dt><dd>{String(probe.server_version)}</dd></div>}</dl>{selected.provider_type === 'minimax' && probeVoices.length > 0 && <p className="settings-help">音色 ID：{probeVoices.slice(0, 12).map((voice) => String(voice.voice_id || voice.id || '')).filter(Boolean).join('、')}{probeVoices.length > 12 ? ' …' : ''}</p>}</section>}
           <div className="settings-form-grid"><label>显示名称<input value={draft.displayName} onChange={(event) => setDraft({ ...draft, displayName: event.target.value })} /></label><label>Provider 类型<select value={draft.providerType} disabled={!isCreating} onChange={(event) => setDraft({ ...draft, providerType: event.target.value, capabilities: [] })}>{settingsProviderTypes.map((type) => <option key={type} value={type}>{settingsProviderLabels[type]}</option>)}</select></label>{draft.providerType === 'jimeng_cli' ? <label className="settings-wide">CLI 可执行文件（只填写程序路径）<input value={draft.cliExecutable} onChange={(event) => setDraft({ ...draft, cliExecutable: event.target.value })} placeholder="dreamina 或 dreamina.exe 的完整路径" /><small className="settings-field-help">不要把 curl 安装命令填在这里；安装命令请在终端执行，成功后这里保持为 dreamina。</small></label> : <label className="settings-wide">Base URL<input value={draft.baseUrl} onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })} placeholder="https://… 或本机 http://127.0.0.1…" /></label>}</div>
          <div className="settings-capability-picker"><span>声明能力</span>{Object.entries(settingsCapabilityLabels).map(([capability, label]) => { const supported = supportedCapabilities.includes(capability); return <label className={supported ? '' : 'unsupported'} key={capability}><input type="checkbox" checked={draft.capabilities.includes(capability)} disabled={!supported} onChange={() => toggleCapability(capability)} />{label}{!supported && <small>不支持</small>}</label>; })}{unsupportedSelectedCapabilities.length > 0 && <p className="settings-capability-help">当前配置中存在不受此 Provider 适配器支持的能力，保存时会自动忽略这些选项。</p>}<p className="settings-capability-explain">{draft.providerType === 'opencode' ? '这里表示 Provider 适配器可以承担的能力，不是单个 Go 模型的媒体生成能力。OpenCode Go 负责文本编排；图片、视频、声音等任务会按能力绑定交给其他 Provider。' : '这里表示当前 Provider 适配器可以承担的能力；具体模型仍以连接探测和能力绑定为准。'}</p></div>
          <label className="settings-toggle"><input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })} />启用此 Provider（停用后不可被能力路由选择）</label>
           {draft.providerType === 'opencode' && <div className="settings-agent-form"><div className="settings-subheading"><small>OPENCODE AGENT</small><h4>Agent 接入参数</h4></div><div className="settings-form-grid"><label>Server 用户名<input value={draft.serverUsername} onChange={(event) => setDraft({ ...draft, serverUsername: event.target.value })} /></label><label>Agent<input value={draft.agent} onChange={(event) => setDraft({ ...draft, agent: event.target.value })} /></label><label>思考强度<select value={draft.thinkingStrength} onChange={(event) => setDraft({ ...draft, thinkingStrength: event.target.value })}><option value="auto">自动（跟随模型）</option><option value="low">低 · 快速响应</option><option value="medium">中 · 平衡</option><option value="high">高 · 深度规划</option><option value="max">最大 · 复杂创作 / QA</option></select></label><label className="settings-wide">主力模型<select value={draft.preferredModel} onChange={(event) => setDraft({ ...draft, preferredModel: event.target.value })} disabled={!opencodeModelOptions.length}><option value="">{opencodeModelOptions.length ? '请选择主力模型' : '请先连接探测模型'}</option>{opencodeModelOptions.map((model) => <option key={model.id} value={model.id}>{model.label}</option>)}</select></label></div>{selectedGoModel && <div className="settings-go-model-card"><div className="settings-go-model-heading"><span>FRAMEFLOW 调度建议</span><strong>{selectedGoModel.name}</strong></div><div className="settings-go-model-focus"><small>更偏向视频制作</small><b>{selectedGoModel.focus}</b></div><p>{selectedGoModel.note}</p>{selectedGoModel.quota && <small className="settings-go-model-quota">官方典型额度：每 5 小时约 {selectedGoModel.quota} 次请求</small>}</div>}{draft.preferredModel && !selectedGoModel && !selectedDetectedModel && <div className="settings-go-model-card settings-go-model-card-warning"><div className="settings-go-model-heading"><span>当前配置</span><strong>{draft.preferredModel}</strong></div><p>该模型不在当前 OpenCode Go 官方目录中。重新探测后可切换到上方 Go 模型组合。</p></div>}<p className="settings-help">模型列表优先来自最近一次连接探测；OpenCode Go 官方组合仅用于补充用途说明。“思考强度”会作为 OpenCode 的 variant 参数发送。“更偏向视频制作”是 FRAMEFLOW 的调度建议，不代表模型原生支持图片或视频生成。保存后会写入 OpenCode 的编排模型配置，并自动同步“编排 Agent”能力绑定。</p></div>}
           {draft.providerType === 'jimeng_cli' && <div className="settings-agent-form"><div className="settings-subheading"><small>DREAMINA CLI</small><h4>即梦视频模型</h4></div><label className="settings-wide">默认模型<select className="settings-jimeng-model-select" value={draft.preferredModel || 'seedance2.0fast'} onChange={(event) => setDraft({ ...draft, preferredModel: event.target.value })}>{JIMENG_VIDEO_MODELS.map((model) => <option key={model.id} value={model.id}>{model.id} · {model.description}</option>)}</select></label><p className="settings-help">模型列表已按当前 dreamina CLI 帮助同步；VIP、图生/首尾帧专用模型会在不匹配的生成模式下被后端拦截。安装命令请在终端执行，不要填入上方路径。登录命令：dreamina login --headless。</p></div>}
-          {draft.providerType === 'minimax' && <div className="settings-agent-form"><div className="settings-subheading"><small>MINIMAX SPEECH</small><h4>MiniMax TTS 模型</h4></div><label className="settings-wide">默认模型<select value={draft.preferredModel || 'speech-2.8-hd'} onChange={(event) => setDraft({ ...draft, preferredModel: event.target.value })}>{(selected?.models.length ? selected.models.map((id) => ({ id, description: '最近探测到的模型' })) : MINIMAX_TTS_MODELS).map((model) => <option key={model.id} value={model.id}>{model.id} · {model.description}</option>)}</select></label><p className="settings-help">TTS 路由已固定为 MiniMax；Base URL 默认使用官方 HTTPS 接口。请先在系统凭据库写入 MINIMAX_API_KEY，再点击“连接探测”。声音 profile 中的 provider voice ID 应填写 MiniMax 音色目录返回的 voice_id。</p></div>}
+          {draft.providerType === 'minimax' && <MiniMaxCredentialPanel selected={selected} activeRegion={activeMinimaxRegion} preferredModel={draft.preferredModel} modelOptions={minimaxModelOptions} secrets={minimaxSecrets} environmentVariables={minimaxEnvironmentVariables} busy={busy} onModelChange={(model) => setDraft((current) => ({ ...current, preferredModel: model }))} onSecretChange={(region, value) => setMinimaxSecrets((current) => ({ ...current, [region]: value }))} onEnvironmentChange={(region, value) => setMinimaxEnvironmentVariables((current) => ({ ...current, [region]: value }))} onWrite={(region) => { if (!selected) return; onWriteCredential(selected.id, minimaxSecrets[region], region); setMinimaxSecrets((current) => ({ ...current, [region]: '' })); }} onImport={(region) => { if (!selected) return; onImportCredential(selected.id, minimaxEnvironmentVariables[region], region); }} onClear={(region) => { if (!selected) return; onClearCredential(selected.id, region); }} onSelectRegion={(region) => setDraft((current) => ({ ...current, minimaxRegion: region, baseUrl: minimaxRegionLabels[region].baseUrl }))} />}
           <label className="settings-json-field">扩展配置 JSON<textarea value={draft.modelConfig} onChange={(event) => setDraft({ ...draft, modelConfig: event.target.value })} spellCheck={false} /></label>
          <div className="settings-save-row"><button className="settings-primary" onClick={saveProvider} disabled={busy || !draft.displayName.trim() || !draft.baseUrl.trim()}>{isCreating ? '创建 Provider' : '保存 Provider 配置'}</button>{saveFeedback && <span className={`settings-save-feedback ${saveFeedback.kind}`} role="status">{saveFeedback.text}</span>}</div>
-        {!isCreating && selected && (selected.provider_type === 'jimeng_cli' ? <section className="settings-credential-card"><div className="settings-subheading"><small>LOCAL CLI LOGIN</small><h4>即梦本机登录态</h4><p>{selected.credential_configured ? 'CLI 已检测到本机登录态。' : '不填写 API Key；请先安装官方 CLI，并运行 dreamina login 或 dreamina login --headless。'}</p></div><small className="settings-security-note">登录态由官方 dreamina CLI 自己管理，FrameFlow 不读取、不保存 Cookie 或 token。</small></section> : <section className="settings-credential-card"><div className="settings-subheading"><small>CREDENTIALS</small><h4>系统凭据库</h4><p>{selected.credential_configured ? `当前状态：已配置 ${selected.credential_mask || '••••••••'}` : selected.provider_type === 'opencode' || selected.provider_type === 'comfyui' ? '当前 Provider 可以不配置密钥，连接由本地服务决定。' : '当前状态：未配置 API Key'}</p></div><div className="settings-credential-actions"><input type="password" value={secret} onChange={(event) => setSecret(event.target.value)} placeholder="输入后仅写入系统凭据库，不会保存到网页" autoComplete="off"/><button onClick={() => { onWriteCredential(selected.id, secret); setSecret(''); }} disabled={busy || !secret}>写入凭据库</button><select value={environmentVariable} onChange={(event) => setEnvironmentVariable(event.target.value)}><option>{settingsEnvForType[selected.provider_type] || 'OPENAI_API_KEY'}</option><option>OPENAI_API_KEY</option><option>DEEPSEEK_API_KEY</option><option>OPENCODE_SERVER_PASSWORD</option><option>COMFYUI_API_KEY</option><option>MINIMAX_API_KEY</option></select><button onClick={() => onImportCredential(selected.id, environmentVariable)} disabled={busy}>导入环境变量</button><button className="danger-button" onClick={() => onClearCredential(selected.id)} disabled={busy}>清除系统凭据</button></div><small className="settings-security-note">API Key 不回显、不进入项目 JSON、运行快照、日志、前端 localStorage 或 Provider 探测结果。</small></section>)}
+        {!isCreating && selected && (selected.provider_type === 'jimeng_cli' ? <section className="settings-credential-card"><div className="settings-subheading"><small>LOCAL CLI LOGIN</small><h4>即梦本机登录态</h4><p>{selected.credential_configured ? 'CLI 已检测到本机登录态。' : '不填写 API Key；请先安装官方 CLI，并运行 dreamina login 或 dreamina login --headless。'}</p></div><small className="settings-security-note">登录态由官方 dreamina CLI 自己管理，FrameFlow 不读取、不保存 Cookie 或 token。</small></section> : selected.provider_type !== 'minimax' ? <section className="settings-credential-card"><div className="settings-subheading"><small>CREDENTIALS</small><h4>系统凭据库</h4><p>{selected.credential_configured ? `当前状态：已配置 ${selected.credential_mask || '••••••••'}` : selected.provider_type === 'opencode' || selected.provider_type === 'comfyui' ? '当前 Provider 可以不配置密钥，连接由本地服务决定。' : '当前状态：未配置 API Key'}</p></div><div className="settings-credential-actions"><input type="password" value={secret} onChange={(event) => setSecret(event.target.value)} placeholder="输入后仅写入系统凭据库，不会保存到网页" autoComplete="off"/><button onClick={() => { onWriteCredential(selected.id, secret); setSecret(''); }} disabled={busy || !secret}>写入凭据库</button><select value={environmentVariable} onChange={(event) => setEnvironmentVariable(event.target.value)}><option>{settingsEnvForType[selected.provider_type] || 'OPENAI_API_KEY'}</option><option>OPENAI_API_KEY</option><option>DEEPSEEK_API_KEY</option><option>OPENCODE_SERVER_PASSWORD</option><option>COMFYUI_API_KEY</option><option>MINIMAX_API_KEY</option></select><button onClick={() => onImportCredential(selected.id, environmentVariable)} disabled={busy}>导入环境变量</button><button className="danger-button" onClick={() => onClearCredential(selected.id)} disabled={busy}>清除系统凭据</button></div><small className="settings-security-note">API Key 不回显、不进入项目 JSON、运行快照、日志、前端 localStorage 或 Provider 探测结果。</small></section> : null)}
        </div>
        <aside className="settings-routing" aria-label="Capability routing"><div className="settings-column-heading"><div><small>CAPABILITY ROUTING</small><h3>能力绑定</h3></div><button onClick={onAutoMatch} disabled={busy}>补齐自动推荐</button></div><p className="settings-help">{settings.routing_policy || '先按 Provider 能力和状态自动匹配，再允许手动调整。'} MiniMax 是当前唯一 TTS Provider；每项能力只保存一个默认 Provider + model。</p>{settings.capabilities.map((capability) => { const binding = selectedBinding(capability); const candidates = providers.filter((provider) => provider.enabled && provider.contract?.capabilities.includes(capability)); const provider = providers.find((item) => item.id === binding.providerId); const models = provider?.models || []; return <div className="settings-binding-row" key={capability}><label>{settingsCapabilityLabels[capability] || capability}<select value={binding.providerId} onChange={(event) => updateBindingDraft(capability, { providerId: event.target.value, model: '' })}><option value="">未绑定</option>{candidates.map((item) => <option key={item.id} value={item.id}>{item.display_name}</option>)}</select></label><label>模型<select value={binding.model} onChange={(event) => updateBindingDraft(capability, { model: event.target.value })}><option value="">Provider 默认</option>{(models.length ? models : capability === 'orchestrator' ? settings.orchestrator_models.models.map((item) => item.id) : []).map((model) => <option key={model} value={model}>{model}</option>)}</select></label><button onClick={() => onBind(capability, binding.providerId, binding.model || null)} disabled={busy || !binding.providerId}>保存绑定</button></div>; })}</aside>
     </div>
@@ -2343,6 +2450,8 @@ function Studio() {
   const [agentPlan, setAgentPlan] = useState<AgentPlan | null>(null);
   const [agentBusy, setAgentBusy] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
+  const [assistantWorkspaceV2Enabled, setAssistantWorkspaceV2Enabled] = useState(true);
+  const [projectReloadVersion, setProjectReloadVersion] = useState(0);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [commandQuery, setCommandQuery] = useState('');
   const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
@@ -2597,10 +2706,24 @@ function Studio() {
   const copyAssetPromptCard = async (assetId: string) => {
     const asset = assetLibrary?.assets.find((item) => item.id === assetId);
     if (!asset?.prompt) { setNotice('当前资产没有可复制的 Prompt。'); return; }
+    if (asset.assetClass === 'audio') {
+      const metadata = asset.assetMetadata || {};
+      const pack = normalizePromptPack('audio', asset.promptPack || metadata.prompt_pack || {}, {
+        identityAnchor: asset.identityAnchors || metadata.identity_anchors || {},
+        mustPreserve: asset.mustPreserve || metadata.must_preserve || [],
+        mustAvoid: asset.mustAvoid || metadata.must_avoid || [],
+        context: { shots: [], references: asset.references || [] },
+      });
+      const webPackage = buildMiniMaxWebPromptPackage(pack, asset.prompt, { shots: [], references: asset.references || [] });
+      if (!webPackage.copyText) {
+        setNotice('朗读文本尚未 confirmed；不能复制 MiniMax 文本包，请先确认唯一台词。');
+        return;
+      }
+    }
     const fullPrompt = composeAssetPrompt(asset, story, asset.prompt);
     try {
       await navigator.clipboard.writeText(fullPrompt);
-      setNotice(`「${asset.name || asset.id}」Prompt 已复制`);
+      setNotice(asset.assetClass === 'audio' ? `「${asset.name || asset.id}」MiniMax Web 测试包已复制；文本框只粘贴包内“朗读文本”一段。` : `「${asset.name || asset.id}」Prompt 已复制`);
     } catch {
       setNotice('浏览器未授权剪贴板，请手动复制右侧 Prompt。');
     }
@@ -2909,16 +3032,17 @@ function Studio() {
     return normalized;
   }, []);
   const openProjectManager = useCallback(() => {
-    if (busy) return;
-    void refreshProjectList().catch((error: Error) => setNotice(error.message)).finally(() => setProjectManagerOpen(true));
-  }, [busy, refreshProjectList]);
+    if (busy || projectManagerOpen) return;
+    setProjectManagerOpen(true);
+    void refreshProjectList().catch((error: Error) => setNotice(error.message));
+  }, [busy, projectManagerOpen, refreshProjectList]);
 
   useEffect(() => {
     refreshProjectList().then((normalized) => {
       if (normalized.length) setProjectId(normalized[0].document.id);
     }).catch((error: Error) => setNotice(error.message));
      studioApi.dashboard().then((value) => { setDashboard(value); setDashboardError(''); }).catch((error: Error) => { setDashboardError(error.message); setNotice(error.message); });
-    studioApi.settings().then(setSettings).catch((error: Error) => setNotice(error.message));
+    studioApi.settings().then((value) => { setSettings(value); setAssistantWorkspaceV2Enabled(value.feature_flags?.assistant_workspace_v2 !== false); }).catch((error: Error) => setNotice(error.message));
     studioApi.workflows().then(({ workflows }) => setWorkflowManifests(workflows)).catch(() => setWorkflowManifests(fallbackAssistantSkills));
   }, [refreshProjectList]);
 
@@ -3016,7 +3140,7 @@ function Studio() {
         if (!controller.signal.aborted && sequence === projectLoadSequence.current) setBusy(false);
       });
     return () => controller.abort();
-  }, [clearAssetBoardHistory, projectId]);
+  }, [clearAssetBoardHistory, projectId, projectReloadVersion]);
 
   useEffect(() => {
     if (!assetBoardEnvelope) return;
@@ -3084,6 +3208,42 @@ function Studio() {
     setAssetBoardNodes(nextNodes); setAssetBoardEdges(assetBoardToFlowEdges(assetBoardEnvelope.board, nextNodes));
   };
 
+  const scheduleAssetGenerationLocator = useCallback((normalized: string, label: string) => {
+    if (assetBoardLocatorTimerRef.current !== null) window.clearTimeout(assetBoardLocatorTimerRef.current);
+    setAssetBoardLocator('');
+    assetBoardLocatorTimerRef.current = window.setTimeout(() => {
+      setAssetBoardLocator(normalized);
+      assetBoardLocatorTimerRef.current = window.setTimeout(() => {
+        setAssetBoardLocator((current) => current === normalized ? '' : current);
+        assetBoardLocatorTimerRef.current = null;
+      }, 720);
+    }, 0);
+    setNotice(`已定位：${label}`);
+  }, []);
+
+  const focusAssetGenerationTarget = useCallback((assetId: string) => {
+    const normalized = assetId.trim();
+    if (!normalized) return;
+    const targetAsset = assetLibrary?.assets.find((asset) => asset.id === normalized);
+    const visibleNode = assetBoardNodes.find((candidate) => !candidate.data.presentationOnly && candidate.data.asset_id === normalized);
+    const hiddenByView = !visibleNode && (assetBoardFilter !== 'all' || Boolean(assetBoardShotId) || assetBoardOnlyBlocked);
+    if (hiddenByView) {
+      setAssetBoardFilter('all');
+      setAssetBoardShotId('');
+      setAssetBoardOnlyBlocked(false);
+      rebuildAssetBoardView({ filter: 'all', shotId: '', onlyBlocked: false });
+      scheduleAssetGenerationLocator(normalized, targetAsset?.name || normalized);
+      return;
+    }
+    if (!visibleNode) {
+      setNotice(`没有找到“${normalized}”对应的画布节点`);
+      return;
+    }
+    scheduleAssetGenerationLocator(normalized, visibleNode.data.label || targetAsset?.name || normalized);
+  }, [assetBoardFilter, assetBoardNodes, assetBoardOnlyBlocked, assetBoardShotId, assetLibrary?.assets, rebuildAssetBoardView, scheduleAssetGenerationLocator]);
+
+  const assetGenerationOrder = useMemo(() => buildAssetGenerationOrder({ assets: assetLibrary?.assets || [], storyShots: story?.story.shots || [], board: assetBoardEnvelope?.board, boardNodes: assetBoardNodes.map((node) => ({ asset_id: node.data.asset_id, config: node.data.config })) }), [assetBoardEnvelope?.board, assetBoardNodes, assetLibrary?.assets, story?.story.shots]);
+
   const buildAssetBoardFlow = (envelope: AssetBoardEnvelope, library: AssetLibraryEnvelope, shots: StoryShot[]) => {
     const boardNodes = assetBoardToFlowNodes(envelope.board, library.assets, assetBoardFilter, assetBoardShowShots, shots, { preset: assetBoardLayoutPreset, columnWidth: assetBoardColumnWidth, gap: assetBoardGap, layoutMode: assetBoardLayoutMode, collapsedScopes: assetBoardCollapsedScopes, onToggleScope: toggleAssetBoardScope, onContextMenu: openAssetContextMenu, onApprovePrompt: approveAssetPromptCard, onGenerateImage: generateAssetImageCard, onCopyPrompt: copyAssetPromptCard, onUploadAsset: uploadAssetFromBoard, onApproveAsset: approveAssetFromBoard, onRejectAsset: rejectAssetFromBoard, onRegisterAsset: registerAssetFromBoard, onRemoveArtifact: removeUploadedAssetFromBoard, onOpenAssetProduction: openAssetProductionShortcut });
     return { boardNodes, boardEdges: assetBoardToFlowEdges(envelope.board, boardNodes) };
@@ -3093,7 +3253,7 @@ function Studio() {
     if (!projectId || !project || !assetId) return;
     const source = assetLibrary?.assets.find((asset) => asset.id === assetId);
     const label = source?.name || fallbackLabel || assetId;
-    if (!(await requestConfirmation('确认删除逻辑资产', `确认删除逻辑资产「${label}」？其画布卡片、候选和桥接内容会一并移除，已上传的物理文件会保留。`, '删除资产', true))) return;
+    if (!(await requestConfirmation('确认删除逻辑资产', `确认删除逻辑资产「${label}」？其画布卡片、候选和相关内容会一并移除，已上传的物理文件会保留。`, '删除资产', true))) return;
     setBusy(true);
     try {
       const result = await studioApi.deleteAsset(projectId, assetId, project.revision);
@@ -3146,7 +3306,7 @@ function Studio() {
         const flow = buildAssetBoardFlow(refreshed, copied.library, story?.story.shots || []);
         await assignAssetToShot(shotId, { pending: { assetId: copiedId, name: copiedName, mode: 'assign' }, projectRevision: copied.revision, boardEnvelope: refreshed, library: copied.library, nodes: flow.boardNodes, edges: flow.boardEdges });
       } else {
-        setNotice(`已复制资产「${copiedName}」及其候选/桥接内容${copiedId ? '，当前位于 SHARED' : ''}`);
+        setNotice(`已复制资产「${copiedName}」及其候选/相关内容${copiedId ? '，当前位于 SHARED' : ''}`);
       }
       void refreshDashboard(false);
     } catch (error) {
@@ -3360,10 +3520,16 @@ function Studio() {
     if (!(await requestConfirmation('确认删除 Provider', '确认删除这个 V3 Provider 配置？其系统凭据也会被尝试清除，项目内容不会被删除。', '删除 Provider', true))) return;
     runSettingsAction(async () => { await studioApi.deleteSettingsProvider(providerId); }, 'Provider 配置已删除');
   };
-  const writeSettingsCredential = (providerId: string, value: string) => runSettingsAction(async () => { await studioApi.writeSettingsCredential(providerId, value); }, '凭据已写入系统凭据库');
-  const importSettingsCredential = (providerId: string, environmentVariable: string) => runSettingsAction(async () => { await studioApi.importSettingsCredential(providerId, environmentVariable); }, `已从 ${environmentVariable} 导入凭据`);
-  const clearSettingsCredential = (providerId: string) => runSettingsAction(async () => { await studioApi.clearSettingsCredential(providerId); }, '系统凭据已清除');
+  const writeSettingsCredential = (providerId: string, value: string, region?: MiniMaxRegion) => runSettingsAction(async () => { await studioApi.writeSettingsCredential(providerId, value, region); }, region ? `已写入 MiniMax ${minimaxRegionLabels[region].name} Key` : '凭据已写入系统凭据库');
+  const importSettingsCredential = (providerId: string, environmentVariable: string, region?: MiniMaxRegion) => runSettingsAction(async () => { await studioApi.importSettingsCredential(providerId, environmentVariable, region); }, region ? `已从 ${environmentVariable} 导入 MiniMax ${minimaxRegionLabels[region].name} Key` : `已从 ${environmentVariable} 导入凭据`);
+  const clearSettingsCredential = (providerId: string, region?: MiniMaxRegion) => runSettingsAction(async () => { await studioApi.clearSettingsCredential(providerId, region); }, region ? `MiniMax ${minimaxRegionLabels[region].name} Key 已清除` : '系统凭据已清除');
   const probeSettingsProvider = (providerId: string) => runSettingsAction(async () => { await studioApi.probeSettingsProvider(providerId); }, 'Provider 探测完成，模型目录已更新');
+  const refreshMinimaxCatalog = async () => {
+    const providerId = settings?.providers.find((provider) => provider.provider_type === 'minimax')?.id || 'minimax-default';
+    const ok = await probeSettingsProvider(providerId);
+    await refreshAudioStudio();
+    return ok;
+  };
   const bindSettingsCapability = (capability: string, providerId: string, model: string | null) => runSettingsAction(async () => { await studioApi.updateSettingsBinding({ capability, provider_profile_id: providerId, model }); }, `${settingsCapabilityLabels[capability] || capability} 能力绑定已保存`);
   const autoMatchSettingsBindings = () => runSettingsAction(async () => { await studioApi.autoMatchSettingsBindings(); }, '已按 Provider 能力和状态补齐自动推荐');
 
@@ -3987,6 +4153,10 @@ function Studio() {
     } catch (error) { setNotice((error as Error).message); } finally { setBusy(false); }
   };
 
+  const rewritePromptFromBoard = async (assetId: string, feedback: string) => {
+    await generateAssetPrompts(assetId, { reviewFeedback: feedback });
+  };
+
   const openRejectFeedback = (assetId: string, artifactId: string) => {
     const asset = assetLibrary?.assets.find((candidate) => candidate.id === assetId);
     const shotIds = [...new Set([
@@ -4002,7 +4172,8 @@ function Studio() {
     if (!feedback) return;
     const { assetId, artifactId } = rejectFeedback;
     setRejectFeedback(null);
-    void rejectAssetAndRewrite(assetId, artifactId, feedback);
+    if (artifactId) void rejectAssetAndRewrite(assetId, artifactId, feedback);
+    else void rewritePromptFromBoard(assetId, feedback);
   };
 
   function uploadAssetFromBoard(assetId: string, file: File) {
@@ -5239,7 +5410,7 @@ function Studio() {
           {busy && <div className="progress-bar" />}
           {mode === 'story' && <StoryView story={story} storyRun={storyRun} storyDiff={storyDiff} dirty={storyDirty} busy={busy} notice={notice} assetPromptRun={assetPromptRun} onChange={(next) => { setStory((current) => current ? { ...current, story: next } : current); markStoryDirty(); }} onSave={saveStory} onGenerate={generateStoryCandidate} onAccept={acceptStoryLayer} onRollback={rollbackStory} onOpenAssetBoard={openAssetBoard} onGenerateAssetPrompts={generateAssetPrompts} />}
           {mode === 'home' && <HomeView dashboard={dashboard} error={dashboardError} currentProjectId={projectId} busy={busy} onSelectProject={(id) => { setProjectId(id); setMode('home'); }} onOpenTask={openDashboardTask} onOpenStage={openDashboardStage} onRefresh={() => { void refreshDashboard(); }} />}
-          {mode === 'audio' && <AudioStudioView projectId={projectId} projectName={project?.document.name || '当前项目'} envelope={audioStudio} assetLibrary={assetLibrary} settings={settings} story={story} busy={busy} onSave={saveAudioStudio} onRefresh={refreshAudioStudio} onCreateAsset={createAudioAsset} onNotice={setNotice} onDirtyChange={(isDirty) => { if (!isDirty) setAudioDirty(false); }} onDocumentChange={handleAudioDocumentChange} onOpenStory={() => setMode('story')} />}
+          {mode === 'audio' && <AudioStudioView projectId={projectId} projectName={project?.document.name || '当前项目'} envelope={audioStudio} assetLibrary={assetLibrary} settings={settings} story={story} busy={busy} onSave={saveAudioStudio} onRefresh={refreshAudioStudio} onRefreshMinimaxCatalog={refreshMinimaxCatalog} onCreateAsset={createAudioAsset} onNotice={setNotice} onDirtyChange={(isDirty) => { if (!isDirty) setAudioDirty(false); }} onDocumentChange={handleAudioDocumentChange} onOpenStory={() => setMode('story')} />}
           {mode === 'timeline' && <TimelineView envelope={timelineEnvelope} preflight={timelinePreflight} story={story} assetLibrary={assetLibrary} renderJob={renderJob} busy={busy} onChange={(document) => { setTimelineEnvelope((current) => current ? { ...current, document } : current); markTimelineDirty(); }} onSave={saveTimeline} onAssemble={assembleTimeline} onPreview={previewTimeline} onRender={renderTimeline} />}
           {mode === 'settings' && <SettingsView settings={settings} busy={busy} onRefresh={refreshSettings} onSaveProvider={saveSettingsProvider} onAddPreset={addSettingsPreset} onDeleteProvider={deleteSettingsProvider} onWriteCredential={writeSettingsCredential} onImportCredential={importSettingsCredential} onClearCredential={clearSettingsCredential} onProbe={probeSettingsProvider} onBind={bindSettingsCapability} onAutoMatch={autoMatchSettingsBindings} />}
           {mode === 'canvas' && (
@@ -5305,6 +5476,7 @@ function Studio() {
       </main>
       <aside className="context-panel" aria-label="Project context" tabIndex={0}>
         <header><span>PROJECT CONTEXT</span><h2>{project?.document.name || '尚未选择项目'}</h2><p>{project?.document.brief || '项目上下文、运行和审批状态会显示在这里。'}</p></header>
+          {mode === 'canvas' && <AssetGenerationOrder items={assetGenerationOrder} selectedAssetId={selectedProductionAsset?.id} onFocusAsset={focusAssetGenerationTarget} />}
           {mode === 'canvas' ? selectedAssetBoardCards.length > 1 ? <section className="asset-selection-multi-state"><span>ASSET BOARD SELECTION</span><h3>已选中多个卡片</h3><p>当前选中了 {selectedAssetBoardCards.length} 张卡片。请单独选择一张卡片查看对应的资产、Prompt 或候选版本。</p></section> : <AssetProductionPanel asset={selectedProductionAsset} selectedCardType={selectedAssetBoardNode?.data.node_type === 'asset' || selectedAssetBoardNode?.data.node_type === 'handoff' || selectedAssetBoardNode?.data.node_type === 'artifact' ? selectedAssetBoardNode.data.node_type : undefined} story={story} fusionSources={selectedFusionSources} busy={busy} projectRevision={project?.revision} assetBoardDirty={assetBoardDirty} promptDraft={assetPromptDraft && assetPromptDraft.assetId === selectedProductionAsset?.id ? assetPromptDraft.prompt : undefined} promptPackDraft={assetPromptDraft && assetPromptDraft.assetId === selectedProductionAsset?.id ? assetPromptDraft.promptPack : undefined} promptQualityDraft={assetPromptDraft && assetPromptDraft.assetId === selectedProductionAsset?.id ? assetPromptDraft.promptQuality : undefined} onSave={saveAssetMetadata} onHandoff={handoffAssetToChatGPT} onImport={importAssetCandidate} onStartQa={startAssetQa} onApprove={approveAssetCandidate} onRegister={registerAssetCandidate} onApprovePromptCard={approveAssetPromptCard} onGenerateImageCard={generateAssetImageCard} onGeneratePrompt={generateAssetPrompts} onGenerateFusionPrompt={generateFusionPrompt} onManualProductionApproval={manualProductionApproval} onDraftChange={handleAssetEditorDraftChange} /> : <>
         {selectedNode && <section className="node-inspector"><h3>{selectedNode.data.kind === 'group' ? '分组 Inspector' : '节点 Inspector'}</h3><label>节点名称<input value={selectedNode.data.label} onChange={(event) => updateSelectedNode({ label: event.target.value })} /></label>{selectedNode.data.kind !== 'group' && <><label className="check-row"><input type="checkbox" checked={Boolean(selectedNode.data.config.paid)} onChange={(event) => updateSelectedNode({}, { paid: event.target.checked })} />付费节点</label><label>预计费用<input type="number" min="0" step="0.01" value={String(selectedNode.data.config.estimated_cost ?? '')} onChange={(event) => updateSelectedNode({}, { estimated_cost: event.target.value === '' ? 0 : Number(event.target.value) })} /></label></>}{selectedNode.data.kind === 'group' && <label className="check-row"><input type="checkbox" checked={Boolean(selectedNode.data.config.collapsed)} onChange={(event) => updateSelectedNode({}, { collapsed: event.target.checked })} />折叠组内容</label>}<label className="check-row"><input type="checkbox" checked={selectedNode.data.locked} onChange={(event) => updateSelectedNode({ locked: event.target.checked })} />锁定节点位置</label><small className="inspector-hint">修改会进入图编辑历史，保存时受 revision 冲突保护。</small></section>}
         <section><h3>制作规格</h3><dl><div><dt>画幅</dt><dd>{project?.document.ratio || '—'}</dd></div><div><dt>时长</dt><dd>{project?.document.duration || 0}s</dd></div><div><dt>图版本</dt><dd>v{graphEnvelope?.revision || 0}</dd></div><div><dt>时间线</dt><dd>v{timelineEnvelope?.revision || 0}{timelineDirty ? ' · 未保存' : ''}</dd></div></dl></section>
@@ -5314,7 +5486,7 @@ function Studio() {
         <section><h3>安全门</h3><ul><li>付费生成必须确认</li><li>批准资产不可覆盖</li><li>运行保存不可变快照</li><li>失败只重跑受影响节点</li></ul></section>
         </>}
       </aside>
-      <AssistantDrawer open={assistantOpen} project={project} mode={mode} graph={graphEnvelope} story={story} assetLibrary={assetLibrary} audioStudio={audioStudio} timeline={timelineEnvelope} selectedNodeIds={selectedNodeIds} selectedEdgeIds={selectedEdgeIds} dirty={dirty} storyDirty={storyDirty} assetBoardDirty={assetBoardDirty} audioDirty={audioDirty} timelineDirty={timelineDirty} plan={agentPlan} busy={agentBusy || busy} skills={workflowManifests} selectedSkillId={assistantSkillId} onSkillChange={setAssistantSkillId} onCreate={createAgentPlan} onApply={applyAgentPlan} onReject={rejectAgentPlan} onClose={() => setAssistantOpen(false)} onNavigate={setMode} />
+      {assistantWorkspaceV2Enabled ? <AssistantWorkspace open={assistantOpen} project={project} mode={mode} graph={graphEnvelope} story={story} assetBoard={assetBoardEnvelope} assetLibrary={assetLibrary} audioStudio={audioStudio} timeline={timelineEnvelope} settings={settings} selectedNodeIds={selectedNodeIds} selectedEdgeIds={selectedEdgeIds} selectedAssetId={selectedProductionAsset?.id} dirty={dirty} storyDirty={storyDirty} assetBoardDirty={assetBoardDirty} audioDirty={audioDirty} timelineDirty={timelineDirty} skills={workflowManifests} selectedSkillId={assistantSkillId} onSkillChange={setAssistantSkillId} onClose={() => setAssistantOpen(false)} onNavigate={setMode} onApplied={() => { setProjectReloadVersion((value) => value + 1); setAgentPlan(null); setNotice('Agent 修改已写入工作台，正在刷新所有工作区…'); }} onNotice={setNotice} /> : <AssistantDrawer open={assistantOpen} project={project} mode={mode} graph={graphEnvelope} story={story} assetLibrary={assetLibrary} audioStudio={audioStudio} timeline={timelineEnvelope} selectedNodeIds={selectedNodeIds} selectedEdgeIds={selectedEdgeIds} dirty={dirty} storyDirty={storyDirty} assetBoardDirty={assetBoardDirty} audioDirty={audioDirty} timelineDirty={timelineDirty} plan={agentPlan} busy={agentBusy} skills={workflowManifests} selectedSkillId={assistantSkillId} onSkillChange={setAssistantSkillId} onCreate={createAgentPlan} onApply={() => { void applyAgentPlan(); }} onReject={() => { void rejectAgentPlan(); }} onClose={() => setAssistantOpen(false)} onNavigate={setMode} />}
       <CommandPalette open={commandPaletteOpen} query={commandQuery} actions={commandActions} onQueryChange={setCommandQuery} onClose={closeCommandPalette} />
       <ShortcutHelp open={shortcutHelpOpen} onClose={() => setShortcutHelpOpen(false)} />
       {assetCreateOpen && <AssetCreateModal draft={assetCreateDraft} shots={story?.story.shots || []} busy={busy} onChange={(patch) => setAssetCreateDraft((current) => ({ ...current, ...patch }))} onClose={() => setAssetCreateOpen(false)} onSubmit={() => { void addAssetToBoard(); }} />}

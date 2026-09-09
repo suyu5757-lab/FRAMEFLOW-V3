@@ -22,6 +22,7 @@ PROMPT_WORKFLOW_ID = "suyu-skill-v2"
 PROMPT_FIELD_ORDER = [
     "promptIntent",
     "referenceStrategy",
+    "generationReferenceAssets",
     "identityAnchor",
     "visibleEvent",
     "spatialGeography",
@@ -34,6 +35,74 @@ PROMPT_FIELD_ORDER = [
     "mustAvoid",
     "generationNotes",
 ]
+AUDIO_PROMPT_SCHEMA_VERSION = "minimax-speech-audio-v2"
+AUDIO_PROMPT_FIELD_ORDER = [
+    "sourceText",
+    "providerText",
+    "textStatus",
+    "voiceSource",
+    "voiceIdentity",
+    "language",
+    "locale",
+    "dialect",
+    "providerVoiceId",
+    "providerVoiceName",
+    "providerRegion",
+    "performanceDirection",
+    "emotion",
+    "intensity",
+    "pace",
+    "pausePlan",
+    "pronunciation",
+    "provider",
+    "model",
+    "voiceId",
+    "speed",
+    "pitch",
+    "volume",
+    "languageBoost",
+    "format",
+    "targetDuration",
+    "relevantShots",
+    "continuityChecklist",
+    "mustPreserve",
+    "mustAvoid",
+]
+AUDIO_CONFIRMED_TEXT_STATUSES = {"confirmed", "user-confirmed", "approved", "locked", "final"}
+
+AUDIO_LOCALE_LANGUAGE_BOOSTS = {
+    "ja": "Japanese", "ja-jp": "Japanese", "zh": "Chinese", "zh-cn": "Chinese", "zh-tw": "Chinese",
+    "en": "English", "en-us": "English", "en-gb": "English", "ko": "Korean", "ko-kr": "Korean",
+    "fr": "French", "fr-fr": "French", "de": "German", "de-de": "German", "es": "Spanish", "es-es": "Spanish",
+    "it": "Italian", "it-it": "Italian", "pt": "Portuguese", "pt-br": "Portuguese", "pt-pt": "Portuguese",
+    "ru": "Russian", "ru-ru": "Russian", "ar": "Arabic", "tr": "Turkish", "nl": "Dutch", "vi": "Vietnamese",
+    "id": "Indonesian", "id-id": "Indonesian", "th": "Thai", "th-th": "Thai", "ms": "Malay", "ms-my": "Malay",
+    "fil": "Filipino", "fil-ph": "Filipino", "uk": "Ukrainian", "uk-ua": "Ukrainian", "pl": "Polish", "pl-pl": "Polish",
+    "ro": "Romanian", "ro-ro": "Romanian", "cs": "Czech", "cs-cz": "Czech", "el": "Greek", "el-gr": "Greek",
+    "hu": "Hungarian", "hu-hu": "Hungarian", "sv": "Swedish", "sv-se": "Swedish", "da": "Danish", "da-dk": "Danish",
+    "fi": "Finnish", "fi-fi": "Finnish", "no": "Norwegian", "no-no": "Norwegian", "sk": "Slovak", "sk-sk": "Slovak",
+    "bg": "Bulgarian", "bg-bg": "Bulgarian", "hr": "Croatian", "hr-hr": "Croatian", "ta": "Tamil", "ta-in": "Tamil",
+    "te": "Telugu", "te-in": "Telugu", "hi": "Hindi", "hi-in": "Hindi", "he": "Hebrew", "he-il": "Hebrew",
+    "fa": "Persian", "fa-ir": "Persian", "bn": "Bengali", "bn-bd": "Bengali", "af": "Afrikaans", "af-za": "Afrikaans",
+    "ca": "Catalan", "ca-es": "Catalan", "sr": "Serbian", "sr-rs": "Serbian",
+}
+
+
+def _audio_language_boost(locale: Any, language: Any, explicit: Any) -> str | None:
+    explicit_text = _text(explicit)
+    language_text = _text(language)
+    normalized_locale = _text(locale).lower().replace("_", "-")
+    locale_boost = AUDIO_LOCALE_LANGUAGE_BOOSTS.get(normalized_locale) or AUDIO_LOCALE_LANGUAGE_BOOSTS.get(normalized_locale.split("-", 1)[0])
+    if locale_boost:
+        return locale_boost
+    if language_text == "Japanese" or "日语" in language_text or "日本語" in language_text:
+        return "Japanese"
+    if language_text == "Chinese" or any(item in language_text for item in ("中文", "汉语", "普通话")):
+        return "Chinese"
+    if explicit_text and explicit_text not in {"Chinese", "auto", "Auto", "automatic", "Automatic"}:
+        return explicit_text
+    normalized = language_text.lower().replace("_", "-")
+    return AUDIO_LOCALE_LANGUAGE_BOOSTS.get(normalized) or AUDIO_LOCALE_LANGUAGE_BOOSTS.get(normalized.split("-", 1)[0])
 
 PROMPT_SUPPLEMENT_MARKER = "同时满足以下补充制作要求："
 
@@ -104,6 +173,16 @@ SHOT_REQUIREMENTS = [
     "为动作、材质、天气和光线写出摄影机可见的物理后果，避免只写风格口号。",
 ]
 
+AUDIO_REQUIREMENTS = [
+    "audioDetails.sourceText：只放这一条实际要朗读的对白/旁白文本；不要放资产 ID、镜头说明、QA、合同或混音说明。",
+    "audioDetails.textStatus：明确标记 missing / candidate / conflict / confirmed；没有 confirmed 时不得把候选台词当作最终生成文本。",
+    "audioDetails.voiceIdentity 与 performanceDirection：用可听见的行为描述音色和表演，例如音域、投射距离、能量、气息、咬字、重音、句尾和停顿。",
+    "audioDetails.language、dialect、emotion、pace、pausePlan、pronunciation：把语言、情绪、语速、停顿和发音风险分开记录；不要用‘电影感’等不可验证形容词替代它们。",
+    "audioDetails.providerSettings：MiniMax Web 只需要文本框、音色、情绪、语速、音调和音量；provider、model、voiceId、镜头和 QA 只作为外部控制/交接元数据。",
+    "声音资产不使用视觉资产的空间、材质、光线、摄影机或建议尺寸模板；环境声、对白干声和音效必须按分轨/混音约束记录。",
+    "同一资产如果对应多个镜头，必须为每个镜头分别确认唯一文本；不能把不同镜头的对白拼成一段再生成。",
+]
+
 PROMPT_KEY_LABELS = {
     "foreground": "前景", "midground": "中景", "background": "背景", "shotId": "镜头", "shotPurpose": "镜头目的",
     "framing": "景别", "size": "景别", "camera": "机位", "focus": "焦点", "depthOfField": "景深", "depth": "景深",
@@ -120,6 +199,10 @@ PROMPT_KEY_LABELS = {
     "lightingShadowsAndMaterialIntegration": "光影与材质整合", "compositionAndDepth": "构图与景深", "motionContinuityNotes": "运动连续性",
     "stableIdentityAnchors": "稳定身份锚点", "shotSpecificDetail": "本镜头细节", "optionalIncidentalDetail": "可选偶发细节", "mayVary": "允许变化",
     "role": "参考角色", "controls": "控制范围", "mustNotControl": "不控制范围", "referenceId": "参考 ID", "medium": "媒介", "style": "风格", "lighting": "光线",
+    "audioDetails": "声音制作字段", "sourceText": "朗读文本", "textStatus": "文本状态", "voiceIdentity": "声音身份", "language": "语言", "dialect": "方言/口音",
+    "performanceDirection": "表演方向", "emotion": "情绪", "intensity": "强度", "pace": "语速", "pausePlan": "停顿计划", "pronunciation": "发音标注",
+    "provider": "Provider", "model": "模型", "voiceId": "音色 ID", "speed": "语速参数", "pitch": "音调参数", "volume": "音量参数", "languageBoost": "语言增强",
+    "format": "格式", "targetDuration": "目标时长", "relevantShots": "关联镜头", "stems": "分轨", "distance": "投射距离", "breath": "气息",
 }
 
 
@@ -191,6 +274,50 @@ def _copy_object(value: Any) -> dict[str, Any]:
     return deepcopy(value) if isinstance(value, dict) else {}
 
 
+def _normalize_generation_reference_assets(value: Any) -> list[dict[str, Any]]:
+    """Normalize image-agent reference assets into an explicit prompt field."""
+    values = value if isinstance(value, list) else [value]
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def visit(item: Any) -> None:
+        if isinstance(item, list):
+            for child in item:
+                visit(child)
+            return
+        if isinstance(item, str):
+            asset_id = item.strip()
+            if asset_id and asset_id not in seen:
+                seen.add(asset_id)
+                result.append({"assetId": asset_id, "name": asset_id})
+            return
+        if not isinstance(item, dict):
+            return
+        asset_id = str(
+            item.get("assetId")
+            or item.get("asset_id")
+            or item.get("referenceId")
+            or item.get("reference_id")
+            or item.get("logicalAssetId")
+            or item.get("logical_asset_id")
+            or item.get("id")
+            or ""
+        ).strip()
+        if asset_id:
+            if asset_id not in seen:
+                seen.add(asset_id)
+                entry = deepcopy(item)
+                entry["assetId"] = asset_id
+                entry.setdefault("name", item.get("label") or asset_id)
+                result.append(entry)
+            return
+        for key in ("items", "roles", "references", "referenceRoles", "reference_roles", "generationReferenceAssets", "generation_reference_assets"):
+            visit(item.get(key))
+
+    visit(values)
+    return result
+
+
 def _merge_detail(raw: dict[str, Any], aliases: dict[str, tuple[str, ...]], root: dict[str, Any] | None = None) -> dict[str, Any]:
     result = _copy_object(raw)
     for canonical, paths in aliases.items():
@@ -233,6 +360,140 @@ def _shot_plan(value: Any, context: dict[str, Any] | None) -> list[dict[str, Any
             "continuity": shot.get("continuity") or shot.get("lastFrame") or shot.get("firstFrame") or "",
         })
     return result
+
+
+def _spoken_text(value: Any) -> str:
+    """Read only an explicit spoken-text value, never a generic metadata object."""
+
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, dict):
+        for key in ("text", "content", "line", "spokenText", "spoken_text", "transcript"):
+            candidate = value.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()
+        return ""
+    if isinstance(value, list):
+        parts = [_spoken_text(item) for item in value]
+        return "\n".join(item for item in parts if item)
+    return ""
+
+
+def _audio_first(source: dict[str, Any], raw_audio: dict[str, Any], *keys: str) -> Any:
+    nested = _first({"audioDetails": raw_audio}, *(f"audioDetails.{key}" for key in keys))
+    if _has_value(nested):
+        return nested
+    return _first(source, *keys)
+
+
+def _audio_text_status(value: Any, source_text: str) -> str:
+    if isinstance(value, bool):
+        return "confirmed" if value and source_text else "candidate" if source_text else "missing"
+    raw = str(value or "").strip().lower().replace("_", "-").replace(" ", "-")
+    aliases = {
+        "user-confirmed-text": "confirmed",
+        "confirmed-text": "confirmed",
+        "finalized": "final",
+        "provisional": "candidate",
+        "pending": "candidate",
+        "user-confirmation-required": "candidate",
+        "needs-confirmation": "candidate",
+    }
+    normalized = aliases.get(raw, raw)
+    if normalized in AUDIO_CONFIRMED_TEXT_STATUSES:
+        return "confirmed" if source_text else "missing"
+    if normalized in {"candidate", "conflict", "missing"}:
+        return normalized if normalized != "candidate" or source_text else "missing"
+    return "candidate" if source_text else "missing"
+
+
+def _looks_like_audio_metadata(value: str) -> bool:
+    """Guard against treating a persisted FrameFlow contract as dialogue."""
+
+    text = str(value or "").strip()
+    if not text:
+        return False
+    markers = (
+        "FRAMEFLOW",
+        "Prompt Contract",
+        "可直接执行的自然语言 Prompt",
+        "资产身份/生产规格",
+        "同时满足以下补充制作要求",
+        "连续性检查",
+        "必须保留",
+        "必须避免",
+        "生成说明",
+        "执行边界",
+        "不制作最终音频",
+        "镜头依赖",
+        "MiniMax Speech 2.8 Web：",
+        "等待用户确认",
+        "待用户确认",
+        "当前台词为空",
+    )
+    return len(text) > 240 or any(marker in text for marker in markers)
+
+
+def _normalize_audio_details(source: dict[str, Any], raw_audio: dict[str, Any], identity: str, *, enabled: bool) -> dict[str, Any]:
+    if not enabled:
+        return {}
+    source_text = _spoken_text(_audio_first(
+        source,
+        raw_audio,
+        "sourceText",
+        "source_text",
+        "spokenText",
+        "spoken_text",
+        "dialogueText",
+        "dialogue_text",
+        "line",
+        "transcript",
+        "text",
+    ))
+    provider_text = _spoken_text(_audio_first(source, raw_audio, "providerText", "provider_text", "providerInput", "provider_input")) or source_text
+    status_value = _audio_first(source, raw_audio, "textStatus", "text_status", "dialogueStatus", "dialogue_status", "sourceTextStatus")
+    details = deepcopy(raw_audio)
+    details["schemaVersion"] = AUDIO_PROMPT_SCHEMA_VERSION
+    details["operation"] = _text(_audio_first(source, raw_audio, "operation", "audioOperation", "audio_operation")) or "tts"
+    details["sourceText"] = source_text
+    details["providerText"] = provider_text
+    details["textStatus"] = _audio_text_status(status_value, source_text)
+
+    def set_if_missing(key: str, value: Any) -> None:
+        if not _has_value(details.get(key)) and _has_value(value):
+            details[key] = deepcopy(value)
+
+    set_if_missing("voiceSource", _audio_first(source, raw_audio, "voiceSource", "voice_source", "sourceType", "source_type") or "system-preset")
+    set_if_missing("voiceIdentity", _audio_first(source, raw_audio, "voiceIdentity", "voice_identity", "voiceProfile", "voice_profile", "voiceTraits", "voice_traits") or identity)
+    set_if_missing("language", _audio_first(source, raw_audio, "language", "lang"))
+    set_if_missing("locale", _audio_first(source, raw_audio, "locale", "languageLocale", "language_locale"))
+    set_if_missing("dialect", _audio_first(source, raw_audio, "dialect", "accent"))
+    set_if_missing("performanceDirection", _audio_first(source, raw_audio, "performanceDirection", "performance_direction", "voiceDirection", "voice_direction", "instructions", "delivery", "direction"))
+    set_if_missing("emotion", _audio_first(source, raw_audio, "emotion", "mood"))
+    set_if_missing("intensity", _audio_first(source, raw_audio, "intensity", "energy"))
+    set_if_missing("pace", _audio_first(source, raw_audio, "pace", "register", "speechRate", "speech_rate"))
+    set_if_missing("pausePlan", _audio_first(source, raw_audio, "pausePlan", "pause_plan", "pauses", "pause"))
+    set_if_missing("pronunciation", _audio_first(source, raw_audio, "pronunciation", "pronunciationDict", "pronunciation_dict", "pronunciationNotes", "pronunciation_notes"))
+    set_if_missing("soundTags", _audio_first(source, raw_audio, "soundTags", "sound_tags", "interjections", "nonVerbal", "non_verbal"))
+    set_if_missing("distance", _audio_first(source, raw_audio, "distance", "projectionDistance", "projection_distance"))
+    set_if_missing("targetDuration", _audio_first(source, raw_audio, "targetDuration", "target_duration", "duration"))
+    set_if_missing("provider", _audio_first(source, raw_audio, "provider") or "minimax")
+    set_if_missing("model", _audio_first(source, raw_audio, "model") or "speech-2.8-hd")
+    set_if_missing("voiceId", _audio_first(source, raw_audio, "voiceId", "voice_id", "providerVoiceId", "provider_voice_id"))
+    set_if_missing("providerVoiceId", _audio_first(source, raw_audio, "providerVoiceId", "provider_voice_id", "voiceId", "voice_id"))
+    set_if_missing("providerVoiceName", _audio_first(source, raw_audio, "providerVoiceName", "provider_voice_name"))
+    set_if_missing("providerRegion", _audio_first(source, raw_audio, "providerRegion", "provider_region", "region") or "cn")
+    set_if_missing("speed", _audio_first(source, raw_audio, "speed") if _has_value(_audio_first(source, raw_audio, "speed")) else 1.0)
+    set_if_missing("pitch", _audio_first(source, raw_audio, "pitch") if _has_value(_audio_first(source, raw_audio, "pitch")) else 0)
+    set_if_missing("volume", _audio_first(source, raw_audio, "volume", "vol") if _has_value(_audio_first(source, raw_audio, "volume", "vol")) else 1.0)
+    if not _has_value(details.get("languageBoost")):
+        details["languageBoost"] = _audio_language_boost(details.get("locale"), details.get("language"), _audio_first(source, raw_audio, "languageBoost", "language_boost"))
+    set_if_missing("format", _audio_first(source, raw_audio, "format", "audioFormat", "audio_format") or "wav")
+    set_if_missing("sampleRate", _audio_first(source, raw_audio, "sampleRate", "sample_rate"))
+    set_if_missing("bitrate", _audio_first(source, raw_audio, "bitrate"))
+    set_if_missing("channel", _audio_first(source, raw_audio, "channel", "channels"))
+    set_if_missing("stems", _audio_first(source, raw_audio, "stems", "tracks", "mixStems", "mix_stems"))
+    return details
 
 
 def normalize_prompt_pack(
@@ -306,6 +567,8 @@ def normalize_prompt_pack(
     }, root=source if cls == "fusion" else None)
 
     identity = _text(identity_anchor) or _text(_first(source, "identityAnchor", "identityLock", "identity", "identity_anchors"))
+    raw_audio = _copy_object(source.get("audioDetails") or source.get("audio_details"))
+    audio = _normalize_audio_details(source, raw_audio, identity, enabled=cls == "audio" or bool(raw_audio))
     preserve = _clean_list(must_preserve) or _clean_list(_first(source, "mustPreserve", "preserve"))
     avoid = _clean_list(must_avoid) or _clean_list(_first(source, "mustAvoid", "negativePrompt", "avoid"))
     references = _copy_object(_first(source, "referenceStrategy", "reference_strategy"))
@@ -321,6 +584,19 @@ def normalize_prompt_pack(
         references["preserve"] = deepcopy(_first(source, "referencePreserve"))
     if not _has_value(references.get("change")) and _has_value(_first(source, "referenceChange", "allowedChanges")):
         references["change"] = deepcopy(_first(source, "referenceChange", "allowedChanges"))
+    generation_reference_assets = _normalize_generation_reference_assets(
+        _first(
+            source,
+            "generationReferenceAssets",
+            "generation_reference_assets",
+            "referenceAssetIds",
+            "reference_asset_ids",
+            "imageReferenceAssets",
+            "image_reference_assets",
+        )
+        or references.get("roles")
+        or references.get("references")
+    )
 
     visual_style_source = _first(source, "visualStyle", "style")
     visual_style = _copy_object(visual_style_source)
@@ -362,9 +638,11 @@ def normalize_prompt_pack(
         "propDetails": prop,
         "itemDetails": prop,
         "fusionDetails": fusion,
+        "audioDetails": audio,
         "shotPlan": _shot_plan(_first(source, "shotPlan", "shots", "shot_plan"), context),
         "visualStyle": visual_style,
         "referenceStrategy": references,
+        "generationReferenceAssets": generation_reference_assets,
         "detailAnchorRegistry": detail_registry,
         "continuityChecklist": continuity,
         "mustPreserve": preserve,
@@ -386,16 +664,14 @@ def prompt_contract(asset_class: str | None = None) -> dict[str, Any]:
         "prop": PROP_REQUIREMENTS,
         "fusion": FUSION_REQUIREMENTS,
         "shot": SHOT_REQUIREMENTS,
-        "audio": [
-            "声音任务仍需保留对白/音乐/环境声的用途、时间节拍、情绪或声学行为、连续性和授权约束；不要把音频字段伪装成视觉细节。",
-        ],
+        "audio": AUDIO_REQUIREMENTS,
     }
     selected_requirements = class_requirements if selected == "all" else {selected: class_requirements.get(selected, [])}
     return {
         "version": PROMPT_CONTRACT_VERSION,
         "workflow": PROMPT_WORKFLOW_ID,
         "asset_class": selected,
-        "field_order": list(PROMPT_FIELD_ORDER),
+        "field_order": list(AUDIO_PROMPT_FIELD_ORDER if selected == "audio" else PROMPT_FIELD_ORDER),
         "common_requirements": list(COMMON_REQUIREMENTS),
         "class_requirements": selected_requirements,
         "qa_gate": [
@@ -413,6 +689,7 @@ def prompt_contract(asset_class: str | None = None) -> dict[str, Any]:
             "promptIntent": "一句话说明这张图/这个镜头要解决什么生产目标",
             "referenceStrategy": "每个 @Image/@Video/@Audio 的控制范围和禁止控制范围",
             "referenceRoles": "每个参考资产的显式角色、控制范围和不控制范围；无参考时为空数组",
+            "generationReferenceAssets": "图片生成 Agent 必须提供的参考图资产 ID 清单；只表达参考图输入，不自动构成生产审核门禁",
             "identityAnchor": "一段可逐镜头原样复用的身份/结构锚点",
             "visibleEvent": "一个当前可见的主事件及其物理后果",
             "eventConsequence": "动作、接触、材质或光线造成的可见后果",
@@ -427,6 +704,20 @@ def prompt_contract(asset_class: str | None = None) -> dict[str, Any]:
             "negativePrompt": "明确且可检查的排除项",
             "generationNotes": "背景边界、尺寸和生成注意事项",
             "suggestedSize": "建议输出尺寸或画幅",
+            "audioDetails": {
+                "schemaVersion": AUDIO_PROMPT_SCHEMA_VERSION,
+                "sourceText": "用户确认的原始台词，不含控制标签、资产/镜头/QA/合同说明",
+                "providerText": "实际发送给 MiniMax 的文本，可含合法停顿或 Speech 2.8 语气标签",
+                "textStatus": "missing | candidate | conflict | confirmed",
+                "voiceSource": "system-preset（默认）| design | clone",
+                "locale": "BCP-47 语言地区，例如 ja-JP",
+                "voiceIdentity": "声音身份与可听见的表演行为",
+                "performanceDirection": "情绪、能量、投射距离、咬字、重音、句尾和呼吸",
+                "pausePlan": "可转换为 MiniMax <#x#> 停顿标记的停顿计划",
+                "pronunciation": "中文多音字、专名、数字和发音覆写",
+                "providerSettings": "MiniMax Web/API 的模型、音色、区域、情绪、速度、音调、音量等设置",
+                "frameflowMetadata": "镜头、分轨、QA、授权和交接信息，只留在工作台",
+            },
         },
     }
 
@@ -461,6 +752,11 @@ def prompt_contract_instructions(*, fusion: bool = False) -> str:
         "稳定锚点、shot-specific detail、May vary 和 optional/incidental detail 必须分开；未知事实标记为 optional，不得擅自发明连续性事实。"
         "Prompt QA 通过不等于生成授权；所有新版本都保持 user-confirmation-required，生成前仍要由用户选择 Codex imagegen、外部 ChatGPT 或暂不生成。"
         "你不生成图片，不调用图片服务，不宣称 Prompt QA 或图片 QA 已通过。"
+        "如果 assetClass 是 audio，必须切换到 MiniMax Speech Web 的声音格式：不要输出视觉 Prompt，不要填写空间/材质/光线/摄影机/建议尺寸来代替声音字段。"
+        "audioDetails 必须明确 sourceText、providerText、textStatus、voiceSource、voiceIdentity、language、locale、dialect、performanceDirection、emotion、intensity、pace、pausePlan、pronunciation、"
+        "provider、model、voiceId、providerVoiceId、providerRegion、speed、pitch、volume、languageBoost、targetDuration、relevantShots、continuityChecklist、mustPreserve 和 mustAvoid。"
+        "prompt 字段只允许放实际朗读文本；若台词是 candidate、conflict 或 missing，prompt 不得伪装成可执行文本，必须在 audioDetails 中保留候选与阻塞原因。"
+        "MiniMax Web 文本框不应接收资产 ID、合同版本、QA、授权、环境声或混音说明；这些内容只能作为工作台元数据和复制包中的‘不要粘贴’部分。"
     )
 
 
@@ -552,6 +848,114 @@ def _structured_content(pack: dict[str, Any]) -> bool:
     return False
 
 
+def _audio_context_candidates(context: dict[str, Any] | None) -> list[dict[str, str]]:
+    candidates: list[dict[str, str]] = []
+    for shot in _context_shots(context):
+        shot_id = str(shot.get("id") or shot.get("shotId") or shot.get("shot_id") or "").strip()
+        raw_dialogue = _first(shot, "dialogue", "dialogues", "narration", "voiceover", "voice_over", "line", "lines")
+        spoken = _spoken_text(raw_dialogue)
+        if not spoken:
+            continue
+        kind = "旁白" if _has_value(_first(shot, "narration", "voiceover", "voice_over")) else "对白"
+        candidates.append({"shotId": shot_id, "kind": kind, "text": spoken})
+    return candidates
+
+
+def build_audio_prompt_package(
+    prompt_pack: Any,
+    fallback_prompt: str = "",
+    *,
+    context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a MiniMax Speech Web copy package without mixing in production metadata."""
+
+    pack = normalize_prompt_pack("audio", prompt_pack, context=context)
+    details = pack.get("audioDetails") if isinstance(pack.get("audioDetails"), dict) else {}
+    source_text = _spoken_text(details.get("sourceText"))
+    provider_text = _spoken_text(details.get("providerText")) or source_text
+    fallback = str(fallback_prompt or "").strip()
+    if not source_text and fallback and not _looks_like_audio_metadata(fallback):
+        source_text = fallback
+        provider_text = fallback
+        text_status = "candidate"
+    else:
+        text_status = _audio_text_status(details.get("textStatus"), source_text)
+
+    candidates = _audio_context_candidates(context)
+    unique_candidate_texts: list[str] = []
+    for candidate in candidates:
+        text = candidate["text"]
+        if text not in unique_candidate_texts:
+            unique_candidate_texts.append(text)
+    context_shot_ids = [str(shot.get("id") or shot.get("shotId") or shot.get("shot_id") or "").strip() for shot in _context_shots(context)]
+    context_shot_ids = [shot_id for shot_id in context_shot_ids if shot_id]
+    direction_parts = [
+        _text(details.get("voiceIdentity")),
+        _text(details.get("language")),
+        _text(details.get("dialect")),
+        _text(details.get("performanceDirection")),
+        f"情绪为{_text(details.get('emotion'))}" if _has_value(details.get("emotion")) else "",
+        f"强度为{_text(details.get('intensity'))}" if _has_value(details.get("intensity")) else "",
+        f"语速为{_text(details.get('pace'))}" if _has_value(details.get("pace")) else "",
+        f"投射距离为{_text(details.get('distance'))}" if _has_value(details.get("distance")) else "",
+    ]
+    direction = "；".join(item for item in direction_parts if item)
+    settings = {
+        "provider": _text(details.get("provider")) or "minimax",
+        "model": _text(details.get("model")) or "speech-2.8-hd",
+        "voiceId": _text(details.get("providerVoiceId")) or _text(details.get("voiceId")) or "在 MiniMax Web 中选择固定系统音色",
+        "voiceName": _text(details.get("providerVoiceName")) or "以实际试听结果为准",
+        "region": _text(details.get("providerRegion")) or "cn",
+        "languageBoost": _text(details.get("languageBoost")) or "自动识别（未发送固定语言增强）",
+        "emotion": _text(details.get("emotion")) or "留空（先建立基础音色基线）",
+        "speed": _text(details.get("speed")) or "1.0",
+        "pitch": _text(details.get("pitch")) or "0",
+        "volume": _text(details.get("volume")) or "1.0",
+        "format": _text(details.get("format")) or "按 Web 下载选项；工作台归档默认 wav",
+    }
+    warnings: list[str] = []
+    if text_status != "confirmed":
+        warnings.append("朗读文本尚未标记为 confirmed；请先确认每个镜头的唯一台词，再复制到 MiniMax Web。")
+    if len(unique_candidate_texts) > 1:
+        warnings.append("关联镜头存在多条不同文本；必须拆成多次生成，不能拼成一段。")
+    if len(context_shot_ids) > len(candidates) and candidates:
+        warnings.append("部分关联镜头没有明确朗读文本；请逐镜头确认台词或明确该镜头无对白。")
+    if text_status == "conflict":
+        warnings.append("当前文本存在镜头/台词冲突，暂不提供可复制的朗读文本。")
+    return {
+        "schemaVersion": AUDIO_PROMPT_SCHEMA_VERSION,
+        "provider": "minimax",
+        "operation": _text(details.get("operation")) or "tts",
+        "sourceText": source_text,
+        "providerText": provider_text,
+        "copyText": provider_text if provider_text and text_status in AUDIO_CONFIRMED_TEXT_STATUSES else "",
+        "candidateText": provider_text if provider_text and text_status not in AUDIO_CONFIRMED_TEXT_STATUSES else "",
+        "textStatus": text_status,
+        "direction": direction,
+        "settings": settings,
+        "pausePlan": deepcopy(details.get("pausePlan")) if _has_value(details.get("pausePlan")) else [],
+        "pronunciation": deepcopy(details.get("pronunciation")) if _has_value(details.get("pronunciation")) else {},
+        "soundTags": deepcopy(details.get("soundTags")) if _has_value(details.get("soundTags")) else [],
+        "targetDuration": details.get("targetDuration"),
+        "relevantShots": deepcopy(details.get("relevantShots")) if _has_value(details.get("relevantShots")) else context_shot_ids,
+        "candidates": candidates,
+        "continuity": _clean_list(pack.get("continuityChecklist")),
+        "mustPreserve": _clean_list(pack.get("mustPreserve")),
+        "mustAvoid": _clean_list(pack.get("mustAvoid")),
+        "warnings": warnings,
+    }
+
+
+def _build_audio_prompt_text(prompt_pack: dict[str, Any], fallback_prompt: str = "", *, context: dict[str, Any] | None = None) -> str:
+    package = build_audio_prompt_package(prompt_pack, fallback_prompt, context=context)
+    if package.get("copyText"):
+        return str(package["copyText"])
+    candidate = str(package.get("candidateText") or "").strip()
+    if candidate:
+        return f"MiniMax Speech 2.8 Web：候选朗读文本待用户确认：{candidate}"
+    return "MiniMax Speech 2.8 Web：尚未确认唯一朗读文本，暂不生成。"
+
+
 def build_natural_language_prompt(
     asset_class: str | None,
     prompt_pack: Any,
@@ -566,6 +970,8 @@ def build_natural_language_prompt(
     fallback = str(fallback_prompt or "").strip()
     if not _structured_content(pack):
         return fallback
+    if cls == "audio":
+        return _build_audio_prompt_text(pack, fallback, context=context)
 
     plan = pack.get("shotPlan") if isinstance(pack.get("shotPlan"), list) else []
     shot_event, shot_camera, shot_continuity = _shot_prose(plan)
@@ -576,6 +982,11 @@ def build_natural_language_prompt(
     reference = _reference_prose(pack.get("referenceStrategy") or {})
     if reference:
         paragraphs.append(reference)
+    reference_assets = _normalize_generation_reference_assets(pack.get("generationReferenceAssets"))
+    reference_asset_ids = [str(item.get("assetId") or item.get("asset_id") or "").strip() for item in reference_assets]
+    reference_asset_ids = list(dict.fromkeys(item for item in reference_asset_ids if item))
+    if reference_asset_ids:
+        paragraphs.append(_sentence("、".join(reference_asset_ids), "图片生成时需要提供的参考图资产："))
 
     identity_parts: list[Any] = [_text(pack.get("identityAnchor")), _text(pack.get("identityLock"))]
     if cls == "character":
@@ -750,7 +1161,7 @@ def canonicalize_prompt_output(
         "promptQuality": assess_prompt_pack(cls, pack, compiled),
         "promptContractVersion": PROMPT_CONTRACT_VERSION,
         "promptWorkflow": PROMPT_WORKFLOW_ID,
-        "promptFieldOrder": list(PROMPT_FIELD_ORDER),
+        "promptFieldOrder": list(AUDIO_PROMPT_FIELD_ORDER if cls == "audio" else PROMPT_FIELD_ORDER),
     }
 
 
@@ -758,6 +1169,11 @@ def _coverage_item(label: str, paths: tuple[str, ...], prompt_pack: dict[str, An
     present = any(_has_value(_value_at_path(prompt_pack, path)) for path in paths)
     if label == "参考板策略" and _value_at_path(prompt_pack, "referenceStrategy.status") == "no_reference_assets":
         present = False
+    # Audio fields are intentionally separated from the copy-ready status
+    # string. Do not infer a real spoken text, language, or pronunciation
+    # field merely because the status message contains “朗读文本” or “待确认”.
+    if not present and any(path.startswith("audioDetails.") for path in paths):
+        return {"label": label, "present": False, "paths": list(paths)}
     if not present:
         lowered_prompt = prompt.lower()
         aliases = {
@@ -784,6 +1200,14 @@ def _coverage_item(label: str, paths: tuple[str, ...], prompt_pack: dict[str, An
             "视频参考用途": ("keyframe", "first frame", "last frame", "multi-frame", "参考用途"),
             "结构与材质": ("结构", "轮廓", "材质", "功能"),
             "使用状态与尺度": ("状态", "尺度", "交互", "接触"),
+            "朗读文本": ("朗读文本", "对白", "旁白", "台词"),
+            "文本状态": ("confirmed", "candidate", "conflict", "missing", "待用户确认"),
+            "声音身份与演绎": ("声音身份", "音色", "咬字", "气息", "投射", "低沉", "冷峻"),
+            "语言与方言": ("普通话", "中文", "方言", "口音", "语言"),
+            "情绪与节奏": ("情绪", "强度", "语速", "节奏", "停顿"),
+            "停顿与发音": ("停顿", "发音", "多音字", "拼音", "pronunciation"),
+            "音频连续性": ("音频连续", "口型", "对白时长", "关联镜头", "分轨"),
+            "音频负向约束": ("不要朗读", "不可朗读", "覆盖对白", "吞字", "擅自补写"),
         }
         present = any(alias in lowered_prompt for alias in aliases.get(label, ()))
     return {"label": label, "present": present, "paths": list(paths)}
@@ -794,49 +1218,61 @@ def assess_prompt_pack(asset_class: str, prompt_pack: Any, prompt: str = "") -> 
 
     asset_class = canonical_asset_class(asset_class)
     pack = normalize_prompt_pack(asset_class, prompt_pack)
-    common = [
-        ("人物身份锚点" if asset_class == "character" else "资产身份/结构锚点", ("identityAnchor", "identity", "identity_anchors")),
-        ("可见事件/因果", ("visibleEvent", "shotPlan", "camera", "poseAction", "action")),
-        ("镜头与动作", ("shotPlan", "cameraExecution", "camera", "poseAction", "action")),
-        ("视觉渲染", ("visualStyle", "lightingCausality", "lighting", "style")),
-        ("连续性锚点", ("continuityChecklist", "detailAnchorRegistry", "continuity")),
-        ("负向约束", ("negativePrompt", "mustAvoid")),
-        ("参考图角色", ("referenceStrategy", "referenceRoles", "references")),
-    ]
-    if asset_class == "character":
-        required = common + [
-            ("面部细节", ("characterDetails.faceAndExpression", "characterDetails.face", "faceExpression", "face")),
-            ("发型轮廓", ("characterDetails.hairAndHeadSilhouette", "characterDetails.hair", "hairSilhouette", "hair")),
-            ("身体与表演", ("characterDetails.bodyPoseAction", "characterDetails.bodyAndPosture", "characterDetails.expressionAndPerformance", "poseAction")),
-            ("服装与材质", ("characterDetails.costumeAndMaterials", "characterDetails.wardrobe", "wardrobeMaterial", "wardrobe", "materials")),
-            ("参考板策略", ("characterDetails.referenceSheet", "referenceStrategy", "referencePlan")),
-        ]
-    elif asset_class == "scene":
-        required = common + [
-            ("场景地理与分层", ("sceneDetails.spatialLayoutAndGeography", "sceneDetails.foregroundMidgroundBackground", "layout", "spatialLayout", "geography")),
-            ("陈设与地标", ("sceneDetails.setDressingAndFixedAnchors", "sceneDetails.propsAndSetDressing", "propsAndSetDressing", "props", "landmarks")),
-            ("材质表面", ("sceneDetails.materialsAndSurfaceState", "surfaceMaterials", "materials")),
-            ("光线与空气", ("sceneDetails.lightingWeatherAtmosphere", "sceneDetails.detailEvidenceAndAtmosphere", "lightingAtmosphere", "lighting")),
-            ("动作空间", ("sceneDetails.actionBlockingZones", "sceneDetails.actionSpace", "actionSpace", "blocking")),
-        ]
-    elif asset_class == "fusion":
-        required = common + [
-            ("角色/道具/场景分离锚点", ("fusionDetails.characterIdentityLock", "fusionDetails.itemIdentityLock", "fusionDetails.sceneIdentityLock")),
-            ("接触与尺度链", ("fusionDetails.interactionAndContact", "fusionDetails.placementScaleAndCamera", "interaction", "scale")),
-            ("融合光影与遮挡", ("fusionDetails.lightingShadowsAndMaterialIntegration", "fusionDetails.compositionAndDepth", "lighting", "occlusion")),
-            ("视频参考用途", ("fusionDetails.shotUsage", "fusionDetails.seedanceReferenceRole", "shotUsage")),
-        ]
-    elif asset_class == "shot":
-        required = common + [
-            ("镜头事件与后果", ("visibleEvent", "shotPlan", "eventConsequence", "action")),
-            ("镜头执行", ("cameraExecution", "shotPlan", "camera")),
-            ("角色/场景连续性", ("identityAnchor", "continuityChecklist", "detailAnchorRegistry")),
+    if asset_class == "audio":
+        required = [
+            ("朗读文本", ("audioDetails.sourceText",)),
+            ("文本状态", ("audioDetails.textStatus",)),
+            ("声音身份与演绎", ("audioDetails.voiceIdentity", "audioDetails.performanceDirection")),
+            ("语言与方言", ("audioDetails.language", "audioDetails.dialect")),
+            ("情绪与节奏", ("audioDetails.emotion", "audioDetails.intensity", "audioDetails.pace")),
+            ("停顿与发音", ("audioDetails.pausePlan", "audioDetails.pronunciation")),
+            ("音频连续性", ("continuityChecklist", "audioDetails.relevantShots")),
+            ("音频负向约束", ("mustAvoid", "negativePrompt")),
         ]
     else:
-        required = common + [
-            ("结构与材质", ("propDetails.objectIdentity", "propDetails.silhouetteAndProportions", "propDetails.structureAndFunction", "structure", "materials", "assetSpec", "productionSpec")),
-            ("使用状态与尺度", ("propDetails.materialAndCondition", "propDetails.scaleAndInteraction", "usageState", "interaction", "state", "poseAction")),
+        common = [
+            ("人物身份锚点" if asset_class == "character" else "资产身份/结构锚点", ("identityAnchor", "identity", "identity_anchors")),
+            ("可见事件/因果", ("visibleEvent", "shotPlan", "camera", "poseAction", "action")),
+            ("镜头与动作", ("shotPlan", "cameraExecution", "camera", "poseAction", "action")),
+            ("视觉渲染", ("visualStyle", "lightingCausality", "lighting", "style")),
+            ("连续性锚点", ("continuityChecklist", "detailAnchorRegistry", "continuity")),
+            ("负向约束", ("negativePrompt", "mustAvoid")),
+            ("参考图角色", ("referenceStrategy", "referenceRoles", "references")),
         ]
+        if asset_class == "character":
+            required = common + [
+                ("面部细节", ("characterDetails.faceAndExpression", "characterDetails.face", "faceExpression", "face")),
+                ("发型轮廓", ("characterDetails.hairAndHeadSilhouette", "characterDetails.hair", "hairSilhouette", "hair")),
+                ("身体与表演", ("characterDetails.bodyPoseAction", "characterDetails.bodyAndPosture", "characterDetails.expressionAndPerformance", "poseAction")),
+                ("服装与材质", ("characterDetails.costumeAndMaterials", "characterDetails.wardrobe", "wardrobeMaterial", "wardrobe", "materials")),
+                ("参考板策略", ("characterDetails.referenceSheet", "referenceStrategy", "referencePlan")),
+            ]
+        elif asset_class == "scene":
+            required = common + [
+                ("场景地理与分层", ("sceneDetails.spatialLayoutAndGeography", "sceneDetails.foregroundMidgroundBackground", "layout", "spatialLayout", "geography")),
+                ("陈设与地标", ("sceneDetails.setDressingAndFixedAnchors", "sceneDetails.propsAndSetDressing", "propsAndSetDressing", "props", "landmarks")),
+                ("材质表面", ("sceneDetails.materialsAndSurfaceState", "surfaceMaterials", "materials")),
+                ("光线与空气", ("sceneDetails.lightingWeatherAtmosphere", "sceneDetails.detailEvidenceAndAtmosphere", "lightingAtmosphere", "lighting")),
+                ("动作空间", ("sceneDetails.actionBlockingZones", "sceneDetails.actionSpace", "actionSpace", "blocking")),
+            ]
+        elif asset_class == "fusion":
+            required = common + [
+                ("角色/道具/场景分离锚点", ("fusionDetails.characterIdentityLock", "fusionDetails.itemIdentityLock", "fusionDetails.sceneIdentityLock")),
+                ("接触与尺度链", ("fusionDetails.interactionAndContact", "fusionDetails.placementScaleAndCamera", "interaction", "scale")),
+                ("融合光影与遮挡", ("fusionDetails.lightingShadowsAndMaterialIntegration", "fusionDetails.compositionAndDepth", "lighting", "occlusion")),
+                ("视频参考用途", ("fusionDetails.shotUsage", "fusionDetails.seedanceReferenceRole", "shotUsage")),
+            ]
+        elif asset_class == "shot":
+            required = common + [
+                ("镜头事件与后果", ("visibleEvent", "shotPlan", "eventConsequence", "action")),
+                ("镜头执行", ("cameraExecution", "shotPlan", "camera")),
+                ("角色/场景连续性", ("identityAnchor", "continuityChecklist", "detailAnchorRegistry")),
+            ]
+        else:
+            required = common + [
+                ("结构与材质", ("propDetails.objectIdentity", "propDetails.silhouetteAndProportions", "propDetails.structureAndFunction", "structure", "materials", "assetSpec", "productionSpec")),
+                ("使用状态与尺度", ("propDetails.materialAndCondition", "propDetails.scaleAndInteraction", "usageState", "interaction", "state", "poseAction")),
+            ]
     checks = [_coverage_item(label, paths, pack, prompt) for label, paths in required]
     passed = sum(1 for item in checks if item["present"])
     missing = [item["label"] for item in checks if not item["present"]]
@@ -848,11 +1284,11 @@ def assess_prompt_pack(asset_class: str, prompt_pack: Any, prompt: str = "") -> 
         "checks": checks,
         "missing": missing,
         "qa_gate": {
-            "specificity": not ("面部细节" in missing or "场景地理与分层" in missing or "结构与材质" in missing),
-            "visibility": "镜头与动作" not in missing,
-            "causality": "可见事件/因果" not in missing and ("光线与空气" not in missing if asset_class == "scene" else True),
-            "continuity": "连续性锚点" not in missing,
-            "reference_roles": "参考图角色" not in missing,
+            "specificity": not ("面部细节" in missing or "场景地理与分层" in missing or "结构与材质" in missing or "声音身份与演绎" in missing),
+            "visibility": ("镜头与动作" not in missing) if asset_class != "audio" else "朗读文本" not in missing,
+            "causality": ("可见事件/因果" not in missing and ("光线与空气" not in missing if asset_class == "scene" else True)) if asset_class != "audio" else "情绪与节奏" not in missing,
+            "continuity": ("连续性锚点" not in missing) if asset_class != "audio" else "音频连续性" not in missing,
+            "reference_roles": "参考图角色" not in missing if asset_class != "audio" else True,
         },
     }
 
@@ -861,12 +1297,15 @@ __all__ = [
     "PROMPT_CONTRACT_VERSION",
     "PROMPT_WORKFLOW_ID",
     "PROMPT_FIELD_ORDER",
+    "AUDIO_PROMPT_SCHEMA_VERSION",
+    "AUDIO_PROMPT_FIELD_ORDER",
     "PROMPT_CLASS_ALIASES",
     "canonical_asset_class",
     "prompt_contract",
     "prompt_contract_instructions",
     "normalize_prompt_pack",
     "build_natural_language_prompt",
+    "build_audio_prompt_package",
     "canonicalize_prompt_output",
     "assess_prompt_pack",
     "render_prompt_value",

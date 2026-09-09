@@ -21,15 +21,21 @@ from .opencode_client import opencode_request_json, opencode_structured
 from .jimeng_cli import jimeng_create_task, jimeng_get_task, jimeng_cancel_task, probe_jimeng_cli, validate_video_package
 from .providers import (
     MINIMAX_DEFAULT_TTS_MODEL,
+    MINIMAX_TTS_MAX_TEXT_CHARS,
+    MINIMAX_TTS_PITCH_MAX,
+    MINIMAX_TTS_PITCH_MIN,
     MINIMAX_TTS_SPEED_MAX,
     MINIMAX_TTS_SPEED_MIN,
     MINIMAX_TTS_FORMATS,
+    MINIMAX_TTS_VOLUME_MAX,
+    MINIMAX_TTS_VOLUME_MIN,
     MINIMAX_TTS_MODELS,
     ProviderError,
     error_from_response,
     minimax_probe,
     minimax_speech,
     minimax_tts_payload,
+    validate_minimax_tts_text,
     openai_image,
     openai_image_edit,
     openai_speech,
@@ -91,7 +97,14 @@ CAPABILITY_SPECS: dict[str, dict[str, Any]] = {
         "input_formats": ["text"],
         "output_types": ["audio"],
         "task_mode": "sync",
-        "limits": {"max_text_chars": 4096},
+        "limits": {
+            "max_text_chars": MINIMAX_TTS_MAX_TEXT_CHARS,
+            "models": list(MINIMAX_TTS_MODELS),
+            "formats": sorted(MINIMAX_TTS_FORMATS),
+            "speed": {"min": MINIMAX_TTS_SPEED_MIN, "max": MINIMAX_TTS_SPEED_MAX},
+            "pitch": {"min": MINIMAX_TTS_PITCH_MIN, "max": MINIMAX_TTS_PITCH_MAX},
+            "volume": {"min": MINIMAX_TTS_VOLUME_MIN, "max": MINIMAX_TTS_VOLUME_MAX},
+        },
     },
     "music": {
         "input_formats": ["text", "audio"],
@@ -140,7 +153,7 @@ DEFAULT_RETRY_POLICY = {
     "max_attempts": 3,
     "backoff_seconds": [1, 3, 8],
     "retryable_kinds": ["connection", "timeout", "rate_limit", "server", "retryable"],
-    "never_retry_kinds": ["auth", "billing", "configuration", "validation", "request", "canceled"],
+    "never_retry_kinds": ["auth", "billing", "configuration", "validation", "request", "canceled", "execution-unknown"],
 }
 
 
@@ -188,6 +201,19 @@ def credential_state(profile: Any, credential: str | None = None) -> dict[str, A
     p = _profile_dict(profile)
     provider_type = str(p.get("provider_type") or "")
     configured = bool(credential) or bool(p.get("credential_configured"))
+    if provider_type == "minimax":
+        active_region = str(p.get("active_region") or _config(profile).get("region") or "cn")
+        region_statuses = p.get("credential_regions")
+        active_status = region_statuses.get(active_region) if isinstance(region_statuses, dict) else None
+        if isinstance(active_status, dict):
+            configured = bool(credential) or bool(active_status.get("configured"))
+        return {
+            "required": True,
+            "configured": configured,
+            "source": "system_credential_store" if configured else None,
+            "optional": False,
+            "active_region": active_region,
+        }
     if provider_type == "jimeng_cli":
         return {"required": False, "configured": configured, "source": "local_cli_profile" if configured else None, "optional": True}
     return {
@@ -425,7 +451,16 @@ class OpenAIAdapter(ProviderAdapter):
         elif capability in {"orchestrator", "vision"}:
             schema = request.get("schema")
             if isinstance(schema, dict):
-                payload = await openai_structured(self.profile, credential, model or "gpt-5.5", str(request.get("instructions") or ""), str(request.get("input_text") or request.get("prompt") or ""), schema, str(request.get("schema_name") or "frameflow_result"))
+                payload = await openai_structured(
+                    self.profile,
+                    credential,
+                    model or "gpt-5.5",
+                    str(request.get("instructions") or ""),
+                    str(request.get("input_text") or request.get("prompt") or ""),
+                    schema,
+                    str(request.get("schema_name") or "frameflow_result"),
+                    request.get("input_content") if isinstance(request.get("input_content"), list) else None,
+                )
             else:
                 body = {"model": model or "gpt-5.5", "store": False, "input": request.get("input") or request.get("prompt") or ""}
                 payload = await request_json("POST", f"{self.profile['base_url'].rstrip('/')}/responses", credential, json=body)
@@ -464,6 +499,14 @@ class MiniMaxAdapter(ProviderAdapter):
         speed = float(payload.get("voice_setting", {}).get("speed", 1.0))
         if not MINIMAX_TTS_SPEED_MIN <= speed <= MINIMAX_TTS_SPEED_MAX:
             raise ProviderError("MiniMax TTS 语速必须在 0.5 到 2.0 之间。", "validation", 422)
+        voice_setting = payload.get("voice_setting") if isinstance(payload.get("voice_setting"), dict) else {}
+        volume = float(voice_setting.get("vol", 1.0))
+        pitch = float(voice_setting.get("pitch", 0))
+        if not MINIMAX_TTS_VOLUME_MIN <= volume <= MINIMAX_TTS_VOLUME_MAX:
+            raise ProviderError("MiniMax TTS 音量必须在 0 到 10 之间。", "validation", 422)
+        if not MINIMAX_TTS_PITCH_MIN <= pitch <= MINIMAX_TTS_PITCH_MAX:
+            raise ProviderError("MiniMax TTS 音调必须在 -12 到 12 之间。", "validation", 422)
+        validate_minimax_tts_text(str(payload.get("text") or ""), model)
         audio, provider_metadata = await minimax_speech(self.profile, credential, payload)
         result = self.normalize({"data_base64": base64.b64encode(audio).decode("ascii")}, capability, model, None, "succeeded")
         result["provider_metadata"] = provider_metadata

@@ -85,6 +85,69 @@ class FrameflowV3SettingsTests(unittest.TestCase):
         self.assertEqual(models.status_code, 200, models.text)
         self.assertEqual(models.json()["models"], ["settings-model"])
 
+    def test_minimax_region_credentials_are_independent_and_probe_uses_active_region(self) -> None:
+        stored: dict[str, str] = {}
+
+        def read_secret(reference: str | None, environment_variable: str | None = None) -> str | None:
+            return stored.get(str(reference))
+
+        def write_secret(reference: str, value: str) -> None:
+            stored[reference] = value
+
+        with mock.patch.object(server, "get_secret", side_effect=read_secret), mock.patch.object(server, "set_secret", side_effect=write_secret):
+            china = self.client.post("/api/v2/settings/providers/minimax-default/credential", json={"api_key": "cn-secret", "region": "cn"})
+            global_region = self.client.post("/api/v2/settings/providers/minimax-default/credential", json={"api_key": "global-secret", "region": "global"})
+
+        self.assertEqual(china.status_code, 200, china.text)
+        self.assertEqual(global_region.status_code, 200, global_region.text)
+        self.assertEqual(stored, {
+            "provider:minimax-default:minimax:cn": "cn-secret",
+            "provider:minimax-default:minimax:global": "global-secret",
+        })
+        self.assertNotIn("cn-secret", china.text)
+        self.assertNotIn("global-secret", global_region.text)
+
+        switched = self.client.patch("/api/v2/settings/providers/minimax-default", json={
+            "base_url": "https://api.minimax.io/v1",
+            "model_config": {"region": "global", "tts_model": "speech-2.8-hd"},
+        })
+        self.assertEqual(switched.status_code, 200, switched.text)
+        self.assertEqual(switched.json()["provider"]["active_region"], "global")
+
+        with mock.patch.object(server, "get_secret", side_effect=read_secret):
+            active_profile = server.get_profile(server.Database(self.db_path), "minimax-default")
+            self.assertEqual(server.get_profile_secret(active_profile), "global-secret")
+
+        probe_result = {"ok": True, "models": ["speech-2.8-hd"], "capabilities": ["tts"], "model_readiness": {}, "checked_at": 1}
+        with mock.patch.object(server, "get_secret", side_effect=read_secret), mock.patch.object(server, "probe_profile", new=mock.AsyncMock(return_value=probe_result)) as probe:
+            probed = self.client.post("/api/v2/settings/providers/minimax-default/probe")
+        self.assertEqual(probed.status_code, 200, probed.text)
+        self.assertEqual(probe.await_args.args[1], "global-secret")
+        self.assertEqual(probed.json()["probe"]["region"], "global")
+        self.assertNotIn("global-secret", probed.text)
+
+        switched_back = self.client.patch("/api/v2/settings/providers/minimax-default", json={
+            "base_url": "https://api.minimax.cn/v1",
+            "model_config": {"region": "cn", "tts_model": "speech-2.8-hd"},
+        })
+        self.assertEqual(switched_back.status_code, 200, switched_back.text)
+        with mock.patch.object(server, "get_secret", side_effect=read_secret):
+            settings = self.client.get("/api/v2/settings").json()
+            minimax = next(item for item in settings["providers"] if item["id"] == "minimax-default")
+            self.assertEqual(minimax["active_region"], "cn")
+            self.assertTrue(minimax["credential_regions"]["cn"]["configured"])
+            self.assertTrue(minimax["credential_regions"]["global"]["configured"])
+            self.assertIsNone(minimax["last_probe"].get("ok"))
+
+            switched_again = self.client.patch("/api/v2/settings/providers/minimax-default", json={
+                "base_url": "https://api.minimax.io/v1",
+                "model_config": {"region": "global", "tts_model": "speech-2.8-hd"},
+            })
+            self.assertEqual(switched_again.status_code, 200, switched_again.text)
+            restored = self.client.get("/api/v2/settings").json()
+            restored_minimax = next(item for item in restored["providers"] if item["id"] == "minimax-default")
+            self.assertTrue(restored_minimax["last_probe"]["ok"])
+
     def test_failed_probe_is_persisted_as_the_latest_health_result(self) -> None:
         error = server.ProviderError("无法连接 Provider：测试连接失败", "connection", 502)
         with mock.patch.object(server, "get_profile_secret", return_value="probe-secret"), mock.patch.object(server, "probe_profile", new=mock.AsyncMock(side_effect=error)):

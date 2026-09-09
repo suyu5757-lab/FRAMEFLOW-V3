@@ -19,6 +19,34 @@ export type ProjectRecord = {
   lifecycle_status?: 'active' | 'archived';
 };
 
+export type MiniMaxRegion = 'cn' | 'global';
+
+export type MiniMaxVoiceOption = {
+  voice_id: string;
+  name: string;
+  source: 'system' | 'cloning' | 'generation' | string;
+  language?: string | null;
+  languages?: string[];
+  description?: string | null;
+  gender?: string | null;
+  age?: string | null;
+  supported_emotion?: string[];
+  catalog_source?: 'live' | 'cached' | 'documented' | string;
+};
+
+export type MiniMaxVoiceCatalog = {
+  provider_id: string | null;
+  provider: 'minimax' | string;
+  region: MiniMaxRegion | string;
+  status: 'live' | 'cached' | 'unavailable' | string;
+  catalog_source?: 'live' | 'cached' | 'documented' | 'none' | string;
+  checked_at?: string | number | null;
+  voices: MiniMaxVoiceOption[];
+  models?: string[];
+  error?: string | null;
+  error_kind?: string | null;
+};
+
 export type AudioVoiceProfile = {
   id: string;
   name: string;
@@ -29,8 +57,14 @@ export type AudioVoiceProfile = {
   model?: string;
   provider_profile_id?: string | null;
   provider_voice_id?: string;
+  provider_voice_name?: string;
+  provider_voice_source?: string;
+  provider_region?: MiniMaxRegion | string;
+  locale?: string;
   language?: string;
   dialect?: string;
+  language_boost?: string | null;
+  catalog_snapshot?: Record<string, unknown>;
   traits?: string[];
   pronunciation_risks?: string[] | string;
   register?: string;
@@ -69,9 +103,20 @@ export type AudioAudition = {
   character_id?: string | null;
   condition: 'neutral' | 'emotional' | 'pronunciation-stress' | string;
   text: string;
-  emotion?: string;
+  source_text?: string;
+  provider_text?: string;
+  text_status?: 'missing' | 'candidate' | 'conflict' | 'confirmed' | string;
+  locale?: string | null;
+  language?: string | null;
+  dialect?: string | null;
+  language_boost?: string | null;
+  provider_region?: MiniMaxRegion | string;
+  variant?: string;
+  settings?: Record<string, unknown>;
+  emotion?: string | null;
   instructions?: string;
   target_duration?: number | null;
+  text_confirmation?: { status: string; confirmed_by?: string; confirmed_at?: string; text_sha256?: string } | null;
   artifact_id?: string | null;
   qa_run_id?: string | null;
   provider_profile_id?: string | null;
@@ -89,8 +134,18 @@ export type AudioDialogueTask = {
   logical_asset_id?: string | null;
   shot_ids: string[];
   text: string;
+  source_text?: string;
+  provider_text?: string;
+  text_status?: 'missing' | 'candidate' | 'conflict' | 'confirmed' | string;
+  locale?: string | null;
+  language?: string | null;
+  dialect?: string | null;
+  language_boost?: string | null;
+  provider_region?: MiniMaxRegion | string;
+  settings?: Record<string, unknown>;
   emotion?: string;
   target_duration?: number | null;
+  text_confirmation?: { status: string; confirmed_by?: string; confirmed_at?: string; text_sha256?: string } | null;
   artifact_id?: string | null;
   qa_run_id?: string | null;
   operation: 'tts' | 'voice-clone' | 'voice-design' | 'speech-to-speech' | 'take-regeneration' | string;
@@ -113,6 +168,21 @@ export type AudioTake = {
   provider_profile_id?: string | null;
   provider?: string | null;
   model?: string | null;
+  locale?: string | null;
+  language?: string | null;
+  dialect?: string | null;
+  language_boost?: string | null;
+  provider_region?: MiniMaxRegion | string;
+  source_text?: string;
+  provider_text?: string;
+  text_status?: 'missing' | 'candidate' | 'conflict' | 'confirmed' | string;
+  settings?: Record<string, unknown>;
+  trace_id?: string | null;
+  extra_info?: Record<string, unknown>;
+  duration?: number | null;
+  format?: string | null;
+  sample_rate?: number | null;
+  channels?: number | string | null;
   operation?: string;
   status: string;
   notes?: string;
@@ -152,6 +222,8 @@ export type AudioSoundDesignItem = {
 
 export type AudioStudioDocument = {
   version: number;
+  schema_version?: 'minimax-speech-audio-v2' | string;
+  schemaVersion?: 'minimax-speech-audio-v2' | string;
   selected_mode?: 'overview' | 'voices' | 'music' | 'sound' | 'handoff' | string;
   voices: AudioVoiceProfile[];
   voice_references?: AudioVoiceReference[];
@@ -172,26 +244,36 @@ export type AudioStudioEnvelope = {
   capabilities?: Record<string, { ready: boolean; status?: string; provider_profile_id?: string | null; provider?: string | null; model?: string | null; reason?: string | null }>;
   audio_gates?: Record<string, { status: string; allowed: boolean; missing: string[]; next_action: string; [key: string]: unknown }>;
   workflow?: { router?: string; voice?: string; music?: string; qa_owner?: string };
+  minimax_voice_catalog?: MiniMaxVoiceCatalog;
 };
 
 export type SpeechGenerateInput = {
   text: string;
+  source_text?: string;
+  provider_text?: string;
+  text_status?: 'missing' | 'candidate' | 'conflict' | 'confirmed';
   model?: string;
   voice?: string;
-  format?: 'mp3' | 'opus' | 'aac' | 'flac' | 'wav' | 'pcm';
+  format?: 'mp3' | 'wav' | 'flac';
   instructions?: string;
   speed?: number;
   volume?: number;
   pitch?: number;
   language_boost?: string | null;
+  locale?: string | null;
+  language?: string | null;
+  dialect?: string | null;
+  provider_region?: MiniMaxRegion | string | null;
   pronunciation_dict?: Record<string, unknown>;
   sample_rate?: number;
   bitrate?: number;
   aigc_watermark?: boolean;
+  pause_plan?: Array<Record<string, unknown>>;
+  sound_tags?: Array<string | Record<string, unknown>>;
   dialogue_id?: string;
   logical_asset_id?: string | null;
   shot_ids?: string[];
-  emotion?: string;
+  emotion?: string | null;
   target_duration?: number | null;
   confirmed: boolean;
   provider_profile_id?: string;
@@ -311,6 +393,12 @@ export type SettingsProvider = {
   credential_configured: boolean;
   credential?: { required: boolean; configured: boolean; source?: string | null; optional?: boolean };
   credential_mask?: string | null;
+  active_region?: MiniMaxRegion | string | null;
+  credential_regions?: Partial<Record<MiniMaxRegion, {
+    configured: boolean;
+    credential_mask?: string | null;
+    label?: string;
+  }>>;
   models: string[];
   model_catalog?: Array<Record<string, unknown>>;
   model_readiness?: Record<string, boolean>;
@@ -357,7 +445,12 @@ export type SettingsEnvelope = {
     keyring: { available: boolean; backend?: string | null };
     media: { ffmpeg?: string | null; ffprobe?: string | null };
     openai: { profile_id?: string | null; credential_configured: boolean };
-    minimax?: { profile_id?: string | null; credential_configured: boolean };
+    minimax?: {
+      profile_id?: string | null;
+      credential_configured: boolean;
+      active_region?: MiniMaxRegion | string | null;
+      credential_regions?: SettingsProvider['credential_regions'];
+    };
     disk_free_bytes: number;
     provider_count: number;
   };
@@ -365,6 +458,7 @@ export type SettingsEnvelope = {
   presets: SettingsPreset[];
   bindings: SettingsBinding[];
   capabilities: string[];
+  feature_flags?: { assistant_workspace_v2?: boolean };
   orchestrator_models: { default: string; models: Array<{ id: string; label: string; description: string }> };
   routing_policy?: string;
 };

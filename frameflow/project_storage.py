@@ -50,6 +50,10 @@ _LAYOUT_DIRECTORIES = (
     "board",
     "timeline",
     "workflow",
+    "assistant/attachments",
+    "assistant/extractions",
+    "assistant/conversations",
+    "assistant/runs",
     "outputs",
 )
 
@@ -221,7 +225,7 @@ def _sync_with_connection(database: Any, data_dir: Path, project_id: str, connec
         "document": document,
     }
     _write_json(root / "project.json", project_payload)
-    _write_text(root / "README.md", """# FRAMEFLOW 项目文件夹\n\n此目录由 FRAMEFLOW 工作台按项目自动维护。SQLite 是运行时状态权威；本目录保存可直接查看、复制和交接的项目文件。\n\n- `story/`：剧本、分镜和故事版本\n- `assets/`：按资产类别保存 Prompt、规格和资产登记索引\n- `qa/`：媒体 QA 与资产版本审计快照\n- `board/`：资产画布布局与镜头依赖的可读快照\n- `timeline/`：时间线文档\n- `workflow/`：工作流图\n- `outputs/`：交付或其他输出文件\n- `artifacts/`：原始上传和生成媒体，系统不会在同步时删除或覆盖\n\n所有 Prompt 和分镜文件都保留版本，不会用新版本覆盖历史内容。\n""")
+    _write_text(root / "README.md", """# FRAMEFLOW 项目文件夹\n\n此目录由 FRAMEFLOW 工作台按项目自动维护。SQLite 是运行时状态权威；本目录保存可直接查看、复制和交接的项目文件。\n\n- `story/`：剧本、分镜和故事版本\n- `assets/`：按资产类别保存 Prompt、规格和资产登记索引\n- `qa/`：媒体 QA 与资产版本审计快照\n- `board/`：资产画布布局与镜头依赖的可读快照\n- `timeline/`：时间线文档\n- `workflow/`：工作流图\n- `assistant/`：创作助手会话、附件抽取和运行记录\n- `outputs/`：交付或其他输出文件\n- `artifacts/`：原始上传和生成媒体，系统不会在同步时删除或覆盖\n\n所有 Prompt 和分镜文件都保留版本，不会用新版本覆盖历史内容。\n""")
 
     story_payload = {
         "project_id": project_id,

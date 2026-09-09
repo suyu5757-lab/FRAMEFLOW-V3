@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 19
 
 
 def utcnow() -> str:
@@ -985,6 +985,163 @@ ALTER TABLE prompt_versions DROP COLUMN approved_artifact_id;
 ALTER TABLE prompt_versions DROP COLUMN approval_source;
 """
 
+_V18_UP = """
+ALTER TABLE conversations ADD COLUMN title TEXT NOT NULL DEFAULT '';
+ALTER TABLE conversations ADD COLUMN status TEXT NOT NULL DEFAULT 'active';
+ALTER TABLE conversations ADD COLUMN last_contract_hash TEXT;
+ALTER TABLE conversations ADD COLUMN external_consent_json TEXT NOT NULL DEFAULT '{}';
+ALTER TABLE messages ADD COLUMN client_message_id TEXT;
+ALTER TABLE messages ADD COLUMN message_type TEXT NOT NULL DEFAULT 'text';
+
+ALTER TABLE agent_plans_v5 ADD COLUMN conversation_id TEXT;
+ALTER TABLE agent_plans_v5 ADD COLUMN run_id TEXT;
+ALTER TABLE agent_plans_v5 ADD COLUMN contract_hash TEXT;
+ALTER TABLE agent_plans_v5 ADD COLUMN contract_snapshot_json TEXT NOT NULL DEFAULT '{}';
+ALTER TABLE agent_plans_v5 ADD COLUMN workspace_operations_json TEXT NOT NULL DEFAULT '[]';
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_conversation_client_v18
+ON messages(conversation_id, client_message_id)
+WHERE client_message_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_conversations_project_updated_v18
+ON conversations(project_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_plans_conversation_v18
+ON agent_plans_v5(conversation_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS assistant_attachments_v18 (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    conversation_id TEXT,
+    message_id TEXT,
+    original_name TEXT NOT NULL,
+    safe_name TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    extension TEXT NOT NULL,
+    byte_size INTEGER NOT NULL,
+    sha256 TEXT NOT NULL,
+    storage_path TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    delivery_mode TEXT NOT NULL DEFAULT 'project_reference',
+    analysis_status TEXT NOT NULL DEFAULT 'pending',
+    extracted_text TEXT NOT NULL DEFAULT '',
+    extraction_error TEXT,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+    FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE SET NULL,
+    FOREIGN KEY(message_id) REFERENCES messages(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_assistant_attachments_project_v18
+ON assistant_attachments_v18(project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_assistant_attachments_sha_v18
+ON assistant_attachments_v18(project_id, sha256, byte_size);
+
+CREATE TABLE IF NOT EXISTS assistant_message_attachments_v18 (
+    message_id TEXT NOT NULL,
+    attachment_id TEXT NOT NULL,
+    ordinal INTEGER NOT NULL DEFAULT 0,
+    delivery_mode TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(message_id, attachment_id),
+    FOREIGN KEY(message_id) REFERENCES messages(id) ON DELETE CASCADE,
+    FOREIGN KEY(attachment_id) REFERENCES assistant_attachments_v18(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_assistant_message_attachments_attachment_v18
+ON assistant_message_attachments_v18(attachment_id, message_id);
+
+CREATE TABLE IF NOT EXISTS assistant_runs_v18 (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    conversation_id TEXT NOT NULL,
+    source_message_id TEXT NOT NULL,
+    client_message_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    contract_hash TEXT NOT NULL,
+    contract_snapshot_json TEXT NOT NULL DEFAULT '{}',
+    skill_snapshot_json TEXT NOT NULL DEFAULT '{}',
+    provider_profile_id TEXT,
+    provider_model TEXT,
+    base_project_revision INTEGER NOT NULL,
+    base_graph_revision INTEGER NOT NULL,
+    base_timeline_revision INTEGER,
+    checkpoint_json TEXT NOT NULL DEFAULT '{}',
+    result_json TEXT,
+    error_json TEXT,
+    awaiting_confirmation_json TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(conversation_id, client_message_id),
+    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+    FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+    FOREIGN KEY(source_message_id) REFERENCES messages(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_assistant_runs_project_v18
+ON assistant_runs_v18(project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_assistant_runs_conversation_v18
+ON assistant_runs_v18(conversation_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_assistant_runs_status_v18
+ON assistant_runs_v18(status, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS assistant_run_events_v18 (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    sequence INTEGER NOT NULL,
+    item_id TEXT,
+    event_type TEXT NOT NULL,
+    status TEXT NOT NULL,
+    data_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    UNIQUE(run_id, sequence),
+    FOREIGN KEY(run_id) REFERENCES assistant_runs_v18(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_assistant_run_events_run_v18
+ON assistant_run_events_v18(run_id, sequence);
+"""
+
+_V18_DOWN = """
+DROP INDEX IF EXISTS idx_assistant_run_events_run_v18;
+DROP TABLE IF EXISTS assistant_run_events_v18;
+DROP INDEX IF EXISTS idx_assistant_runs_status_v18;
+DROP INDEX IF EXISTS idx_assistant_runs_conversation_v18;
+DROP INDEX IF EXISTS idx_assistant_runs_project_v18;
+DROP TABLE IF EXISTS assistant_runs_v18;
+DROP INDEX IF EXISTS idx_assistant_message_attachments_attachment_v18;
+DROP TABLE IF EXISTS assistant_message_attachments_v18;
+DROP INDEX IF EXISTS idx_assistant_attachments_sha_v18;
+DROP INDEX IF EXISTS idx_assistant_attachments_project_v18;
+DROP TABLE IF EXISTS assistant_attachments_v18;
+DROP INDEX IF EXISTS idx_agent_plans_conversation_v18;
+DROP INDEX IF EXISTS idx_conversations_project_updated_v18;
+DROP INDEX IF EXISTS idx_messages_conversation_client_v18;
+ALTER TABLE agent_plans_v5 DROP COLUMN workspace_operations_json;
+ALTER TABLE agent_plans_v5 DROP COLUMN contract_snapshot_json;
+ALTER TABLE agent_plans_v5 DROP COLUMN contract_hash;
+ALTER TABLE agent_plans_v5 DROP COLUMN run_id;
+ALTER TABLE agent_plans_v5 DROP COLUMN conversation_id;
+ALTER TABLE messages DROP COLUMN message_type;
+ALTER TABLE messages DROP COLUMN client_message_id;
+ALTER TABLE conversations DROP COLUMN external_consent_json;
+ALTER TABLE conversations DROP COLUMN last_contract_hash;
+ALTER TABLE conversations DROP COLUMN status;
+ALTER TABLE conversations DROP COLUMN title;
+"""
+
+_V19_UP = """
+ALTER TABLE conversations ADD COLUMN assistant_mode TEXT NOT NULL DEFAULT 'general';
+ALTER TABLE assistant_runs_v18 ADD COLUMN assistant_mode TEXT NOT NULL DEFAULT 'general';
+CREATE INDEX IF NOT EXISTS idx_conversations_project_mode_v19
+ON conversations(project_id, assistant_mode, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_assistant_runs_project_mode_v19
+ON assistant_runs_v18(project_id, assistant_mode, created_at DESC);
+"""
+
+_V19_DOWN = """
+DROP INDEX IF EXISTS idx_assistant_runs_project_mode_v19;
+DROP INDEX IF EXISTS idx_conversations_project_mode_v19;
+ALTER TABLE assistant_runs_v18 DROP COLUMN assistant_mode;
+ALTER TABLE conversations DROP COLUMN assistant_mode;
+"""
+
 MIGRATIONS: dict[int, dict[str, str]] = {
     1: {"up": _BASE_SCHEMA, "down": ""},
     2: {"up": _V2_UP, "down": _V2_DOWN},
@@ -1003,6 +1160,8 @@ MIGRATIONS: dict[int, dict[str, str]] = {
     15: {"up": _V15_UP, "down": _V15_DOWN},
     16: {"up": _V16_UP, "down": _V16_DOWN},
     17: {"up": _V17_UP, "down": _V17_DOWN},
+    18: {"up": _V18_UP, "down": _V18_DOWN},
+    19: {"up": _V19_UP, "down": _V19_DOWN},
 }
 
 

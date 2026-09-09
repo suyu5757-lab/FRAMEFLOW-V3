@@ -52,16 +52,22 @@ Pop-Location
 - `FRAMEFLOW_DB_PATH`：可选的 SQLite 路径；默认使用运行时数据目录。
 - `JIMENG_CLI_HOME`、`JIMENG_CLI_PATH`：即梦 CLI 的本地登录目录和可执行文件配置。
 - `FRAMEFLOW_FFMPEG_PATH`、`FRAMEFLOW_FFPROBE_PATH`：可选的 FFmpeg/FFprobe 完整路径；未设置时从系统 PATH 查找。
-- `OPENAI_API_KEY`、`DEEPSEEK_API_KEY`、`COMFYUI_API_KEY`、`MINIMAX_API_KEY`：仅用于从环境变量导入凭据；运行时优先使用系统凭据库。当前工作台的 TTS 路由固定使用 MiniMax，OpenAI 仍可承担编排和图片能力。
+- `OPENAI_API_KEY`、`DEEPSEEK_API_KEY`、`COMFYUI_API_KEY`、`MINIMAX_CN_API_KEY`、`MINIMAX_GLOBAL_API_KEY`：仅用于从环境变量导入对应凭据；运行时优先使用系统凭据库。旧的 `MINIMAX_API_KEY` 仍兼容为中国区回退变量。当前工作台的 TTS 路由固定使用 MiniMax，OpenAI 仍可承担编排和图片能力。
 - `OPENCODE_SERVER_PASSWORD`：OpenCode Server 的可选 Basic Auth 密码。
 
 应用不会把凭据写入项目 JSON、运行快照、前端存储或日志。不要把真实密钥写进源代码、测试夹具或文档。
 
 ### MiniMax TTS
 
-当前工作台的 TTS 能力固定走 MiniMax。启动后在“设置与 Provider 控制面”中选择 `MiniMax TTS`，将 `MINIMAX_API_KEY` 写入系统凭据库，点击“连接探测”，再把探测返回的 `voice_id` 填入声音 profile 的 Provider voice ID。对白和 audition 生成仍会先进入 `generated-pending-qa`，完成声音 QA 和登记后才可用于下游制作。
+当前工作台的 TTS 能力固定走 MiniMax，默认使用官方系统音色 preset，不要求用户编写 Voice Design 描述。启动后在“设置与 Provider 控制面”中选择 `MiniMax TTS`，分别在“中国区”和“国际区”凭据卡中写入各自 API Key；也可以分别从 `MINIMAX_CN_API_KEY` / `MINIMAX_GLOBAL_API_KEY` 导入。旧安装中的 `MINIMAX_API_KEY` 会作为中国区兼容回退。选择并保存当前执行区域后，连接探测、音色目录和 TTS 生成都会使用该区域对应的 Key；两区的探测状态分别保留。对白和 audition 生成仍会先进入 `generated-pending-qa`，完成声音 QA 和登记后才可用于下游制作。
 
-当前接入的是 MiniMax 的同步 T2A v2 接口，支持 `speech-2.8-hd` / Turbo 等模型、中文语言增强、停顿标记、发音覆盖和 `mp3` / `wav` / `flac` 输出；请求格式以 [MiniMax 同步语音合成 HTTP 文档](https://platform.minimaxi.com/docs/api-reference/speech-t2a-http) 为准。工作台不会在前端发送密钥，也不会在没有明确费用确认时发起生成。
+当前接入的是 MiniMax 的同步 T2A v2 接口，默认 `speech-2.8-hd`，文本上限按少于 10,000 字符校验，支持 `mp3` / `wav` / `flac`、`0.5–2.0` 语速、`-12–12` 音调、明确语言增强、停顿标记、发音覆盖和 Speech 2.8 非语言标签；请求格式以 [MiniMax 同步语音合成 HTTP 文档](https://platform.minimaxi.com/docs/api-reference/speech-t2a-http) 为准。`cn` 使用 `https://api.minimax.cn/v1`，`global` 使用 `https://api.minimax.io/v1`，生成请求不会跨区域自动重放。工作台不会在前端发送密钥，也不会在没有明确费用确认时发起生成。
+
+### MiniMax Speech 2.8 Web 测试输入
+
+声音资产卡的 `audio` Prompt 已升级为 `minimax-speech-audio-v2`，并与 [MiniMax Audio Web](https://www.minimax.io/audio) 的 TTS 交互方式分离：`sourceText` 保存用户确认的原始台词，`providerText` 保存实际发送给 MiniMax 的文本，声音身份、语言、区域、情绪、语速、停顿、发音、镜头和 QA 作为独立元数据。资产画布中的“复制 MiniMax Web 包”会明确区分“可粘贴到文本框”的朗读文本和“在 Web 页面设置”的控制项；合同、资产 ID、镜头、环境声、混音和 QA 说明不会再混入朗读文本。详细规则见 [`docs/minimax-tts-playbook.md`](docs/minimax-tts-playbook.md) 和 [`docs/voice-preparation-assistant.md`](docs/voice-preparation-assistant.md)。声音工坊顶部的内嵌声音 AI 由 OpenCode 完成前置方案，MiniMax 只在用户确认台词和费用后生成。
+
+测试时建议按三组 audition 操作：先用不加语气标签的中性文本建立音色基线，再在确实需要的位置添加 `(breath)`、`(sighs)` 等 Speech 2.8 支持的语气标签，最后用多音字、专名、数字和显式停顿测试发音与节奏。停顿应使用 Web 页面提供的 Pause 控件或 `<#秒数#>` 标记；不同镜头的台词必须分开生成。未标记为 `confirmed` 的候选台词会显示为待确认，不能通过复制按钮当作最终朗读文本提交。
 
 macOS 示例：
 

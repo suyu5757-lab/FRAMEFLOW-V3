@@ -161,7 +161,7 @@ class AuditTrailCoverageTests(unittest.TestCase):
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM audit_events_v16").fetchone()[0], 0)
                 self.assertEqual(connection.execute("PRAGMA integrity_check").fetchone()[0], "ok")
                 self.assertEqual(connection.execute("PRAGMA foreign_key_check").fetchall(), [])
-                self.assertEqual({row[0] for row in connection.execute("SELECT version FROM schema_migrations")}, set(range(1, 18)))
+                self.assertEqual({row[0] for row in connection.execute("SELECT version FROM schema_migrations")}, set(range(1, database_module.SCHEMA_VERSION + 1)))
         finally:
             for suffix in ("", "-wal", "-shm"):
                 candidate = Path(str(legacy_path) + suffix)

@@ -21,7 +21,10 @@ from fastapi.openapi.utils import get_openapi
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from frameflow import asset_audit, audit_trail
-from frameflow.agent import AGENT_RESULT_SCHEMA, apply_patch_to_graph, build_input_snapshot, normalize_agent_patch, patch_preview, redact
+from frameflow.agent import AGENT_RESULT_SCHEMA, ASSISTANT_PROJECT_CONTEXT_DEFAULT_CHARS, apply_patch_to_graph, build_input_snapshot, compact_project_for_assistant, ensure_workspace_operations, normalize_agent_patch, patch_preview, redact
+from frameflow.assistant_attachments import MAX_ATTACHMENT_BYTES, MAX_EXTRACTED_CHARS, MAX_IMAGE_VISION_BYTES, MAX_MESSAGE_ATTACHMENTS, MAX_MESSAGE_BYTES, MAX_TOTAL_EXTRACTED_CHARS, SUPPORTED_EXTENSIONS, attachment_destination, attachment_file_is_safe, attachment_kind, delivery_mode_for_attachment, extract_document, image_data_url, mime_for_filename, safe_attachment_name, stage_attachment, validate_attachment_mime
+from frameflow.audio_assistant import AUDIO_ASSISTANT_MODE, AUDIO_ASSISTANT_SKILL_ID, SUPPORTED_AUDIO_ASSISTANT_OPERATIONS, AudioPreparationError, apply_audio_preparation_operations, audio_document_hash, audio_preparation_result_schema, build_audio_assistant_context, normalize_voice_preparation_result, validate_system_voice
+from frameflow.contracts import assistant_system_instructions, contract_bundle, contract_for, contract_snapshot
 from frameflow.database import Database, SCHEMA_VERSION, utcnow
 from frameflow.data_integrity import scan_data_integrity
 from frameflow.dashboard import build_dashboard_snapshot, project_home_summary
@@ -37,11 +40,12 @@ from frameflow.prompt_design import PROMPT_CONTRACT_VERSION, PROMPT_WORKFLOW_ID,
 from frameflow.project_storage import describe_project_storage, sync_all_project_files, sync_project_files
 from frameflow.reference_authority import normalize_reference_authority, ordered_reference_snapshot
 from frameflow.recovery import RecoveryError, apply_recovery_plan, create_recovery_preview, create_verified_backup, export_project, recovery_scan
-from frameflow.providers import ASSET_PROMPT_OUTPUT_SCHEMA, FUSION_PROMPT_OUTPUT_SCHEMA, MINIMAX_DEFAULT_TTS_MODEL, MINIMAX_DEFAULT_VOICE_ID, MINIMAX_TTS_FORMATS, MINIMAX_TTS_MODELS, MINIMAX_TTS_SPEED_MAX, MINIMAX_TTS_SPEED_MIN, PROJECT_PATCH_SCHEMA, REGULATOR_OUTPUT_SCHEMA, STORYBOARD_OUTPUT_SCHEMA, ProviderError, minimax_speech, minimax_tts_payload, openai_assistant, openai_image, openai_image_edit, openai_speech, openai_structured, probe_profile
+from frameflow.providers import ASSET_PROMPT_OUTPUT_SCHEMA, FUSION_PROMPT_OUTPUT_SCHEMA, MINIMAX_DEFAULT_REGION, MINIMAX_DEFAULT_TTS_MODEL, MINIMAX_DEFAULT_VOICE_ID, MINIMAX_REGION_BASE_URLS, MINIMAX_REGIONS, MINIMAX_TTS_FORMATS, MINIMAX_TTS_MODELS, MINIMAX_TTS_SPEED_MAX, MINIMAX_TTS_SPEED_MIN, PROJECT_PATCH_SCHEMA, REGULATOR_OUTPUT_SCHEMA, STORYBOARD_OUTPUT_SCHEMA, ProviderError, language_boost_for_locale, minimax_documented_voice_catalog, minimax_region, minimax_speech, minimax_tts_payload, openai_assistant, openai_image, openai_image_edit, openai_speech, openai_structured, probe_profile, validate_minimax_tts_text
 from frameflow.runtime import execute_v3_run
-from frameflow.schemas import AgentPatchPreviewV3, AgentPlanCreateV3, AgentPlanDecisionV3, AgentPatchV3, ArtifactLineageCreateV3, ArtifactMapRequest, ArtifactRegisterRequest, AssetAssignmentV3, AssetBoardSyncV3, AssetBoardUpdateV3, AssetComparisonCreate, AssetComparisonReview, AssetCreateV3, AssetDuplicateV3, AssetImageGenerate, AssetManualProductionApproval, AssetMetadataUpdate, AssetPromptRunCreate, AssetReferenceRole, AssistantRequest, BackupCreateV3, CapabilityBinding, CredentialImport, CredentialWrite, FusionPromptRunCreate, ImageEdit, ImageGenerate, ProjectCreateV3, ProjectImport, ProjectMetadataUpdate, PromptCreateRequest, PromptQADecision, PromptRebuildRequest, PromptReviseRequest, ProviderProfileCreate, ProviderProfileUpdate, ProviderRoutePreviewV3, ProxyCreateV3, QADecisionSubmit, QARunCreate, RecoveryApplyV3, RecoveryPreviewV3, RenderCreateV3, RenderDecisionV3, RenderEstimateV3, RenderRequest, ResolutionRequest, RunDecisionV3, SeedancePackageCreate, SpeechGenerate, StoryDocumentUpdateV3, StoryOptimizationCreate, StoryRollbackV3, StoryboardAcceptRequest, TaskCreate, TimelineAssemblyRequestV3, TimelinePreviewRequestV3, TimelineUpdateV3, WorkflowGraphUpdateV3, WorkflowRunCreate, WorkflowRunCreateV3, WorkflowRunEstimateV3, WorkflowTemplateApplyV3, WorkflowTemplateCreateV3
+from frameflow.schemas import AgentPatchPreviewV3, AgentPlanCreateV3, AgentPlanDecisionV3, AgentPatchV3, AgentWorkspaceOperationV3, ArtifactLineageCreateV3, ArtifactMapRequest, ArtifactRegisterRequest, AssetAssignmentV3, AssetBoardSyncV3, AssetBoardUpdateV3, AssetComparisonCreate, AssetComparisonReview, AssetCreateV3, AssetDuplicateV3, AssetImageGenerate, AssetManualProductionApproval, AssetMetadataUpdate, AssetPromptRunCreate, AssetReferenceRole, AssistantApplyV3, AssistantConversationCreateV3, AssistantConversationUpdateV3, AssistantExternalConfirmationV3, AssistantRejectV3, AssistantRunCreateV3, AssistantRequest, AudioAssistantDraftApplyV3, AudioTextConfirmationV3, BackupCreateV3, CapabilityBinding, CredentialImport, CredentialWrite, FusionPromptRunCreate, ImageEdit, ImageGenerate, ProjectCreateV3, ProjectImport, ProjectMetadataUpdate, PromptCreateRequest, PromptQADecision, PromptRebuildRequest, PromptReviseRequest, ProviderProfileCreate, ProviderProfileUpdate, ProviderRoutePreviewV3, ProxyCreateV3, QADecisionSubmit, QARunCreate, RecoveryApplyV3, RecoveryPreviewV3, RenderCreateV3, RenderDecisionV3, RenderEstimateV3, RenderRequest, ResolutionRequest, RunDecisionV3, SeedancePackageCreate, SpeechGenerate, StoryDocumentUpdateV3, StoryOptimizationCreate, StoryRollbackV3, StoryboardAcceptRequest, TaskCreate, TimelineAssemblyRequestV3, TimelinePreviewRequestV3, WorkflowGraphUpdateV3, WorkflowRunCreate, WorkflowRunCreateV3, WorkflowRunEstimateV3, WorkflowTemplateApplyV3, WorkflowTemplateCreateV3
+from frameflow.schemas import TimelineUpdateV3
 from frameflow.secrets_store import SecretStoreError, delete_secret, get_secret, mask_secret, set_secret
-from frameflow.v3 import assemble_approved_timeline, default_graph, ensure_graph, ensure_timeline, estimate_graph, save_graph, save_timeline, select_graph_node_ids, validate_graph
+from frameflow.v3 import assemble_approved_timeline, default_graph, ensure_graph, ensure_timeline, estimate_graph, save_graph, save_timeline, select_graph_node_ids, validate_graph, validate_timeline
 from frameflow.workflows import WORKFLOWS, evaluate_project_gates, workflow_manifest
 from frameflow.story import story_checks, story_document
 from frameflow.upload_storage import UploadTooLarge, cleanup_file, cleanup_staged_upload, finalize_staged_upload, stage_upload
@@ -62,6 +66,11 @@ DEFAULT_BIND_HOST="127.0.0.1"; DEFAULT_BIND_PORT=8787; LOOPBACK_BIND_HOSTS={"127
 def browser_autostart_enabled() -> bool:
     """Return whether a ready server should open the workbench in a browser."""
     return os.environ.get("FRAMEFLOW_OPEN_BROWSER", "1").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def assistant_workspace_v2_enabled() -> bool:
+    """Return the desktop Agent workspace feature switch."""
+    return os.environ.get("FRAMEFLOW_ASSISTANT_WORKSPACE_V2", "true").strip().lower() not in {"0", "false", "no", "off"}
 STATIC_FILES={"/":"web/dist/index.html","/index.html":"web/dist/index.html"}
 ALLOWED_TTS_MODELS={"gpt-4o-mini-tts","gpt-4o-mini-tts-2025-12-15"}; ALLOWED_TTS_VOICES={"alloy","ash","ballad","coral","echo","fable","onyx","nova","sage","shimmer","verse","marin","cedar"}
 ORCHESTRATOR_MODEL_OPTIONS=[
@@ -72,7 +81,7 @@ ORCHESTRATOR_MODEL_OPTIONS=[
     {"id":"gpt-5.4","label":"GPT-5.4（兼容）","description":"保留既有 GPT-5.4 工作流"},
     {"id":"gpt-5.4-mini","label":"GPT-5.4 mini（兼容）","description":"保留原工作台默认配置"},
 ]
-ALLOWED_ORCHESTRATOR_MODELS={item["id"] for item in ORCHESTRATOR_MODEL_OPTIONS}; DEFAULT_ORCHESTRATOR_MODEL="gpt-5.6-terra"
+ALLOWED_ORCHESTRATOR_MODELS={item["id"] for item in ORCHESTRATOR_MODEL_OPTIONS}; DEFAULT_ORCHESTRATOR_MODEL="gpt-5.6-terra"; DEFAULT_VOICE_ASSISTANT_MODEL="opencode-go/gpt-5.6-luna"
 DEEPSEEK_MODEL_OPTIONS=[{"id":"deepseek-v4-flash","label":"DeepSeek V4 Flash（推荐测试）","description":"响应更快，适合日常编排"},{"id":"deepseek-v4-pro","label":"DeepSeek V4 Pro","description":"复杂创作与高质量编排"}]
 ALLOWED_DEEPSEEK_MODELS={item["id"] for item in DEEPSEEK_MODEL_OPTIONS}
 JIMENG_VIDEO_MODEL_OPTIONS=[
@@ -91,7 +100,7 @@ PROVIDER_PRESETS={
     "opencode":{"id":"opencode-default","provider_type":"opencode","display_name":"OpenCode Go Plan Agent","base_url":"http://127.0.0.1:4096","model_config":{"server_username":"opencode","agent":"build","preferred_provider_id":"opencode-go","product":"go_plan","directory":str(DEFAULT_OPENCODE_DIRECTORY)},"capabilities":["orchestrator"],"enabled":True,"model_options":[]},
     "comfyui":{"id":"comfyui-default","provider_type":"comfyui","display_name":"ComfyUI 本地 API","base_url":"http://127.0.0.1:8188","model_config":{"models":[],"capabilities":["image","image_edit","video","music","sfx","upscale","lip_sync","upload"]},"capabilities":["image","image_edit","video","music","sfx","upscale","lip_sync","upload"],"enabled":True,"model_options":[]},
     "jimeng":{"id":"jimeng-default","provider_type":"jimeng_cli","display_name":"即梦 CLI（本机）","base_url":"cli://dreamina","model_config":{"executable":"dreamina","model_version":"seedance2.0fast","models":JIMENG_VIDEO_MODEL_IDS},"capabilities":["video"],"enabled":True,"model_options":JIMENG_VIDEO_MODEL_OPTIONS},
-    "minimax":{"id":"minimax-default","provider_type":"minimax","display_name":"MiniMax TTS","base_url":"https://api.minimax.cn/v1","model_config":{"tts_model":MINIMAX_DEFAULT_TTS_MODEL,"voice_id":MINIMAX_DEFAULT_VOICE_ID,"language_boost":"Chinese","audio_setting":{"sample_rate":32000,"bitrate":128000,"format":"wav","channel":1}},"capabilities":["tts"],"enabled":True,"model_options":[{"id":model,"label":model,"description":"MiniMax 同步 TTS 模型"} for model in MINIMAX_TTS_MODELS]},
+    "minimax":{"id":"minimax-default","provider_type":"minimax","display_name":"MiniMax TTS","base_url":MINIMAX_REGION_BASE_URLS[MINIMAX_DEFAULT_REGION],"model_config":{"region":MINIMAX_DEFAULT_REGION,"tts_model":MINIMAX_DEFAULT_TTS_MODEL,"voice_id":MINIMAX_DEFAULT_VOICE_ID,"language_boost":None,"audio_setting":{"sample_rate":32000,"bitrate":128000,"format":"wav","channel":1}},"capabilities":["tts"],"enabled":True,"model_options":[{"id":model,"label":model,"description":"MiniMax 同步 TTS 模型"} for model in MINIMAX_TTS_MODELS]},
 }
 AUTO_ROUTING_PROVIDER_PRIORITY={
     "orchestrator": ["opencode", "openai", "openai_compatible"],
@@ -115,6 +124,7 @@ OPENCODE_GO_MODEL_IDS={
 TRANSITIONS={"draft":{"validated","canceled"},"validated":{"awaiting_confirmation","queued","canceled"},"awaiting_confirmation":{"queued","canceled"},"queued":{"running","canceled","failed","blocked"},"running":{"succeeded","generated_pending_qa","failed","blocked","canceled"},"succeeded":{"generated_pending_qa","approved"},"generated_pending_qa":{"approved","revision_required"},"revision_required":{"queued","blocked","canceled"},"blocked":{"queued","canceled"},"failed":{"queued","canceled"},"approved":set(),"canceled":set()}
 V3_RUNTIME_TASKS:dict[str,asyncio.Task[Any]]={}
 V3_RENDER_TASKS:dict[str,asyncio.Task[Any]]={}
+ASSISTANT_RUNTIME_TASKS:dict[str,asyncio.Task[Any]]={}
 
 def classify_bind_host(host:str)->str:
     normalized=host.strip().lower().strip("[]")
@@ -181,9 +191,9 @@ def _migrate_legacy_video_profiles(database:Database, now:str) -> None:
 
 def seed_defaults(database:Database)->None:
     now=utcnow(); _migrate_legacy_video_profiles(database, now)
-    minimax_config={"tts_model":MINIMAX_DEFAULT_TTS_MODEL,"voice_id":MINIMAX_DEFAULT_VOICE_ID,"language_boost":"Chinese","audio_setting":{"sample_rate":32000,"bitrate":128000,"format":"wav","channel":1}}
+    minimax_config={"region":MINIMAX_DEFAULT_REGION,"tts_model":MINIMAX_DEFAULT_TTS_MODEL,"voice_id":MINIMAX_DEFAULT_VOICE_ID,"language_boost":None,"audio_setting":{"sample_rate":32000,"bitrate":128000,"format":"wav","channel":1}}
     profiles=[
-        ("openai-default","openai","OpenAI","https://api.openai.com/v1","provider:openai-default",{"orchestrator_model":DEFAULT_ORCHESTRATOR_MODEL,"image_model":"gpt-image-2"},["orchestrator","image"]),
+        ("openai-default","openai","OpenAI","https://api.openai.com/v1","provider:openai-default",{"orchestrator_model":DEFAULT_ORCHESTRATOR_MODEL,"image_model":"gpt-image-2"},["orchestrator","vision","image"]),
         ("jimeng-default","jimeng_cli","即梦 CLI（本机）","cli://dreamina","provider:jimeng-default",{"executable":"dreamina","model_version":DEFAULT_VIDEO_MODEL,"models":JIMENG_VIDEO_MODEL_IDS},["video"]),
         ("opencode-default","opencode","OpenCode Go Plan Agent","http://127.0.0.1:4096","provider:opencode-default",{"server_username":"opencode","agent":"build","preferred_provider_id":"opencode-go","product":"go_plan","directory":str(DEFAULT_OPENCODE_DIRECTORY)},["orchestrator"]),
         ("minimax-default","minimax","MiniMax TTS","https://api.minimax.cn/v1","provider:minimax-default",minimax_config,["tts"]),
@@ -195,7 +205,11 @@ def seed_defaults(database:Database)->None:
         for row in c.execute("SELECT id,capabilities_json FROM provider_profiles WHERE provider_type='openai'").fetchall():
             capabilities=database.decode(row["capabilities_json"],[])
             if isinstance(capabilities,list) and "tts" in capabilities:
-                c.execute("UPDATE provider_profiles SET capabilities_json=?,updated_at=? WHERE id=?",(database.encode([item for item in capabilities if item!="tts"]),now,row["id"]))
+                capabilities=[item for item in capabilities if item!="tts"]
+            if isinstance(capabilities,list) and "vision" not in capabilities:
+                capabilities.append("vision")
+            if isinstance(capabilities,list):
+                c.execute("UPDATE provider_profiles SET capabilities_json=?,updated_at=? WHERE id=?",(database.encode(sorted(set(capabilities))),now,row["id"]))
         c.execute("UPDATE capability_bindings SET provider_profile_id=?,model=?,updated_at=? WHERE capability='tts' AND provider_profile_id!=?",("minimax-default",MINIMAX_DEFAULT_TTS_MODEL,now,"minimax-default"))
         for row in c.execute("SELECT id,model_config_json FROM provider_profiles WHERE provider_type='jimeng_cli'").fetchall():
             config=database.decode(row["model_config_json"],{})
@@ -212,6 +226,18 @@ def seed_defaults(database:Database)->None:
             if isinstance(config,dict) and not str(config.get("directory") or "").strip():
                 config["directory"] = str(DEFAULT_OPENCODE_DIRECTORY)
                 c.execute("UPDATE provider_profiles SET model_config_json=?,updated_at=? WHERE id=?",(database.encode(config),now,row["id"]))
+        # Migrate the bundled MiniMax route away from the old Chinese-only
+        # default.  A task locale/language is now the source of truth.
+        minimax_row = c.execute("SELECT id,model_config_json FROM provider_profiles WHERE id='minimax-default' AND provider_type='minimax'").fetchone()
+        if minimax_row:
+            config = database.decode(minimax_row["model_config_json"], {})
+            if not isinstance(config, dict):
+                config = {}
+            if config.get("language_boost") == "Chinese":
+                config["language_boost"] = None
+            config["region"] = str(config.get("region") or MINIMAX_DEFAULT_REGION).lower() if str(config.get("region") or MINIMAX_DEFAULT_REGION).lower() in MINIMAX_REGIONS else MINIMAX_DEFAULT_REGION
+            config.setdefault("tts_model", MINIMAX_DEFAULT_TTS_MODEL)
+            c.execute("UPDATE provider_profiles SET model_config_json=?,updated_at=? WHERE id=?", (database.encode(config), now, minimax_row["id"]))
         for cap,pid,model in [("orchestrator","openai-default",DEFAULT_ORCHESTRATOR_MODEL),("image","openai-default","gpt-image-2"),("tts","minimax-default",MINIMAX_DEFAULT_TTS_MODEL),("video","jimeng-default",DEFAULT_VIDEO_MODEL)]:c.execute("INSERT OR IGNORE INTO capability_bindings(capability,provider_profile_id,model,updated_at) VALUES(?,?,?,?)",(cap,pid,model,now))
         c.execute("UPDATE capability_bindings SET model=?,updated_at=? WHERE capability='video' AND provider_profile_id='jimeng-default'",(DEFAULT_VIDEO_MODEL,now))
 
@@ -224,10 +250,27 @@ def ensure_daily_startup_backup(database:Database)->dict[str,Any]|None:
     if existing:return {"id":existing["id"],"status":"already_verified_today"}
     return create_verified_backup(database,DEFAULT_DATA_DIR,DEFAULT_DATA_DIR/"safety-backups")
 
+
+def validate_configured_resource_dir() -> None:
+    """Fail loudly for an explicitly configured resource root.
+
+    Tests and isolated callers may still inject DB_PATH and receive their
+    deterministic temporary runtime root. A real desktop launch with
+    FRAMEFLOW_RESOURCE_DIR set never falls back to the repository directory.
+    """
+    if not configured_resource_dir:
+        return
+    root = Path(configured_resource_dir).expanduser().resolve()
+    if not root.exists() or not root.is_dir():
+        raise RuntimeError(f"FRAMEFLOW_RESOURCE_DIR 不存在或不是目录：{root}")
+    if not os.access(root, os.W_OK):
+        raise RuntimeError(f"FRAMEFLOW_RESOURCE_DIR 不可写：{root}")
+
 @asynccontextmanager
 async def lifespan(application:FastAPI):
     global DATA_DIR, GENERATED_DIR, GENERATED_AUDIO_DIR, REFERENCE_AUDIO_DIR
     ensure_loopback_bind(requested_bind_host())
+    validate_configured_resource_dir()
     if Path(DB_PATH).resolve() != (DEFAULT_DATA_DIR / "frameflow.db").resolve():
         runtime_root = Path(tempfile.gettempdir()) / f"frameflow-runtime-{Path(DB_PATH).stem}"
         DATA_DIR = runtime_root
@@ -245,7 +288,7 @@ async def lifespan(application:FastAPI):
         application.state.prompt_registration_reconciliation = None
         application.state.project_storage = None
         application.state.project_storage_error = {"message": str(exc)[:2000]}
-    ensure_daily_startup_backup(application.state.db); await resume_tasks(application); await resume_v3_runs(application); await resume_v3_renders(application); yield
+    ensure_daily_startup_backup(application.state.db); await resume_tasks(application); await resume_v3_runs(application); await resume_v3_renders(application); await resume_assistant_runs(application); yield
 
 app=FastAPI(title="FRAMEFLOW V3",version="3.0.0",lifespan=lifespan)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "testserver"])
@@ -299,7 +342,7 @@ def structured_error(status:int,code:str,category:str,message:str,details:Any=No
     return JSONResponse(status_code=status,content={"code":code,"category":category,"message":message,"details":details if details is not None else {},"retryable":retryable,"error":message})
 
 def provider_error_retryable(status:int,kind:str)->bool:
-    if kind in {"auth","billing","configuration","conflict","validation"}:return False
+    if kind in {"auth","billing","configuration","conflict","validation","execution-unknown"}:return False
     return status in {408,425,429,500,502,503,504}
 
 def failure_kind_for_status(status:int)->str:
@@ -394,18 +437,162 @@ async def resume_v3_renders(application: FastAPI) -> None:
         schedule_v3_render(application, row["id"])
 
 
-def provider_environment(profile:dict[str,Any]|sqlite3.Row)->str:
+async def resume_assistant_runs(application: FastAPI) -> None:
+    """Requeue durable Agent runs that were interrupted by a server restart."""
+
+    database: Database = application.state.db
+    with database.connect() as connection:
+        rows = connection.execute("SELECT id FROM assistant_runs_v18 WHERE status IN ('preparing','running') ORDER BY created_at").fetchall()
+    for row in rows:
+        _assistant_schedule(application, row["id"])
+
+
+MINIMAX_REGION_ENVIRONMENT = {
+    "cn": "MINIMAX_CN_API_KEY",
+    "global": "MINIMAX_GLOBAL_API_KEY",
+}
+MINIMAX_LEGACY_ENVIRONMENT = "MINIMAX_API_KEY"
+MINIMAX_REGION_LABELS = {
+    "cn": "中国区",
+    "global": "国际区",
+}
+
+
+def _minimax_region_or_default(value: Any) -> str:
+    region = str(value or "").strip().lower()
+    if region not in MINIMAX_REGIONS:
+        raise HTTPException(422, "MiniMax region 只能是 cn 或 global。")
+    return region
+
+
+def _minimax_credential_ref(profile: dict[str, Any] | sqlite3.Row, region: str) -> str:
+    """Return a stable, region-scoped keyring reference.
+
+    The old single-slot reference is deliberately retained as a China-only
+    fallback below so existing local installations do not lose their key when
+    they upgrade. New writes always use one of these two independent slots.
+    """
+    base_value = profile["credential_ref"] if isinstance(profile, sqlite3.Row) else profile.get("credential_ref")
+    base_ref = str(base_value or f"provider:{profile['id']}")
+    return f"{base_ref}:minimax:{_minimax_region_or_default(region)}"
+
+
+def _minimax_secret(profile: dict[str, Any] | sqlite3.Row, region: str) -> str | None:
+    selected_region = _minimax_region_or_default(region)
+    value = get_secret(
+        _minimax_credential_ref(profile, selected_region),
+        MINIMAX_REGION_ENVIRONMENT[selected_region],
+    )
+    if value or selected_region != "cn":
+        return value
+    # Before regional slots existed, the bundled profile used this single
+    # keyring reference and MINIMAX_API_KEY. Treat it as China-only to prevent
+    # a China credential from ever being sent to the international endpoint.
+    legacy_reference = profile["credential_ref"] if isinstance(profile, sqlite3.Row) else profile.get("credential_ref")
+    return get_secret(legacy_reference, MINIMAX_LEGACY_ENVIRONMENT)
+
+
+def _minimax_credential_regions(profile: dict[str, Any] | sqlite3.Row) -> tuple[dict[str, dict[str, Any]], dict[str, str | None]]:
+    statuses: dict[str, dict[str, Any]] = {}
+    secrets: dict[str, str | None] = {}
+    for region in MINIMAX_REGIONS:
+        value = _minimax_secret(profile, region)
+        secrets[region] = value
+        statuses[region] = {
+            "configured": bool(value),
+            "credential_mask": mask_secret(value),
+            "label": MINIMAX_REGION_LABELS[region],
+        }
+    return statuses, secrets
+
+
+def _credential_region_for_profile(profile: dict[str, Any] | sqlite3.Row, requested: str | None = None) -> str | None:
+    if profile["provider_type"] != "minimax":
+        return None
+    if requested:
+        return _minimax_region_or_default(requested)
+    if isinstance(profile, sqlite3.Row):
+        base_url = str(profile["base_url"] or "").lower()
+        return _minimax_region_or_default("global" if "minimax.io" in base_url and "minimax.cn" not in base_url else "cn")
+    return _minimax_region_or_default(minimax_region(profile))
+
+
+def provider_environment(profile:dict[str,Any]|sqlite3.Row, region: str | None = None)->str:
     if profile["provider_type"]=="jimeng_cli":return ""
-    if profile["provider_type"]=="minimax":return "MINIMAX_API_KEY"
+    if profile["provider_type"]=="minimax":
+        selected_region = _credential_region_for_profile(profile, region) or MINIMAX_DEFAULT_REGION
+        return MINIMAX_REGION_ENVIRONMENT[selected_region]
     if profile["provider_type"]=="opencode":return "OPENCODE_SERVER_PASSWORD"
     if profile["provider_type"]=="comfyui":return "COMFYUI_API_KEY"
     if "api.deepseek.com" in str(profile["base_url"]).lower():return "DEEPSEEK_API_KEY"
     return "OPENAI_API_KEY"
+
+
+def _normalize_minimax_config(base_url: str, raw_config: Any) -> dict[str, Any]:
+    config = deepcopy(raw_config) if isinstance(raw_config, dict) else {}
+    configured_region = str(config.get("region") or "").strip().lower()
+    inferred_region = "global" if "minimax.io" in str(base_url).lower() and "minimax.cn" not in str(base_url).lower() else "cn"
+    region = configured_region or inferred_region
+    if region not in MINIMAX_REGIONS:
+        raise HTTPException(422, "MiniMax region 只能是 cn 或 global。")
+    known_base = MINIMAX_REGION_BASE_URLS.get(region)
+    normalized_base = str(base_url).rstrip("/")
+    if normalized_base in MINIMAX_REGION_BASE_URLS.values() and normalized_base != known_base:
+        raise HTTPException(422, "MiniMax region 与 Base URL 不一致；请同时选择同一区域的官方地址。")
+    config["region"] = region
+    config.setdefault("tts_model", MINIMAX_DEFAULT_TTS_MODEL)
+    # `None` means provider auto-detection.  In particular, never recreate
+    # the retired Chinese default when an old profile is edited.
+    if config.get("language_boost") == "Chinese":
+        config["language_boost"] = None
+    return config
+
+
 def row_profile(database:Database,row:sqlite3.Row)->dict[str,Any]:
-    last_health=database.decode(row["last_health_json"],None)
-    secret=get_secret(row["credential_ref"],provider_environment(row)) if row["provider_type"]!="jimeng_cli" else None
+    model_config = database.decode(row["model_config_json"], {})
+    if not isinstance(model_config, dict):
+        model_config = {}
+    active_region = minimax_region({"model_config": model_config, "base_url": row["base_url"]}) if row["provider_type"] == "minimax" else None
+    stored_health=database.decode(row["last_health_json"],None)
+    last_health=stored_health
+    if row["provider_type"] == "minimax" and isinstance(stored_health, dict):
+        # Regional probes are kept together, but the public profile always
+        # exposes the health result for the currently selected endpoint.
+        regional_health = stored_health.get("regions")
+        if isinstance(regional_health, dict):
+            selected_health = regional_health.get(active_region)
+            last_health = deepcopy(selected_health) if isinstance(selected_health, dict) and selected_health.get("credential_region") == active_region else {}
+            last_health["regions"] = deepcopy(regional_health)
+        elif stored_health.get("credential_region") != active_region:
+            # Pre-regional probes, and probes written before a key change, do
+            # not identify the regional credential slot and must be refreshed.
+            last_health = {}
+        # Older probes stored MiniMax's HTTP-200 `invalid api key` as a generic
+        # validation error.  Normalize it at the read boundary so the current
+        # UI never remains in an ambiguous “checking/failed” state.
+        error_text = str(last_health.get("error") or "")
+        if re.search(r"invalid\s+(?:api\s*)?key|api\s*key.*(?:invalid|unauthor|expired)", error_text, re.I):
+            last_health = {**last_health, "error_kind": "auth", "region": active_region, "catalog_status": "unavailable", "catalog_source": "documented"}
+    credential_regions: dict[str, dict[str, Any]] | None = None
+    if row["provider_type"] == "minimax":
+        credential_regions, region_secrets = _minimax_credential_regions(row)
+        secret = region_secrets.get(active_region or MINIMAX_DEFAULT_REGION)
+        if not secret:
+            # A probe from an older single-key installation (or from a
+            # different key) must not make an unconfigured regional slot look
+            # runnable. Keep the historical regional map only for restoration
+            # when the user switches back to a configured region.
+            historical_regions = last_health.get("regions") if isinstance(last_health, dict) and isinstance(last_health.get("regions"), dict) else {}
+            last_health = {"regions": deepcopy(historical_regions)} if historical_regions else {}
+    else:
+        secret=get_secret(row["credential_ref"],provider_environment(row)) if row["provider_type"]!="jimeng_cli" else None
     cli_configured=row["provider_type"]=="jimeng_cli" and isinstance(last_health,dict) and last_health.get("ok") is True
-    return {"id":row["id"],"provider_type":row["provider_type"],"display_name":row["display_name"],"base_url":row["base_url"],"credential_ref":row["credential_ref"],"credential_configured":bool(secret) or cli_configured,"credential_mask":"即梦 CLI 本机登录态" if cli_configured else mask_secret(secret),"model_config":database.decode(row["model_config_json"],{}),"capabilities":database.decode(row["capabilities_json"],[]),"enabled":bool(row["enabled"]),"last_health":last_health,"updated_at":row["updated_at"]}
+    result = {"id":row["id"],"provider_type":row["provider_type"],"display_name":row["display_name"],"base_url":row["base_url"],"credential_ref":row["credential_ref"],"credential_configured":bool(secret) or cli_configured,"credential_mask":"即梦 CLI 本机登录态" if cli_configured else mask_secret(secret),"model_config":model_config,"capabilities":database.decode(row["capabilities_json"],[]),"enabled":bool(row["enabled"]),"last_health":last_health,"updated_at":row["updated_at"]}
+    if row["provider_type"] == "minimax":
+        # Public settings expose only region labels and redacted state. The
+        # actual environment-variable names stay inside the import boundary.
+        result.update({"active_region": active_region, "credential_regions": credential_regions or {}})
+    return result
 def public_profile(profile:dict[str,Any])->dict[str,Any]:return {k:v for k,v in profile.items() if k!="credential_ref"}
 def get_profile(database:Database,pid:str)->dict[str,Any]:
     with database.connect() as c:row=c.execute("SELECT * FROM provider_profiles WHERE id=?",(pid,)).fetchone()
@@ -442,7 +629,14 @@ def validate_profile_model_config(profile:dict[str,Any],config:dict[str,Any])->N
     validate_orchestrator_model(profile,config.get("orchestrator_model"))
 def get_profile_secret(profile:dict[str,Any])->str:
     if profile["provider_type"]=="jimeng_cli":return ""
-    value=get_secret(profile["credential_ref"],provider_environment(profile))
+    if profile["provider_type"] == "minimax":
+        selected_region = _credential_region_for_profile(profile)
+        value = _minimax_secret(profile, selected_region or MINIMAX_DEFAULT_REGION)
+    else:
+        value=get_secret(profile["credential_ref"],provider_environment(profile))
+    if not value and profile["provider_type"] == "minimax":
+        selected_region = _credential_region_for_profile(profile) or MINIMAX_DEFAULT_REGION
+        raise ProviderError(f"MiniMax {MINIMAX_REGION_LABELS[selected_region]}尚未配置对应 API Key。", "configuration", 409)
     if not value and profile["provider_type"] not in {"opencode","comfyui"}:raise ProviderError("该供应商尚未配置 API 密钥。","configuration",409)
     # OpenCode Server authentication is optional unless its operator enabled
     # OPENCODE_SERVER_PASSWORD.
@@ -493,6 +687,8 @@ def _effective_capabilities(database: Database) -> dict[str, dict[str, Any]]:
             "health": health.get("ok") if isinstance(health, dict) else None,
             "reason": None if ready else ("unbound" if not binding else "provider_unhealthy_or_model_unavailable"),
         }
+        if profile and profile.get("provider_type") == "minimax":
+            result[capability]["provider_region"] = profile.get("active_region")
     return result
 
 
@@ -693,9 +889,10 @@ async def add_profile(body:ProviderProfileCreate,request:Request):
     if body.provider_type=="minimax" and any(x!="tts" for x in body.capabilities):raise HTTPException(422,"MiniMax 配置在当前工作台仅承载 TTS 能力。")
     if body.provider_type=="jimeng_cli" and (_jimeng_executable_config_error(body.model_settings) or ""):
         raise HTTPException(422,_jimeng_executable_config_error(body.model_settings))
-    validate_profile_model_config({"provider_type":body.provider_type,"last_health":None},body.model_settings)
+    model_settings = _normalize_minimax_config(body.base_url, body.model_settings) if body.provider_type == "minimax" else body.model_settings
+    validate_profile_model_config({"provider_type":body.provider_type,"last_health":None},model_settings)
     try:
-        with database.connect() as c:c.execute("INSERT INTO provider_profiles(id,provider_type,display_name,base_url,credential_ref,model_config_json,capabilities_json,enabled,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",(pid,body.provider_type,body.display_name,body.base_url,f"provider:{pid}",database.encode(body.model_settings),database.encode(body.capabilities),int(body.enabled),now,now))
+        with database.connect() as c:c.execute("INSERT INTO provider_profiles(id,provider_type,display_name,base_url,credential_ref,model_config_json,capabilities_json,enabled,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",(pid,body.provider_type,body.display_name,body.base_url,f"provider:{pid}",database.encode(model_settings),database.encode(body.capabilities),int(body.enabled),now,now))
     except sqlite3.IntegrityError as exc:raise HTTPException(409,"供应商配置 ID 已存在。") from exc
     return public_profile(get_profile(database,pid))
 @app.patch("/api/provider-profiles/{pid}")
@@ -707,6 +904,23 @@ async def update_profile(pid:str,body:ProviderProfileUpdate,request:Request):
     if current["provider_type"]=="jimeng_cli" and "capabilities" in values and any(x!="video" for x in values["capabilities"]):raise HTTPException(422,"即梦 CLI 当前只承载视频生成能力。")
     if current["provider_type"]=="minimax" and "capabilities" in values and any(x!="tts" for x in values["capabilities"]):raise HTTPException(422,"MiniMax 配置在当前工作台仅承载 TTS 能力。")
     if current["provider_type"]=="jimeng_cli" and "model_config" in values and _jimeng_executable_config_error(values["model_config"]):raise HTTPException(422,_jimeng_executable_config_error(values["model_config"]))
+    target_base_url = str(values.get("base_url") or current["base_url"])
+    if current["provider_type"] == "minimax" and ("model_config" in values or "base_url" in values):
+        raw_config = values.get("model_config", current.get("model_config"))
+        # Allow either control in the Settings API to switch the bundled
+        # official endpoint. The UI sends both fields, but keeping this
+        # server-side fallback makes direct API clients safe and predictable.
+        if "model_config" not in values and target_base_url.rstrip("/") in MINIMAX_REGION_BASE_URLS.values():
+            inferred_region = "global" if target_base_url.rstrip("/") == MINIMAX_REGION_BASE_URLS["global"] else "cn"
+            raw_config = {**(raw_config if isinstance(raw_config, dict) else {}), "region": inferred_region}
+        if "base_url" not in values and isinstance(raw_config, dict):
+            requested_region = str(raw_config.get("region") or "").strip().lower()
+            if target_base_url.rstrip("/") in MINIMAX_REGION_BASE_URLS.values() and requested_region in MINIMAX_REGION_BASE_URLS:
+                target_base_url = MINIMAX_REGION_BASE_URLS[requested_region]
+                values["base_url"] = target_base_url
+        values["model_config"] = _normalize_minimax_config(target_base_url, raw_config)
+        if "base_url" not in values and values["model_config"].get("region") in MINIMAX_REGION_BASE_URLS:
+            values["base_url"] = MINIMAX_REGION_BASE_URLS[values["model_config"]["region"]]
     if "model_config" in values:validate_profile_model_config(current,values["model_config"])
     if "base_url" in values:ProviderProfileCreate(provider_type=current["provider_type"],display_name=current["display_name"],base_url=values["base_url"])
     cols={"display_name":"display_name","base_url":"base_url","model_config":"model_config_json","capabilities":"capabilities_json","enabled":"enabled"}; sets=[]; params=[]
@@ -729,8 +943,7 @@ async def remove_profile(pid:str,request:Request):
     with database.connect() as c:
         if c.execute("SELECT 1 FROM capability_bindings WHERE provider_profile_id=?",(pid,)).fetchone():raise HTTPException(409,"该配置仍是默认能力绑定。")
         c.execute("DELETE FROM provider_profiles WHERE id=?",(pid,))
-    try:delete_secret(profile["credential_ref"])
-    except SecretStoreError:pass
+    _clear_provider_credential(profile)
     return {"ok":True}
 @app.post("/api/provider-profiles/{pid}/credential")
 async def write_credential(pid:str,body:CredentialWrite,request:Request):
@@ -767,7 +980,22 @@ async def put_binding(body:CapabilityBinding,request:Request):
     return {"ok":True}
 
 @app.get("/api/v2/workflows")
-async def workflows():return {"workflows":[workflow_manifest(s) for s in WORKFLOWS]}
+async def workflows():
+    bundle = contract_bundle()
+    return {"workflows":[workflow_manifest(s) for s in WORKFLOWS],"contract_hash":bundle["bundle_hash"],"contract_version":bundle["workflow_contract"]["version"]}
+
+
+@app.get("/api/v2/contracts")
+async def contracts_v3():
+    return contract_for("all")
+
+
+@app.get("/api/v2/contracts/{scope}")
+async def contract_scope_v3(scope: str):
+    try:
+        return contract_for(scope)
+    except KeyError as exc:
+        raise HTTPException(404, "指定的 FRAMEFLOW 规范不存在。") from exc
 @app.post("/api/workflow-runs")
 async def workflow_run(body:WorkflowRunCreate,request:Request):
     database=db(request)
@@ -1271,6 +1499,10 @@ def _agent_plan_payload(database:Database,row:sqlite3.Row)->dict[str,Any]:
         "id":row["id"],"project_id":row["project_id"],"status":row["status"],"message":row["message"],
         "skill_id":row["skill_id"],"provider_profile_id":row["provider_profile_id"],"provider_model":row["provider_model"],
         "base_project_revision":row["base_project_revision"],"base_graph_revision":row["base_graph_revision"],
+        "conversation_id":row["conversation_id"] if "conversation_id" in row.keys() else None,
+        "run_id":row["run_id"] if "run_id" in row.keys() else None,
+        "contract_hash":row["contract_hash"] if "contract_hash" in row.keys() else None,
+        "contract_snapshot":database.decode(row["contract_snapshot_json"],{}) if "contract_snapshot_json" in row.keys() else {},
         "input_snapshot":database.decode(row["input_snapshot_json"],{}),
         "patch":database.decode(row["patch_json"],{}),"preview":database.decode(row["preview_json"],{}),
         "reply":decision.get("reply",""),"next_skill":decision.get("next_skill"),
@@ -1297,7 +1529,7 @@ def _agent_skill(skill_id:str|None)->dict[str,Any]|None:
     except KeyError as exc:raise HTTPException(422,"指定的 Agent Skill 不存在。") from exc
 
 
-async def _submit_agent_provider(database:Database,body:AgentPlanCreateV3,snapshot:dict[str,Any],skill:dict[str,Any]|None)->tuple[dict[str,Any],dict[str,Any],str]:
+async def _submit_agent_provider(database:Database,body:AgentPlanCreateV3,snapshot:dict[str,Any],skill:dict[str,Any]|None,bundle:dict[str,Any]|None=None)->tuple[dict[str,Any],dict[str,Any],str]:
     profile,bound_model=resolve_profile(database,"orchestrator",body.provider_profile_id)
     model=body.model or bound_model or profile["model_config"].get("orchestrator_model")
     if not model:raise HTTPException(409,"尚未配置编排模型。")
@@ -1308,19 +1540,18 @@ async def _submit_agent_provider(database:Database,body:AgentPlanCreateV3,snapsh
     input_text=json.dumps(snapshot,ensure_ascii=False)
     issues=adapter.validate_request("orchestrator",{"prompt_chars":len(input_text)+len(body.message)})
     if issues:raise HTTPException(422,{"message":"Agent 输入超过 Provider 限制。","issues":issues})
-    instructions=("你是 FRAMEFLOW V3 的监督式 Agent。只返回可审阅的结构化计划和补丁，不直接修改项目，不执行任何媒体调用。"
-                  "只能新增或修改工作流节点/连接、创建脚本或 Prompt 候选、建议运行节点和建议审批门。"
-                  "不得替换 active 资产，不得发布、同步或交付。所有付费媒体、批量生成、外部同步、发布和最终交付必须列入审批建议。回答使用中文。")
-    if skill:instructions+=f" 当前 Skill：{skill['skill_id']} v{skill['skill_version']}；审批策略：{skill['approval_policy']}。"
+    instructions=assistant_system_instructions(bundle or contract_bundle(),skill)
     request_payload={"model":model,"instructions":instructions,"input_text":body.message+"\n\n完整输入快照："+input_text,"schema":AGENT_RESULT_SCHEMA,"schema_name":"frameflow_agent_plan"}
     provider_result=await adapter.submit("orchestrator",request_payload,get_profile_secret(profile))
     return provider_result,profile,model
 
 
-def _store_agent_plan(database:Database,project_id:str,status:str,message:str,skill_id:str|None,provider_profile_id:str|None,provider_model:str|None,base_project_revision:int,base_graph_revision:int,input_snapshot:dict[str,Any],normalized:dict[str,Any],preview:dict[str,Any],decision:dict[str,Any]|None=None,plan_id:str|None=None)->str:
+def _store_agent_plan(database:Database,project_id:str,status:str,message:str,skill_id:str|None,provider_profile_id:str|None,provider_model:str|None,base_project_revision:int,base_graph_revision:int,input_snapshot:dict[str,Any],normalized:dict[str,Any],preview:dict[str,Any],decision:dict[str,Any]|None=None,plan_id:str|None=None,conversation_id:str|None=None,run_id:str|None=None,contract_snapshot_data:dict[str,Any]|None=None)->str:
     plan_id=plan_id or f"AGENT_{secrets.token_hex(8)}"; now=utcnow(); decision_payload={"reply":normalized.get("reply",""),"next_skill":normalized.get("next_skill"),"provider_response_id":normalized.get("provider_response_id"),**(decision or {})}
+    snapshot=contract_snapshot_data or {}
+    patch_payload=normalized.get("patch",{}) if isinstance(normalized.get("patch"),dict) else {}
     with database.connect() as c:
-        c.execute("INSERT INTO agent_plans_v5(id,project_id,status,message,skill_id,provider_profile_id,provider_model,base_project_revision,base_graph_revision,input_snapshot_json,patch_json,preview_json,decision_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(plan_id,project_id,status,message,skill_id,provider_profile_id,provider_model,base_project_revision,base_graph_revision,database.encode(redact(input_snapshot)),database.encode(redact(normalized.get("patch",{}))),database.encode(redact(preview)),database.encode(redact(decision_payload)),now,now))
+        c.execute("INSERT INTO agent_plans_v5(id,project_id,status,message,skill_id,provider_profile_id,provider_model,base_project_revision,base_graph_revision,input_snapshot_json,patch_json,preview_json,decision_json,conversation_id,run_id,contract_hash,contract_snapshot_json,workspace_operations_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(plan_id,project_id,status,message,skill_id,provider_profile_id,provider_model,base_project_revision,base_graph_revision,database.encode(redact(input_snapshot)),database.encode(redact(patch_payload)),database.encode(redact(preview)),database.encode(redact(decision_payload)),conversation_id,run_id,snapshot.get("bundle_hash"),database.encode(redact(snapshot)),database.encode(redact(patch_payload.get("workspace_operations") or [])),now,now))
         c.execute("INSERT INTO agent_plan_events_v5(plan_id,event_type,detail_json,created_at) VALUES(?,?,?,?)",(plan_id,"created",database.encode({"status":status,"requires_confirmation":preview.get("requires_confirmation",False)}),now))
     return plan_id
 
@@ -1333,17 +1564,22 @@ async def _create_agent_plan(body:AgentPlanCreateV3,request:Request)->dict[str,A
     if missing:raise HTTPException(422,{"message":"Agent 选择包含不存在的画布节点。","missing":missing})
     skill=_agent_skill(body.skill_id)
     skill_catalog=[workflow_manifest(skill_id) for skill_id in WORKFLOWS]
-    snapshot=build_input_snapshot(pdata["document"],graph["graph"],body.message,body.selected_node_ids,body.context,body.cost_boundary,pdata["revision"],graph["revision"],skill,skill_catalog)
-    provider_result,profile,model=await _submit_agent_provider(database,body,snapshot,skill)
+    bundle=contract_bundle(); bundle_snapshot=contract_snapshot(bundle)
+    assistant_project = compact_project_for_assistant(_assistant_sanitize_value(pdata["document"]))
+    snapshot=build_input_snapshot(assistant_project,graph["graph"],body.message,body.selected_node_ids,body.context,body.cost_boundary,pdata["revision"],graph["revision"],skill,skill_catalog)
+    snapshot["context_mode"] = assistant_project.get("contextMode", "bounded-current-state-v1")
+    snapshot["contract_snapshot"]=bundle_snapshot
+    provider_result,profile,model=await _submit_agent_provider(database,body,snapshot,skill,bundle)
     try:
-        normalized=normalize_agent_patch(provider_result,pdata["revision"],graph["revision"])
-        patch=AgentPatchV3.model_validate(normalized["patch"])
+        normalized=normalize_agent_patch(provider_result,pdata["revision"],graph["revision"],bundle_snapshot)
+        patch=ensure_workspace_operations(AgentPatchV3.model_validate(normalized["patch"]),graph["graph"],bundle_snapshot)
+        normalized["patch"]=patch.model_dump(mode="json")
         preview=patch_preview(graph["graph"],patch)
     except HTTPException:
         raise
     except Exception as exc:
         raise ProviderError(f"Agent 返回的结构化补丁无法通过校验：{exc}","validation",502) from exc
-    plan_id=_store_agent_plan(database,body.project_id,"awaiting_review",body.message,body.skill_id,profile["id"],model,pdata["revision"],graph["revision"],snapshot,normalized,preview)
+    plan_id=_store_agent_plan(database,body.project_id,"awaiting_review",body.message,body.skill_id,profile["id"],model,pdata["revision"],graph["revision"],snapshot,normalized,preview,contract_snapshot_data=bundle_snapshot)
     payload=_agent_plan_payload(database,_agent_plan_row(database,plan_id)); return {"id":plan_id,"status":payload["status"],"plan":payload,"reply":payload["reply"],"patch":payload["patch"],"preview":payload["preview"]}
 
 
@@ -1362,7 +1598,7 @@ async def _preview_agent_patch(body:AgentPatchPreviewV3,request:Request)->dict[s
     if body.project_revision is not None and body.project_revision!=pdata["revision"]:raise HTTPException(409,{"message":"项目版本已变化。","current_revision":pdata["revision"]})
     if body.graph_revision is not None and body.graph_revision!=graph["revision"]:raise HTTPException(409,{"message":"工作流图版本已变化。","current_revision":graph["revision"]})
     try:
-        normalized=normalize_agent_patch({"patch":body.patch},pdata["revision"],graph["revision"]); patch=AgentPatchV3.model_validate(normalized["patch"]); preview=patch_preview(graph["graph"],patch)
+        normalized=normalize_agent_patch({"patch":body.patch},pdata["revision"],graph["revision"],contract_snapshot(contract_bundle())); patch=ensure_workspace_operations(AgentPatchV3.model_validate(normalized["patch"]),graph["graph"],contract_snapshot(contract_bundle())); preview=patch_preview(graph["graph"],patch)
     except HTTPException:
         raise
     except Exception as exc:raise HTTPException(422,{"message":"结构化 Agent 补丁无效。","details":str(exc)}) from exc
@@ -1400,6 +1636,9 @@ async def agent_plan_events(plan_id:str,request:Request):
 async def _apply_agent_plan(plan_id:str,body:AgentPlanDecisionV3,request:Request)->dict[str,Any]:
     database=db(request); row=_agent_plan_row(database,plan_id)
     if row["status"]!="awaiting_review":raise HTTPException(409,f"Agent 计划不能从 {row['status']} 应用。")
+    stored_contract_hash=str(row["contract_hash"] or "") if "contract_hash" in row.keys() else ""
+    if stored_contract_hash and stored_contract_hash != contract_bundle()["bundle_hash"]:
+        raise HTTPException(409,{"message":"FRAMEFLOW 规范已更新，该 Agent 计划已冻结，请重新生成。","plan_contract_hash":stored_contract_hash,"current_contract_hash":contract_bundle()["bundle_hash"]})
     pdata=await read_project(row["project_id"],request); graph=ensure_graph(database,row["project_id"])
     expected_project=body.expected_project_revision or row["base_project_revision"]; expected_graph=body.expected_graph_revision or row["base_graph_revision"]
     if pdata["revision"]!=expected_project:raise HTTPException(409,{"message":"项目版本已变化，Agent 补丁已失效。","current_revision":pdata["revision"]})
@@ -1454,6 +1693,1602 @@ async def list_agent_candidates(project_id:str,request:Request):
     return {"candidates":[{"id":row["id"],"plan_id":row["plan_id"],"kind":row["kind"],"target_id":row["target_id"],"version":row["version"],"status":row["status"],"content":database.decode(row["content_json"],None),"metadata":database.decode(row["metadata_json"],{}),"created_at":row["created_at"],"accepted_at":row["accepted_at"]} for row in rows]}
 
 
+# ---------------------------------------------------------------------------
+# Desktop Agent workspace: durable conversations, local attachments and
+# resumable supervised runs.  This surface is intentionally additive; the
+# older V3 Agent plan routes above remain available as a compatibility path.
+# ---------------------------------------------------------------------------
+
+ASSISTANT_TERMINAL_STATUSES = {"succeeded", "failed", "canceled", "stale_contract"}
+ASSISTANT_EVENT_LOCK = threading.RLock()
+ASSISTANT_MAX_EVENT_DATA = 20000
+ASSISTANT_INPUT_TEXT_SAFE_LIMIT = 96000
+ASSISTANT_SYSTEM_CONTEXT_RESERVE = 8000
+ASSISTANT_VISION_CONTEXT_LIMIT = 12000
+VISION_ANALYSIS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string"},
+        "observations": {"type": "array", "items": {"type": "object", "additionalProperties": True}},
+        "uncertainties": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["summary", "observations", "uncertainties"],
+    "additionalProperties": True,
+}
+
+
+def _assistant_clip_provider_text(value: Any, maximum: int) -> str:
+    """Bound provider-facing prose without exposing local storage details."""
+
+    text = str(value or "").replace("\x00", "")
+    if maximum <= 0:
+        return ""
+    if len(text) <= maximum:
+        return text
+    marker = f"\n[… 已省略 {len(text) - maximum} 个字符；原始内容仍保留在当前项目中。]"
+    if len(marker) >= maximum:
+        return text[:maximum]
+    return text[: maximum - len(marker)].rstrip() + marker
+
+
+def _assistant_provider_prompt_limit(adapter: Any) -> int:
+    """Read a provider limit when available, with a safe local fallback."""
+
+    provider_limit = 120000
+    try:
+        limits = adapter.contract().get("input_limits", {}).get("orchestrator", {})
+        provider_limit = int(limits.get("max_prompt_chars") or provider_limit)
+    except (AttributeError, TypeError, ValueError):
+        pass
+    return max(1000, min(ASSISTANT_INPUT_TEXT_SAFE_LIMIT, provider_limit - ASSISTANT_SYSTEM_CONTEXT_RESERVE))
+
+
+def _assistant_bounded_sections(sections: list[str], maximum: int) -> str:
+    """Keep all attachment/source labels while sharing a bounded text budget."""
+
+    if not sections or maximum <= 0:
+        return ""
+    separator_budget = max(0, maximum - 2 * max(0, len(sections) - 1))
+    per_section = max(1, separator_budget // len(sections))
+    bounded = [_assistant_clip_provider_text(section, per_section) for section in sections]
+    return "\n\n".join(bounded)[:maximum]
+
+
+def _assistant_prompt_text(message: str, snapshot: dict[str, Any], attachment_blocks: list[str], vision_report: dict[str, Any], maximum: int) -> tuple[str, dict[str, int | bool]]:
+    """Compose a provider-safe prompt, prioritising message and current state."""
+
+    context_text = json.dumps(snapshot, ensure_ascii=False)
+    base = str(message) + "\n\nFRAMEFLOW 项目上下文（已移除本地路径和凭据）：\n" + context_text
+    remaining = maximum - len(base)
+    attachment_prefix = "\n\n附件引用：\n"
+    vision_prefix = "\n\n图片 vision 分析结果（仅事实观察，不代表 QA）：\n"
+    vision_text = json.dumps(_assistant_sanitize_value(vision_report), ensure_ascii=False) if vision_report else ""
+    # Keep a small reserve for image observations so document text does not
+    # silently consume the entire provider budget.
+    vision_limit = min(ASSISTANT_VISION_CONTEXT_LIMIT, len(vision_text)) if vision_text else 0
+    attachment_limit = max(0, remaining - len(attachment_prefix) - (len(vision_prefix) + vision_limit if vision_text else 0))
+    bounded_attachments = _assistant_bounded_sections(attachment_blocks, attachment_limit)
+    if bounded_attachments:
+        base += attachment_prefix + bounded_attachments
+    remaining = maximum - len(base)
+    if vision_text and remaining > len(vision_prefix):
+        base += vision_prefix + _assistant_clip_provider_text(vision_text, remaining - len(vision_prefix))
+    if len(base) > maximum:
+        # This is only a final defensive guard for unusually small custom
+        # provider limits. The normal 120k contract is handled structurally
+        # above, so the user message remains at the front of the prompt.
+        base = _assistant_clip_provider_text(base, maximum)
+    return base, {
+        "message": "已按 Provider 输入预算整理当前工作区上下文。",
+        "input_chars": len(base),
+        "input_budget": maximum,
+        "project_context_chars": len(context_text),
+        "attachment_context_chars": len(bounded_attachments),
+        "vision_context_chars": min(vision_limit, len(vision_text)),
+        "project_context_compacted": snapshot.get("context_mode") == "bounded-current-state-v1" or (snapshot.get("project_document") or {}).get("contextMode") == "bounded-current-state-v1",
+    }
+
+
+def _assistant_sanitize_value(value: Any, key: str = "") -> Any:
+    """Remove local paths and credential-shaped values from Provider input."""
+
+    lowered = str(key).lower()
+    if any(marker in lowered for marker in ("local_path", "storage_path", "file_path", "filepath", "absolute_path", "credential_ref")):
+        return "[LOCAL_REFERENCE]"
+    if isinstance(value, dict):
+        return {str(item_key): _assistant_sanitize_value(item, str(item_key)) for item_key, item in value.items()}
+    if isinstance(value, list):
+        return [_assistant_sanitize_value(item, key) for item in value]
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.startswith(("/", "~/")) or re.match(r"^[A-Za-z]:[\\/]", stripped):
+            return "[LOCAL_REFERENCE]"
+    return value
+
+
+def _assistant_attachment_payload(database: Database, row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
+    item = dict(row)
+    metadata = database.decode(item.get("metadata_json"), {})
+    extracted = str(item.get("extracted_text") or "")
+    return {
+        "id": item["id"],
+        "project_id": item["project_id"],
+        "conversation_id": item.get("conversation_id"),
+        "message_id": item.get("message_id"),
+        "name": item["original_name"],
+        "safe_name": item["safe_name"],
+        "mime_type": item["mime_type"],
+        "extension": item["extension"],
+        "byte_size": int(item["byte_size"]),
+        "sha256": item["sha256"],
+        "kind": item["kind"],
+        "delivery_mode": item["delivery_mode"],
+        "analysis_status": item["analysis_status"],
+        "extracted_chars": len(extracted),
+        "extraction_error": item.get("extraction_error"),
+        "metadata": metadata,
+        "url": f"/api/v2/assistant/attachments/{item['id']}",
+        "created_at": item["created_at"],
+        "updated_at": item["updated_at"],
+    }
+
+
+def _assistant_conversation_row(database: Database, conversation_id: str, project_id: str | None = None) -> sqlite3.Row:
+    with database.connect() as connection:
+        row = connection.execute("SELECT * FROM conversations WHERE id=?", (conversation_id,)).fetchone()
+    if not row or (project_id is not None and str(row["project_id"]) != str(project_id)):
+        raise HTTPException(404, "创作助手会话不存在。")
+    return row
+
+
+def _assistant_conversation_payload(database: Database, row: sqlite3.Row) -> dict[str, Any]:
+    consent = database.decode(row["external_consent_json"] if "external_consent_json" in row.keys() else "{}", {})
+    with database.connect() as connection:
+        message_count = int(connection.execute("SELECT COUNT(*) FROM messages WHERE conversation_id=?", (row["id"],)).fetchone()[0])
+        latest_message = connection.execute("SELECT content FROM messages WHERE conversation_id=? ORDER BY created_at DESC,id DESC LIMIT 1", (row["id"],)).fetchone()
+        plan_columns = {str(item[1]) for item in connection.execute("PRAGMA table_info(agent_plans_v5)").fetchall()}
+        pending_plans = int(connection.execute(
+            "SELECT COUNT(*) FROM agent_plans_v5 WHERE conversation_id=? AND status='awaiting_review'",
+            (row["id"],),
+        ).fetchone()[0]) if "conversation_id" in plan_columns else 0
+    return {
+        "id": row["id"],
+        "project_id": row["project_id"],
+        "title": row["title"] if "title" in row.keys() and row["title"] else "未命名会话",
+        "assistant_mode": str(row["assistant_mode"] if "assistant_mode" in row.keys() else "general"),
+        "status": row["status"] if "status" in row.keys() else "active",
+        "last_contract_hash": row["last_contract_hash"] if "last_contract_hash" in row.keys() else None,
+        "external_consent": sorted(str(key) for key in consent) if isinstance(consent, dict) else [],
+        "message_count": message_count,
+        "last_message": str(latest_message["content"] or "")[:240] if latest_message else "",
+        "pending_plan_count": pending_plans,
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def _assistant_run_row(database: Database, run_id: str) -> sqlite3.Row:
+    with database.connect() as connection:
+        row = connection.execute("SELECT * FROM assistant_runs_v18 WHERE id=?", (run_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, "创作助手运行不存在。")
+    return row
+
+
+def _assistant_run_events(database: Database, run_id: str, after_sequence: int = 0) -> list[dict[str, Any]]:
+    with database.connect() as connection:
+        rows = connection.execute(
+            "SELECT id,run_id,sequence,item_id,event_type,status,data_json,created_at FROM assistant_run_events_v18 WHERE run_id=? AND sequence>? ORDER BY sequence",
+            (run_id, after_sequence),
+        ).fetchall()
+    return [{
+        "id": row["id"],
+        "run_id": row["run_id"],
+        "sequence": row["sequence"],
+        "item_id": row["item_id"],
+        "event_type": row["event_type"],
+        "status": row["status"],
+        "data": database.decode(row["data_json"], {}),
+        "created_at": row["created_at"],
+    } for row in rows]
+
+
+def _assistant_run_payload(database: Database, row: sqlite3.Row, include_events: bool = False) -> dict[str, Any]:
+    result = database.decode(row["result_json"], {}) or {}
+    error = database.decode(row["error_json"], None)
+    awaiting_value = database.decode(row["awaiting_confirmation_json"], None)
+    awaiting = awaiting_value if isinstance(awaiting_value, dict) and awaiting_value else None
+    with database.connect() as connection:
+        attachments = connection.execute(
+            "SELECT a.* FROM assistant_attachments_v18 a JOIN messages m ON m.id=a.message_id WHERE m.id=? ORDER BY a.created_at",
+            (row["source_message_id"],),
+        ).fetchall()
+    stored_contract = database.decode(row["contract_snapshot_json"], {}) or {}
+    compact_contract = contract_snapshot(stored_contract) if isinstance(stored_contract, dict) and stored_contract.get("bundle_hash") and "prompt_contract" in stored_contract else stored_contract
+    payload = {
+        "id": row["id"],
+        "project_id": row["project_id"],
+        "conversation_id": row["conversation_id"],
+        "assistant_mode": str(row["assistant_mode"] if "assistant_mode" in row.keys() else "general"),
+        "source_message_id": row["source_message_id"],
+        "client_message_id": row["client_message_id"],
+        "status": row["status"],
+        "contract_hash": row["contract_hash"],
+        "contract_snapshot": compact_contract,
+        "skill": database.decode(row["skill_snapshot_json"], {}) or {},
+        "provider_profile_id": row["provider_profile_id"],
+        "provider_model": row["provider_model"],
+        "base_project_revision": row["base_project_revision"],
+        "base_graph_revision": row["base_graph_revision"],
+        "base_timeline_revision": row["base_timeline_revision"],
+        "checkpoint": database.decode(row["checkpoint_json"], {}) or {},
+        "result": result,
+        "error": error,
+        "awaiting_confirmation": awaiting,
+        "attachments": [_assistant_attachment_payload(database, item) for item in attachments],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+    if include_events:
+        payload["events"] = _assistant_run_events(database, row["id"])
+    return payload
+
+
+def _assistant_emit(database: Database, run_id: str, event_type: str, status: str = "running", data: dict[str, Any] | None = None, item_id: str | None = None) -> dict[str, Any]:
+    safe_data = redact(data or {})
+    if len(database.encode(safe_data)) > ASSISTANT_MAX_EVENT_DATA:
+        safe_data = {"message": "事件内容已按安全上限截断。"}
+    now = utcnow()
+    with ASSISTANT_EVENT_LOCK, database.connect() as connection:
+        row = connection.execute("SELECT COALESCE(MAX(sequence),0) AS sequence FROM assistant_run_events_v18 WHERE run_id=?", (run_id,)).fetchone()
+        sequence = int(row["sequence"] or 0) + 1
+        connection.execute(
+            "INSERT INTO assistant_run_events_v18(run_id,sequence,item_id,event_type,status,data_json,created_at) VALUES(?,?,?,?,?,?,?)",
+            (run_id, sequence, item_id, event_type, status, database.encode(safe_data), now),
+        )
+    return {"run_id": run_id, "sequence": sequence, "item_id": item_id, "event_type": event_type, "status": status, "data": safe_data, "created_at": now}
+
+
+def _assistant_update_run(database: Database, run_id: str, *, status: str | None = None, checkpoint: dict[str, Any] | None = None, result: dict[str, Any] | None = None, error: dict[str, Any] | None = None, awaiting: dict[str, Any] | None = None) -> None:
+    sets: list[str] = []
+    values: list[Any] = []
+    if status is not None:
+        sets.append("status=?"); values.append(status)
+    if checkpoint is not None:
+        sets.append("checkpoint_json=?"); values.append(database.encode(redact(checkpoint)))
+    if result is not None:
+        sets.append("result_json=?"); values.append(database.encode(redact(result)))
+    if error is not None:
+        sets.append("error_json=?"); values.append(database.encode(redact(error)))
+    if awaiting is not None:
+        sets.append("awaiting_confirmation_json=?"); values.append(database.encode(redact(awaiting)))
+    if not sets:
+        return
+    sets.append("updated_at=?"); values.append(utcnow()); values.append(run_id)
+    with database.connect() as connection:
+        connection.execute(f"UPDATE assistant_runs_v18 SET {','.join(sets)} WHERE id=?", values)
+
+
+def _assistant_mark_plan_stale(database: Database, plan_id: str, current_contract_hash: str, plan_contract_hash: str) -> None:
+    """Freeze a review plan once the authoritative contract has changed."""
+
+    now = utcnow()
+    with database.connect() as connection:
+        row = connection.execute("SELECT status,decision_json FROM agent_plans_v5 WHERE id=?", (plan_id,)).fetchone()
+        if not row or row["status"] != "awaiting_review":
+            return
+        decision = database.decode(row["decision_json"], {}) or {}
+        decision = {
+            **decision,
+            "contract_stale": True,
+            "plan_contract_hash": plan_contract_hash,
+            "current_contract_hash": current_contract_hash,
+            "stale_reason": "FRAMEFLOW 规范已更新，必须按当前规范重新生成计划。",
+        }
+        connection.execute("UPDATE agent_plans_v5 SET status='stale_contract',decision_json=?,updated_at=? WHERE id=?", (database.encode(decision), now, plan_id))
+        connection.execute("INSERT INTO agent_plan_events_v5(plan_id,event_type,detail_json,created_at) VALUES(?,?,?,?)", (plan_id, "contract_stale", database.encode(decision), now))
+
+
+def _assistant_internal_attachments(database: Database, message_id: str) -> list[sqlite3.Row]:
+    with database.connect() as connection:
+        return connection.execute(
+            "SELECT a.* FROM assistant_attachments_v18 a JOIN assistant_message_attachments_v18 ma ON ma.attachment_id=a.id WHERE ma.message_id=? ORDER BY ma.ordinal,a.created_at",
+            (message_id,),
+        ).fetchall()
+
+
+def _assistant_prepare_attachments(database: Database, data_dir: Path, project_id: str, attachment_ids: list[str], profile: dict[str, Any]) -> list[sqlite3.Row]:
+    if not attachment_ids:
+        return []
+    with database.connect() as connection:
+        rows = connection.execute(
+            f"SELECT * FROM assistant_attachments_v18 WHERE project_id=? AND id IN ({','.join('?' for _ in attachment_ids)})",
+            (project_id, *attachment_ids),
+        ).fetchall()
+    by_id = {str(row["id"]): row for row in rows}
+    if len(by_id) != len(set(attachment_ids)):
+        missing = [item for item in attachment_ids if item not in by_id]
+        raise HTTPException(404, {"message": "创作助手附件不存在或不属于当前项目。", "missing": missing})
+    try:
+        vision_supported = adapter_for_profile(profile).supports("vision")
+    except Exception:
+        vision_supported = False
+    total_extracted = 0
+    prepared: list[sqlite3.Row] = []
+    for attachment_id in attachment_ids:
+        row = by_id[attachment_id]
+        path = Path(row["storage_path"])
+        if not attachment_file_is_safe(path, data_dir, project_id):
+            raise HTTPException(409, "附件存储路径不在当前项目的 assistant 目录内。")
+        mode, reason = delivery_mode_for_attachment(str(row["kind"]), vision_supported=vision_supported, size=int(row["byte_size"]))
+        analysis_status = "not_analyzed"
+        extracted_text = ""
+        extraction_error = reason
+        if str(row["kind"]) == "document":
+            extracted = extract_document(path, row["original_name"], row["mime_type"], MAX_EXTRACTED_CHARS)
+            analysis_status = str(extracted.get("status") or "failed")
+            extracted_text = str(extracted.get("text") or "")
+            extraction_error = extracted.get("error")
+            if analysis_status == "succeeded":
+                if total_extracted + len(extracted_text) > MAX_TOTAL_EXTRACTED_CHARS:
+                    remaining = max(0, MAX_TOTAL_EXTRACTED_CHARS - total_extracted)
+                    extracted_text = extracted_text[:remaining]
+                    analysis_status = "limited"
+                    extraction_error = "本次运行的附件抽取文本达到 80,000 字符上限。"
+                    mode = "project_reference"
+                total_extracted += len(extracted_text)
+            else:
+                mode = "project_reference"
+        elif str(row["kind"]) == "image":
+            analysis_status = "ready" if mode == "multimodal" else "unavailable"
+        elif str(row["kind"]) in {"audio", "video", "reference"}:
+            analysis_status = "not_analyzed"
+        else:
+            analysis_status = "unsupported"
+            mode = "unsupported"
+        with database.connect() as connection:
+            connection.execute(
+                "UPDATE assistant_attachments_v18 SET delivery_mode=?,analysis_status=?,extracted_text=?,extraction_error=?,updated_at=? WHERE id=? AND project_id=?",
+                (mode, analysis_status, extracted_text, extraction_error, utcnow(), attachment_id, project_id),
+            )
+            refreshed = connection.execute("SELECT * FROM assistant_attachments_v18 WHERE id=?", (attachment_id,)).fetchone()
+        if refreshed:
+            prepared.append(refreshed)
+    return prepared
+
+
+def _assistant_external_confirmation_payload(profile: dict[str, Any], model: str, rows: list[sqlite3.Row]) -> dict[str, Any]:
+    return {
+        "provider_profile_id": profile["id"],
+        "provider_name": profile["display_name"],
+        "provider_type": profile["provider_type"],
+        "model": model,
+        "purpose": "图片 vision 理解或文档抽取文本编排",
+        "attachments": [{"id": row["id"], "name": row["original_name"], "mime_type": row["mime_type"], "byte_size": int(row["byte_size"]), "delivery_mode": row["delivery_mode"]} for row in rows if row["delivery_mode"] in {"multimodal", "extracted_text"}],
+    }
+
+
+def _assistant_contract_for_run(database: Database, row: sqlite3.Row) -> dict[str, Any]:
+    stored = database.decode(row["contract_snapshot_json"], {})
+    if isinstance(stored, dict) and stored.get("bundle_hash"):
+        return stored
+    return contract_bundle()
+
+
+def _assistant_patch_claims_forbidden(value: Any, key: str = "") -> bool:
+    lowered = str(key).lower().replace("_", "")
+    forbidden_keys = {"qadecision", "promptqadecision", "registered", "regulatorregistered", "productionready", "generated", "imageqa", "mediaqa"}
+    if lowered in forbidden_keys:
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in {"true", "approved", "ready", "registered", "production_ready", "production-ready"}
+    if isinstance(value, dict):
+        return any(_assistant_patch_claims_forbidden(item, str(item_key)) for item_key, item in value.items())
+    if isinstance(value, list):
+        return any(_assistant_patch_claims_forbidden(item, key) for item in value)
+    return False
+
+
+def _assistant_storyboard_issues(proposed: dict[str, Any], source: dict[str, Any]) -> list[str]:
+    """Reuse the existing storyboard shape gate for Agent story candidates."""
+
+    issues = _validate_storyboard_output({
+        "proposedScript": proposed.get("script") or "",
+        "shots": proposed.get("shots") or [],
+        "assetHandoff": source.get("assetHandoff") or {},
+    })
+    if not str(proposed.get("script") or "").strip() and str(source.get("script_empty_reason") or "").strip():
+        issues = [item for item in issues if item != "proposedScript 缺失或为空"]
+    return issues
+
+
+def _assistant_normalize_operation_content(operation: dict[str, Any], doc: dict[str, Any], bundle: dict[str, Any], attachment_ids: list[str]) -> dict[str, Any]:
+    result = dict(operation)
+    result["contract_snapshot"] = contract_snapshot(bundle)
+    source_ids = [str(item) for item in result.get("source_attachment_ids") or attachment_ids]
+    if any(item not in attachment_ids for item in source_ids):
+        raise ProviderError("Agent 操作引用了不属于当前消息的附件。", "validation", 502)
+    result["source_attachment_ids"] = source_ids
+    content = result.get("content") if result.get("content") is not None else result.get("after")
+    if _assistant_patch_claims_forbidden(result.get("after"), "after") or _assistant_patch_claims_forbidden(content, "content"):
+        raise ProviderError("Agent 不得伪造 QA、登记或生产就绪状态。", "validation", 502)
+    workspace = str(result.get("workspace") or "")
+    if workspace == "assets" and isinstance(content, dict):
+        asset_id = str(result.get("target_id") or content.get("id") or "")
+        asset = next((item for item in doc.get("assets", []) if isinstance(item, dict) and str(item.get("id")) == asset_id), None)
+        asset_class = _asset_class(asset) if asset else canonical_asset_class(content.get("assetClass") or content.get("asset_class") or "unknown")
+        raw_prompt = str(content.get("prompt") or "")
+        pack = content.get("promptPack") if isinstance(content.get("promptPack"), dict) else content.get("prompt_pack") if isinstance(content.get("prompt_pack"), dict) else {}
+        if raw_prompt or pack:
+            canonical = canonicalize_prompt_output(asset_class, pack, raw_prompt, context={"shots": doc.get("shots") or []})
+            content = {**content, **canonical, "generationChoiceStatus": "user-confirmation-required", "promptQaDecision": "Pending"}
+            result["content"] = content
+            result["after"] = content
+    elif workspace == "audio" and isinstance(content, dict):
+        audio_content = content.get("audio") if isinstance(content.get("audio"), dict) else content
+        if isinstance(audio_content, dict) and ("audioDetails" in audio_content or "sourceText" in audio_content or "textStatus" in audio_content):
+            canonical = canonicalize_prompt_output("audio", audio_content.get("promptPack") or audio_content, str(audio_content.get("prompt") or audio_content.get("sourceText") or ""), context={"shots": doc.get("shots") or []})
+            audio_details = dict(canonical["promptPack"].get("audioDetails") or {})
+            audio_defaults: dict[str, Any] = {
+                "sourceText": "", "providerText": "", "textStatus": "missing", "voiceSource": "system-preset",
+                "voiceIdentity": "", "language": "", "locale": "", "dialect": "", "performanceDirection": "",
+                "emotion": "", "intensity": "", "pace": "", "pausePlan": [], "pronunciation": {},
+                "provider": "minimax", "model": "speech-2.8-hd", "voiceId": "", "providerVoiceId": "",
+                "providerRegion": "cn", "speed": 1.0, "pitch": 0, "volume": 1.0, "languageBoost": None,
+                "targetDuration": None, "relevantShots": [], "continuityChecklist": [], "mustPreserve": [], "mustAvoid": [],
+            }
+            for field in bundle["audio_contract"]["required_fields"]:
+                audio_details.setdefault(field, deepcopy(audio_defaults.get(field, "")))
+            audio_details["schemaVersion"] = bundle["audio_contract"]["version"]
+            if str(audio_details.get("provider") or "minimax").lower() != "minimax":
+                raise ProviderError("当前工作台声音候选必须使用 MiniMax Speech Web Provider。", "validation", 502)
+            if not isinstance(audio_details.get("relevantShots"), list):
+                raise ProviderError("声音候选的 relevantShots 必须是逐镜头数组。", "validation", 502)
+            content = {**content, **canonical, "audioDetails": audio_details}
+            result["content"] = content
+            result["after"] = content
+    elif workspace == "story" and isinstance(content, dict) and any(key in content for key in ("script", "scenes", "shots", "spec")):
+        proposed = deepcopy(doc)
+        proposed_content = content.get("story") if isinstance(content.get("story"), dict) else content
+        if "spec" in proposed_content:
+            proposed["storySpec"] = proposed_content["spec"]
+        for key in ("script", "scenes", "shots"):
+            if key in proposed_content and proposed_content[key] is not None:
+                proposed[key] = proposed_content[key]
+        try:
+            StoryDocumentUpdateV3.model_validate({"expected_revision": 1, "spec": proposed.get("storySpec") or {}, "script": proposed.get("script") or "", "scenes": proposed.get("scenes") or [], "shots": proposed.get("shots") or []})
+        except Exception as exc:
+            raise ProviderError(f"Agent 剧本/分镜候选未通过字段校验：{exc}", "validation", 502) from exc
+        storyboard_issues = _assistant_storyboard_issues(proposed, proposed_content)
+        if storyboard_issues:
+            raise ProviderError("Agent 剧本/分镜候选未通过既有 storyboard 校验：" + "；".join(storyboard_issues), "validation", 502)
+        checks = story_checks(proposed)
+        if checks.get("errors", 0):
+            raise ProviderError("Agent 剧本/分镜候选包含阻塞性校验错误。", "validation", 502)
+    elif workspace == "timeline" and isinstance(content, dict):
+        timeline_content = content.get("document") if isinstance(content.get("document"), dict) else content
+        if "tracks" in timeline_content:
+            try:
+                TimelineUpdateV3.model_validate({"expected_revision": 1, "document": timeline_content})
+            except Exception as exc:
+                raise ProviderError(f"Agent 时间线候选未通过结构校验：{exc}", "validation", 502) from exc
+    return result
+
+
+def _assistant_validate_patch(patch: AgentPatchV3, doc: dict[str, Any], bundle: dict[str, Any], attachment_ids: list[str]) -> AgentPatchV3:
+    operations = [_assistant_normalize_operation_content(item.model_dump(mode="json"), doc, bundle, attachment_ids) for item in patch.workspace_operations]
+    return patch.model_copy(update={"workspace_operations": [AgentWorkspaceOperationV3.model_validate(item) for item in operations]})
+
+
+def _assistant_sse(event: dict[str, Any]) -> str:
+    event_type = str(event.get("event_type") or "message")
+    return f"event: {event_type}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+
+async def _assistant_event_stream(database: Database, run_id: str, after_sequence: int = 0):
+    sequence = max(0, int(after_sequence))
+    idle = 0
+    while True:
+        events = _assistant_run_events(database, run_id, sequence)
+        for event in events:
+            sequence = max(sequence, int(event["sequence"]))
+            yield _assistant_sse(event)
+        row = _assistant_run_row(database, run_id)
+        if row["status"] in ASSISTANT_TERMINAL_STATUSES or row["status"] == "awaiting_external_confirmation":
+            snapshot = {"run_id": run_id, "sequence": sequence, "status": row["status"]}
+            yield f"event: snapshot_complete\ndata: {json.dumps(snapshot, ensure_ascii=False)}\n\n"
+            return
+        idle += 1
+        if idle > 1500:
+            yield f"event: snapshot_complete\ndata: {json.dumps({'run_id': run_id, 'sequence': sequence, 'status': row['status'], 'timeout': True}, ensure_ascii=False)}\n\n"
+            return
+        await asyncio.sleep(0.2)
+
+
+@app.get("/api/v2/projects/{project_id}/assistant/conversations")
+async def list_assistant_conversations(project_id: str, request: Request, assistant_mode: str | None = None):
+    database = db(request)
+    await read_project(project_id, request)
+    with database.connect() as connection:
+        if assistant_mode and assistant_mode in {"general", "voice-preparation"}:
+            rows = connection.execute("SELECT * FROM conversations WHERE project_id=? AND assistant_mode=? ORDER BY updated_at DESC", (project_id, assistant_mode)).fetchall()
+        else:
+            rows = connection.execute("SELECT * FROM conversations WHERE project_id=? ORDER BY updated_at DESC", (project_id,)).fetchall()
+    return {"project_id": project_id, "conversations": [_assistant_conversation_payload(database, row) for row in rows]}
+
+
+@app.post("/api/v2/projects/{project_id}/assistant/conversations")
+async def create_assistant_conversation(project_id: str, body: AssistantConversationCreateV3, request: Request):
+    database = db(request)
+    await read_project(project_id, request)
+    conversation_id = f"CONV_{secrets.token_hex(8)}"
+    now = utcnow()
+    with database.connect() as connection:
+        connection.execute("INSERT INTO conversations(id,project_id,title,status,last_contract_hash,external_consent_json,assistant_mode,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)", (conversation_id, project_id, body.title.strip(), "active", contract_bundle()["bundle_hash"], "{}", body.assistant_mode, now, now))
+        row = connection.execute("SELECT * FROM conversations WHERE id=?", (conversation_id,)).fetchone()
+    return {"conversation": _assistant_conversation_payload(database, row)}
+
+
+@app.patch("/api/v2/assistant/conversations/{conversation_id}")
+async def update_assistant_conversation(conversation_id: str, body: AssistantConversationUpdateV3, request: Request):
+    database = db(request)
+    _assistant_conversation_row(database, conversation_id)
+    title = body.title.strip()
+    if not title:
+        raise HTTPException(422, "会话标题不能为空。")
+    with database.connect() as connection:
+        connection.execute("UPDATE conversations SET title=?,updated_at=? WHERE id=?", (title, utcnow(), conversation_id))
+        row = connection.execute("SELECT * FROM conversations WHERE id=?", (conversation_id,)).fetchone()
+    return {"conversation": _assistant_conversation_payload(database, row)}
+
+
+@app.get("/api/v2/assistant/conversations/{conversation_id}/messages")
+async def assistant_conversation_messages(conversation_id: str, request: Request):
+    database = db(request)
+    _assistant_conversation_row(database, conversation_id)
+    with database.connect() as connection:
+        rows = connection.execute("SELECT * FROM messages WHERE conversation_id=? ORDER BY created_at,id", (conversation_id,)).fetchall()
+    payload = []
+    for row in rows:
+        with database.connect() as connection:
+            attachments = connection.execute("SELECT a.* FROM assistant_attachments_v18 a JOIN assistant_message_attachments_v18 ma ON ma.attachment_id=a.id WHERE ma.message_id=? ORDER BY ma.ordinal,a.created_at", (row["id"],)).fetchall()
+        payload.append({"id": row["id"], "role": row["role"], "content": row["content"], "message_type": row["message_type"] if "message_type" in row.keys() else "text", "client_message_id": row["client_message_id"] if "client_message_id" in row.keys() else None, "metadata": database.decode(row["metadata_json"], {}), "attachments": [_assistant_attachment_payload(database, item) for item in attachments], "created_at": row["created_at"]})
+    return {"conversation_id": conversation_id, "messages": payload}
+
+
+@app.post("/api/v2/projects/{project_id}/assistant/attachments")
+async def upload_assistant_attachment(project_id: str, request: Request, file: UploadFile = File(...), conversation_id: str | None = None):
+    database = db(request)
+    await read_project(project_id, request)
+    if conversation_id:
+        _assistant_conversation_row(database, conversation_id, project_id)
+    raw_name = str(file.filename or "attachment.bin")
+    if "\x00" in raw_name or "/" in raw_name or "\\" in raw_name or Path(raw_name).name != raw_name:
+        raise HTTPException(422, "附件文件名不能包含路径或路径穿越片段。")
+    original_name = safe_attachment_name(raw_name)
+    extension = Path(original_name).suffix.lower()
+    if extension not in SUPPORTED_EXTENSIONS:
+        raise HTTPException(415, "创作助手支持图片、PDF、DOCX、XLSX、CSV、TXT、Markdown，以及本地保存的音视频/SRT/VTT。")
+    try:
+        mime_type = validate_attachment_mime(original_name, file.content_type)
+    except ValueError as exc:
+        raise HTTPException(415, str(exc)) from exc
+    kind = attachment_kind(original_name, mime_type)
+    attachment_id = f"ATT_{secrets.token_hex(8)}"
+    destination = attachment_destination(DATA_DIR, project_id, attachment_id, original_name)
+    staged = None
+    finalized = False
+    try:
+        staged = await stage_attachment(file, destination, MAX_ATTACHMENT_BYTES)
+        if staged.size <= 0:
+            raise HTTPException(422, "不能上传空附件。")
+        finalize_staged_upload(staged, destination)
+        finalized = True
+        now = utcnow()
+        initial_mode = "project_reference" if kind in {"audio", "video", "reference"} else "pending"
+        initial_status = "not_analyzed" if initial_mode == "project_reference" else "pending"
+        with database.connect() as connection:
+            connection.execute("INSERT INTO assistant_attachments_v18(id,project_id,conversation_id,message_id,original_name,safe_name,mime_type,extension,byte_size,sha256,storage_path,kind,delivery_mode,analysis_status,metadata_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (attachment_id, project_id, conversation_id, None, original_name, original_name, mime_type, extension, staged.size, staged.sha256, str(destination.resolve()), kind, initial_mode, initial_status, database.encode({"claimed_mime_type": file.content_type, "source": "assistant-composer"}), now, now))
+            row = connection.execute("SELECT * FROM assistant_attachments_v18 WHERE id=?", (attachment_id,)).fetchone()
+        return {"attachment": _assistant_attachment_payload(database, row)}
+    except UploadTooLarge as exc:
+        raise HTTPException(413, {"message": "单个创作助手附件不能超过 100MB。", "maximum": exc.maximum, "received": exc.received}) from exc
+    except HTTPException:
+        if finalized:
+            cleanup_file(destination)
+        raise
+    except Exception:
+        if finalized:
+            cleanup_file(destination)
+        raise
+    finally:
+        if staged is not None and not finalized:
+            cleanup_staged_upload(staged)
+        if staged is not None and finalized:
+            cleanup_staged_upload(staged)
+
+
+@app.get("/api/v2/assistant/attachments/{attachment_id}")
+async def read_assistant_attachment(attachment_id: str, request: Request):
+    database = db(request)
+    with database.connect() as connection:
+        row = connection.execute("SELECT * FROM assistant_attachments_v18 WHERE id=?", (attachment_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, "附件不存在。")
+    path = Path(row["storage_path"])
+    if not attachment_file_is_safe(path, DATA_DIR, str(row["project_id"])):
+        raise HTTPException(409, "附件存储路径无效。")
+    return FileResponse(path, media_type=row["mime_type"], headers={"Content-Disposition": "inline"})
+
+
+def _assistant_structured_result(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    structured = value.get("structured")
+    if isinstance(structured, dict):
+        return structured
+    return value
+
+
+def _assistant_schedule(application: FastAPI, run_id: str) -> None:
+    existing = ASSISTANT_RUNTIME_TASKS.get(run_id)
+    if existing and not existing.done():
+        return
+    task = asyncio.create_task(_execute_assistant_run(application, run_id))
+    ASSISTANT_RUNTIME_TASKS[run_id] = task
+
+    def cleanup(completed: asyncio.Task[Any]) -> None:
+        if ASSISTANT_RUNTIME_TASKS.get(run_id) is completed:
+            ASSISTANT_RUNTIME_TASKS.pop(run_id, None)
+        if not completed.cancelled():
+            try:
+                completed.exception()
+            except Exception:
+                pass
+
+    task.add_done_callback(cleanup)
+
+
+async def _execute_assistant_run(application: FastAPI, run_id: str) -> None:
+    database: Database = application.state.db
+    row = _assistant_run_row(database, run_id)
+    if row["status"] not in {"preparing", "running"}:
+        return
+    project_id = str(row["project_id"])
+    assistant_mode = str(row["assistant_mode"] if "assistant_mode" in row.keys() else "general")
+    try:
+        with database.connect() as connection:
+            project_row = connection.execute("SELECT document_json,revision FROM projects WHERE id=?", (project_id,)).fetchone()
+            message_row = connection.execute("SELECT content FROM messages WHERE id=?", (row["source_message_id"],)).fetchone()
+        if not project_row or not message_row:
+            raise ProviderError("项目或用户消息不存在，Agent 运行无法恢复。", "configuration", 409)
+        project_document = database.decode(project_row["document_json"], {}) or {}
+        graph = ensure_graph(database, project_id)
+        timeline = ensure_timeline(database, project_id)
+        bundle = _assistant_contract_for_run(database, row)
+        current_bundle = contract_bundle()
+        if not bundle.get("bundle_hash"):
+            bundle = current_bundle
+        elif str(bundle.get("bundle_hash")) != str(current_bundle.get("bundle_hash")):
+            stale_error = {"message": "FRAMEFLOW 规范在运行准备期间已更新，请重新发送本条消息。", "kind": "contract_stale", "status": 409}
+            _assistant_update_run(database, run_id, status="stale_contract", error=stale_error, checkpoint={"last_event": "contract_stale"})
+            _assistant_emit(database, run_id, "run_failed", "failed", stale_error, "contract_validation")
+            return
+        bundle = current_bundle
+        skill = database.decode(row["skill_snapshot_json"], {}) or {}
+        profile = get_profile(database, str(row["provider_profile_id"]))
+        if assistant_mode == AUDIO_ASSISTANT_MODE and profile.get("provider_type") != "opencode":
+            raise ProviderError("声音 AI 对话必须使用 OpenCode 编排 Provider；MiniMax 仅负责后续 TTS 生成。", "configuration", 409)
+        model = str(row["provider_model"] or profile.get("model_config", {}).get("orchestrator_model") or "")
+        if not model:
+            raise ProviderError("尚未配置编排模型。", "configuration", 409)
+        validate_orchestrator_model(profile, model)
+        adapter = adapter_for_profile(profile)
+        prompt_limit = _assistant_provider_prompt_limit(adapter)
+        attachment_rows = _assistant_internal_attachments(database, str(row["source_message_id"]))
+        attachment_ids = [str(item["id"]) for item in attachment_rows]
+        sanitized_project = _assistant_sanitize_value(project_document)
+        project_context_budget = min(
+            ASSISTANT_PROJECT_CONTEXT_DEFAULT_CHARS,
+            max(16000, prompt_limit - len(str(message_row["content"] or "")) - 20000),
+        )
+        assistant_project = compact_project_for_assistant(sanitized_project, maximum=project_context_budget)
+        with database.connect() as connection:
+            message_detail = connection.execute("SELECT metadata_json FROM messages WHERE id=?", (row["source_message_id"],)).fetchone()
+        message_metadata = database.decode(message_detail["metadata_json"], {}) if message_detail else {}
+        context = _assistant_sanitize_value(message_metadata.get("context") if isinstance(message_metadata, dict) else {})
+        raw_audio_document = context.get("audio_draft") if assistant_mode == AUDIO_ASSISTANT_MODE and isinstance(context, dict) and isinstance(context.get("audio_draft"), dict) else _audio_studio_document(project_document)
+        audio_document = _audio_studio_document({"audio": raw_audio_document}) if assistant_mode == AUDIO_ASSISTANT_MODE else raw_audio_document
+        snapshot = build_input_snapshot(
+            assistant_project,
+            graph["graph"],
+            str(message_row["content"]),
+            [str(item) for item in (message_metadata.get("selected_node_ids") or [])] if isinstance(message_metadata, dict) else [],
+            context,
+            message_metadata.get("cost_boundary") if isinstance(message_metadata, dict) else {},
+            int(project_row["revision"]),
+            int(graph["revision"]),
+            skill if isinstance(skill, dict) else None,
+            [workflow_manifest(skill_id) for skill_id in WORKFLOWS],
+        )
+        snapshot["contract_snapshot"] = contract_snapshot(bundle)
+        snapshot["timeline_revision"] = timeline["revision"]
+        snapshot["context_mode"] = assistant_project.get("contextMode", "bounded-current-state-v1")
+        snapshot["context_budget_chars"] = project_context_budget
+        if assistant_mode == AUDIO_ASSISTANT_MODE:
+            capabilities = _effective_capabilities(database)
+            tts_provider_id = str((capabilities.get("tts") or {}).get("provider_profile_id") or "")
+            audio_catalog = _minimax_voice_catalog_payload(database, tts_provider_id) if tts_provider_id else {
+                "provider_id": None,
+                "provider": "minimax",
+                "region": MINIMAX_DEFAULT_REGION,
+                "status": "unavailable",
+                "catalog_source": "none",
+                "voices": minimax_documented_voice_catalog(),
+                "models": list(MINIMAX_TTS_MODELS),
+                "error": "尚未绑定 MiniMax TTS Provider。",
+                "error_kind": "configuration",
+            }
+            audio_context = build_audio_assistant_context(
+                project_document,
+                audio_document,
+                {"shots": project_document.get("shots") or []},
+                audio_catalog,
+                context.get("audio_focus") if isinstance(context, dict) and isinstance(context.get("audio_focus"), dict) else None,
+            )
+            snapshot["audio_preparation_context"] = audio_context
+            snapshot["audio_draft_hash"] = audio_document_hash(audio_document)
+        instructions = assistant_system_instructions(bundle, skill if isinstance(skill, dict) else None)
+
+        _assistant_emit(database, run_id, "item_started", "running", {"label": "读取项目与当前工作区"}, "context_loading")
+        _assistant_emit(database, run_id, "item_completed", "succeeded", {"project_revision": project_row["revision"], "graph_revision": graph["revision"], "timeline_revision": timeline["revision"]}, "context_loading")
+
+        vision_report: dict[str, Any] = {}
+        image_rows = [item for item in attachment_rows if item["kind"] == "image" and item["delivery_mode"] == "multimodal"]
+        image_references = [item for item in attachment_rows if item["kind"] == "image" and item["delivery_mode"] != "multimodal"]
+        if image_rows and adapter.supports("vision") and assistant_mode != AUDIO_ASSISTANT_MODE:
+            _assistant_emit(database, run_id, "item_started", "running", {"count": len(image_rows)}, "vision_analysis")
+            input_content: list[dict[str, Any]] = [{"type": "input_text", "text": "请只分析这些参考图片中可被摄影机看到的身份、结构、材质、空间、光线和连续性线索；未知内容标记为不确定，不要声称图片已经通过 QA。"}]
+            for item in image_rows:
+                path = Path(item["storage_path"])
+                input_content.append({"type": "input_text", "text": f"附件 {item['id']}：{item['original_name']}"})
+                input_content.append({"type": "input_image", "image_url": image_data_url(path, item["mime_type"], MAX_IMAGE_VISION_BYTES)})
+            vision_result = await adapter.submit(
+                "vision",
+                {
+                    "model": model,
+                    "instructions": instructions,
+                    "input_text": "FRAMEFLOW 图片参考分析。",
+                    "input_content": input_content,
+                    "schema": VISION_ANALYSIS_SCHEMA,
+                    "schema_name": "frameflow_vision_analysis",
+                },
+                get_profile_secret(profile),
+            )
+            vision_report = _assistant_structured_result(vision_result)
+            _assistant_emit(database, run_id, "item_completed", "succeeded", {"attachment_ids": [item["id"] for item in image_rows], "summary": vision_report.get("summary", ""), "observation_count": len(vision_report.get("observations") or [])}, "vision_analysis")
+        if image_references:
+            _assistant_emit(
+                database,
+                run_id,
+                "item_completed",
+                "skipped",
+                {
+                    "attachment_ids": [item["id"] for item in image_references],
+                    "message": "当前 Provider 不支持 vision，或图片超过单张 vision 输入上限；图片仅作为本地项目资料保存。",
+                },
+                "vision_analysis",
+            )
+
+        attachment_blocks: list[str] = []
+        for item in attachment_rows:
+            mode = str(item["delivery_mode"])
+            if mode == "extracted_text" and item["extracted_text"]:
+                attachment_blocks.append(f"附件来源 {item['id']}（{item['original_name']}，本地抽取文本）：\n{item['extracted_text']}")
+            elif mode == "project_reference":
+                attachment_blocks.append(f"附件来源 {item['id']}（{item['original_name']}）：仅作为本地项目资料引用，当前运行未将文件内容发送给 Provider。")
+            elif mode == "unsupported":
+                attachment_blocks.append(f"附件来源 {item['id']}（{item['original_name']}）：文件类型不支持分析。")
+        prompt_text, prompt_stats = _assistant_prompt_text(str(message_row["content"]), snapshot, attachment_blocks, vision_report, prompt_limit)
+        _assistant_emit(database, run_id, "item_progress", "running", prompt_stats, "context_loading")
+        _assistant_emit(database, run_id, "item_started", "running", {"provider_profile_id": profile["id"], "model": model}, "provider_request")
+        issues = adapter.validate_request("orchestrator", {"prompt_chars": len(prompt_text)})
+        if issues:
+            raise ProviderError("Agent 输入超过 Provider 限制：" + "；".join(issues), "validation", 422)
+        provider_result = await adapter.submit(
+            "orchestrator",
+            {
+                "model": model,
+                "instructions": instructions,
+                "input_text": prompt_text,
+                "schema": audio_preparation_result_schema() if assistant_mode == AUDIO_ASSISTANT_MODE else AGENT_RESULT_SCHEMA,
+                "schema_name": "frameflow_audio_preparation" if assistant_mode == AUDIO_ASSISTANT_MODE else "frameflow_agent_workspace",
+            },
+            get_profile_secret(profile),
+        )
+        _assistant_emit(database, run_id, "item_completed", "succeeded", {"provider_profile_id": profile["id"], "model": model}, "provider_request")
+        if assistant_mode == AUDIO_ASSISTANT_MODE:
+            normalized = normalize_voice_preparation_result(
+                provider_result,
+                project_document=project_document,
+                audio_document=audio_document,
+                story_document={"shots": project_document.get("shots") or []},
+                catalog=audio_catalog,
+                focus=context.get("audio_focus") if isinstance(context, dict) and isinstance(context.get("audio_focus"), dict) else None,
+                contract_snapshot=contract_snapshot(bundle),
+            )
+            patch = AgentPatchV3.model_validate(normalized["patch"])
+        else:
+            normalized = normalize_agent_patch(provider_result, int(project_row["revision"]), int(graph["revision"]), contract_snapshot(bundle), attachment_ids)
+            patch = ensure_workspace_operations(AgentPatchV3.model_validate(normalized["patch"]), graph["graph"], contract_snapshot(bundle), attachment_ids)
+            patch = _assistant_validate_patch(patch, project_document, bundle, attachment_ids)
+        normalized["patch"] = patch.model_dump(mode="json")
+        preview = patch_preview(graph["graph"], patch)
+        preview["contract_hash"] = bundle["bundle_hash"]
+        preview["base_timeline_revision"] = timeline["revision"]
+        if assistant_mode == AUDIO_ASSISTANT_MODE:
+            preview["audio_preparation"] = redact(normalized.get("proposal") or {})
+            preview["audio_base_hash"] = snapshot.get("audio_draft_hash")
+            preview["audio_revision"] = int(project_row["revision"])
+            preview["persisted"] = False
+        plan_id = _store_agent_plan(
+            database,
+            project_id,
+            "awaiting_review",
+            str(message_row["content"]),
+            skill.get("skill_id") if isinstance(skill, dict) else None,
+            profile["id"],
+            model,
+            int(project_row["revision"]),
+            int(graph["revision"]),
+            snapshot,
+            normalized,
+            preview,
+            conversation_id=str(row["conversation_id"]),
+            run_id=run_id,
+            contract_snapshot_data=contract_snapshot(bundle),
+        )
+        reply = str(normalized.get("reply") or "已生成可审阅的工作台候选。")
+        result = {
+            "plan_id": plan_id,
+            "reply": reply,
+            "patch": patch.model_dump(mode="json"),
+            "preview": redact(preview),
+            "attachment_ids": attachment_ids,
+            "vision_analyzed_ids": [str(item["id"]) for item in image_rows if vision_report],
+        }
+        if assistant_mode == AUDIO_ASSISTANT_MODE:
+            result["audio_preparation"] = redact(normalized.get("proposal") or {})
+            result["audio_base_hash"] = snapshot.get("audio_draft_hash")
+            result["audio_revision"] = int(project_row["revision"])
+            result["assistant_mode"] = assistant_mode
+        _assistant_emit(database, run_id, "item_completed", "succeeded", {"operation_count": len(patch.workspace_operations), "contract_hash": bundle["bundle_hash"]}, "contract_validation")
+        _assistant_emit(database, run_id, "item_completed", "succeeded", {"operation_count": len(patch.workspace_operations), "candidate_count": len(patch.candidates)}, "plan_preview")
+        with database.connect() as connection:
+            already = connection.execute("SELECT id FROM messages WHERE conversation_id=? AND role='assistant' AND metadata_json LIKE ?", (row["conversation_id"], f'%"run_id":"{run_id}"%')).fetchone()
+            if not already:
+                connection.execute("INSERT INTO messages(id,conversation_id,role,content,metadata_json,message_type,created_at) VALUES(?,?,?,?,?,?,?)", (f"MSG_{secrets.token_hex(8)}", row["conversation_id"], "assistant", reply, database.encode({"run_id": run_id, "plan_id": plan_id, "contract_snapshot": contract_snapshot(bundle), "attachment_ids": attachment_ids}), "assistant", utcnow()))
+            connection.execute("UPDATE conversations SET updated_at=?,last_contract_hash=? WHERE id=?", (utcnow(), bundle["bundle_hash"], row["conversation_id"]))
+        _assistant_update_run(database, run_id, status="succeeded", result=result, checkpoint={"last_event": "plan_preview", "plan_id": plan_id})
+        _assistant_emit(database, run_id, "item_completed", "succeeded", {"reply": reply, "plan_id": plan_id}, "assistant_message")
+        _assistant_emit(database, run_id, "run_completed", "succeeded", {"plan_id": plan_id, "contract_hash": bundle["bundle_hash"]})
+    except asyncio.CancelledError:
+        _assistant_update_run(database, run_id, status="canceled", error={"message": "Agent 运行已取消。", "kind": "canceled"})
+        _assistant_emit(database, run_id, "run_failed", "canceled", {"message": "Agent 运行已取消。"})
+        raise
+    except Exception as exc:
+        error_detail = {"message": str(exc)[:2000], "kind": getattr(exc, "kind", "internal"), "status": getattr(exc, "status_code", 500)}
+        _assistant_update_run(database, run_id, status="failed", error=error_detail, checkpoint={"last_event": "run_failed"})
+        _assistant_emit(database, run_id, "run_failed", "failed", error_detail)
+
+
+@app.post("/api/v2/projects/{project_id}/assistant/stream")
+async def assistant_stream_v3(project_id: str, body: AssistantRunCreateV3, request: Request):
+    if body.project_id != project_id:
+        raise HTTPException(409, "创作助手运行的项目 ID 与路径不一致。")
+    assistant_mode = body.assistant_mode
+    database = db(request)
+    pdata = await read_project(project_id, request)
+    graph = ensure_graph(database, project_id)
+    timeline = ensure_timeline(database, project_id)
+    attachment_ids = [str(item) for item in body.attachment_ids]
+    if len(attachment_ids) != len(set(attachment_ids)):
+        raise HTTPException(422, "同一条消息不能重复引用同一个附件。")
+    if len(attachment_ids) > MAX_MESSAGE_ATTACHMENTS:
+        raise HTTPException(422, "单条消息最多引用 8 个附件。")
+    with database.connect() as connection:
+        attachment_sizes = connection.execute(
+            f"SELECT id,byte_size FROM assistant_attachments_v18 WHERE project_id=? AND id IN ({','.join('?' for _ in attachment_ids)})",
+            (project_id, *attachment_ids),
+        ).fetchall() if attachment_ids else []
+    if sum(int(row["byte_size"]) for row in attachment_sizes) > MAX_MESSAGE_BYTES:
+        raise HTTPException(413, "单条消息附件总大小不能超过 200MB。")
+    skill = _agent_skill(AUDIO_ASSISTANT_SKILL_ID if assistant_mode == AUDIO_ASSISTANT_MODE else body.skill_id)
+    requested_orchestrator = body.provider_profile_id
+    if assistant_mode == AUDIO_ASSISTANT_MODE and not requested_orchestrator:
+        with database.connect() as connection:
+            opencode_row = connection.execute(
+                "SELECT id FROM provider_profiles WHERE provider_type='opencode' AND enabled=1 ORDER BY id LIMIT 1"
+            ).fetchone()
+        requested_orchestrator = str(opencode_row["id"]) if opencode_row else None
+    profile, bound_model = resolve_profile(database, "orchestrator", requested_orchestrator)
+    if assistant_mode == AUDIO_ASSISTANT_MODE and profile.get("provider_type") != "opencode":
+        raise HTTPException(409, "声音 AI 对话必须使用 OpenCode 编排 Provider；MiniMax 仅负责后续 TTS 生成。")
+    model = body.model or bound_model or profile.get("model_config", {}).get("orchestrator_model")
+    if assistant_mode == AUDIO_ASSISTANT_MODE and profile.get("provider_type") == "opencode" and not model:
+        # Voice preparation is always OpenCode-planned.  Older seeded OpenCode
+        # profiles may not have a model binding yet, so use a documented Go
+        # model as a safe planning fallback; this never routes TTS to OpenCode.
+        model = DEFAULT_VOICE_ASSISTANT_MODEL
+    if not model:
+        raise HTTPException(409, "尚未配置编排模型。")
+    validate_orchestrator_model(profile, model)
+    bundle = contract_bundle()
+    prepared = _assistant_prepare_attachments(database, DATA_DIR, project_id, attachment_ids, profile)
+    external_rows = [row for row in prepared if row["delivery_mode"] in {"multimodal", "extracted_text"}]
+    if not body.conversation_id:
+        with database.connect() as connection:
+            duplicate_without_conversation = connection.execute("SELECT * FROM assistant_runs_v18 WHERE project_id=? AND client_message_id=? ORDER BY created_at DESC LIMIT 1", (project_id, body.client_message_id)).fetchone()
+        if duplicate_without_conversation:
+            return StreamingResponse(_assistant_event_stream(database, duplicate_without_conversation["id"]), media_type="text/event-stream", headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+    if body.conversation_id:
+        conversation = _assistant_conversation_row(database, body.conversation_id, project_id)
+        if str(conversation["status"] if "status" in conversation.keys() else "active") == "archived":
+            raise HTTPException(409, "当前创作助手会话已归档，请先恢复后再发送新消息。")
+        stored_mode = str(conversation["assistant_mode"] if "assistant_mode" in conversation.keys() else "general")
+        if stored_mode != assistant_mode:
+            raise HTTPException(409, "当前会话属于其他 AI 工作区，请在声音工坊中新建声音准备会话。")
+    else:
+        conversation_id = f"CONV_{secrets.token_hex(8)}"
+        now = utcnow()
+        with database.connect() as connection:
+            title = ("声音准备 · " if assistant_mode == AUDIO_ASSISTANT_MODE else "") + (body.message[:40].strip() or "创作助手会话")
+            connection.execute("INSERT INTO conversations(id,project_id,title,status,last_contract_hash,external_consent_json,assistant_mode,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)", (conversation_id, project_id, title, "active", bundle["bundle_hash"], "{}", assistant_mode, now, now))
+        conversation = _assistant_conversation_row(database, conversation_id, project_id)
+    with database.connect() as connection:
+        duplicate = connection.execute("SELECT * FROM assistant_runs_v18 WHERE conversation_id=? AND client_message_id=?", (conversation["id"], body.client_message_id)).fetchone()
+    if duplicate:
+        return StreamingResponse(_assistant_event_stream(database, duplicate["id"]), media_type="text/event-stream", headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+    consent = database.decode(conversation["external_consent_json"], {}) or {}
+    consented = isinstance(consent, dict) and isinstance(consent.get(profile["id"]), dict)
+    awaiting = _assistant_external_confirmation_payload(profile, str(model), external_rows) if external_rows and not consented else None
+    run_id = f"ARUN_{secrets.token_hex(8)}"
+    message_id = f"MSG_{secrets.token_hex(8)}"
+    now = utcnow()
+    status = "awaiting_external_confirmation" if awaiting else "preparing"
+    with database.connect() as connection:
+        connection.execute("INSERT INTO messages(id,conversation_id,role,content,metadata_json,client_message_id,message_type,created_at) VALUES(?,?,?,?,?,?,?,?)", (message_id, conversation["id"], "user", body.message, database.encode({"attachment_ids": attachment_ids, "context": _assistant_sanitize_value(body.context), "selected_node_ids": body.selected_node_ids, "cost_boundary": body.cost_boundary, "skill_id": skill.get("skill_id") if isinstance(skill, dict) else body.skill_id, "assistant_mode": assistant_mode, "contract_snapshot": contract_snapshot(bundle)}), body.client_message_id, "user", now))
+        for ordinal, attachment_id in enumerate(attachment_ids):
+            connection.execute("UPDATE assistant_attachments_v18 SET conversation_id=?,message_id=?,updated_at=? WHERE id=? AND project_id=?", (conversation["id"], message_id, now, attachment_id, project_id))
+            connection.execute("INSERT INTO assistant_message_attachments_v18(message_id,attachment_id,ordinal,delivery_mode,created_at) VALUES(?,?,?,?,?)", (message_id, attachment_id, ordinal, next((str(item["delivery_mode"]) for item in prepared if str(item["id"]) == attachment_id), "unsupported"), now))
+        connection.execute("INSERT INTO assistant_runs_v18(id,project_id,conversation_id,source_message_id,client_message_id,status,contract_hash,contract_snapshot_json,skill_snapshot_json,assistant_mode,provider_profile_id,provider_model,base_project_revision,base_graph_revision,base_timeline_revision,checkpoint_json,awaiting_confirmation_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (run_id, project_id, conversation["id"], message_id, body.client_message_id, status, bundle["bundle_hash"], database.encode(bundle), database.encode(skill or {}), assistant_mode, profile["id"], str(model), pdata["revision"], graph["revision"], timeline["revision"], database.encode({"last_event": "run_created"}), database.encode(awaiting) if awaiting else None, now, now))
+        connection.execute("UPDATE conversations SET updated_at=?,last_contract_hash=? WHERE id=?", (now, bundle["bundle_hash"], conversation["id"]))
+    _assistant_emit(database, run_id, "run_started", "paused" if awaiting else "running", {"conversation_id": conversation["id"], "contract_hash": bundle["bundle_hash"], "provider_profile_id": profile["id"], "provider_model": model})
+    _assistant_emit(database, run_id, "item_started", "running", {"attachment_count": len(attachment_ids)}, "attachment_preparing")
+    _assistant_emit(database, run_id, "item_progress", "running", {"completed": len(prepared), "total": len(attachment_ids), "message": "附件已完成本地校验和准备。"}, "attachment_preparing")
+    _assistant_emit(database, run_id, "item_completed", "succeeded", {"attachment_ids": attachment_ids, "delivery_modes": {str(item["id"]): item["delivery_mode"] for item in prepared}}, "attachment_preparing")
+    if prepared:
+        _assistant_emit(database, run_id, "item_completed", "succeeded", {"sources": [{"id": item["id"], "name": item["original_name"], "kind": item["kind"], "delivery_mode": item["delivery_mode"], "analysis_status": item["analysis_status"]} for item in prepared]}, "source_citation")
+    if awaiting:
+        _assistant_emit(database, run_id, "approval_request", "paused", awaiting, "external_attachment_confirmation")
+    else:
+        _assistant_schedule(request.app, run_id)
+    return StreamingResponse(_assistant_event_stream(database, run_id), media_type="text/event-stream", headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+
+@app.get("/api/v2/assistant/runs/{run_id}")
+async def read_assistant_run(run_id: str, request: Request):
+    return _assistant_run_payload(db(request), _assistant_run_row(db(request), run_id), include_events=False)
+
+
+@app.get("/api/v2/projects/{project_id}/assistant/runs")
+async def list_assistant_runs(project_id: str, request: Request, conversation_id: str | None = None):
+    database = db(request)
+    await read_project(project_id, request)
+    if conversation_id:
+        _assistant_conversation_row(database, conversation_id, project_id)
+    with database.connect() as connection:
+        if conversation_id:
+            rows = connection.execute("SELECT * FROM assistant_runs_v18 WHERE project_id=? AND conversation_id=? ORDER BY created_at DESC LIMIT 50", (project_id, conversation_id)).fetchall()
+        else:
+            rows = connection.execute("SELECT * FROM assistant_runs_v18 WHERE project_id=? ORDER BY created_at DESC LIMIT 100", (project_id,)).fetchall()
+    return {"project_id": project_id, "runs": [_assistant_run_payload(database, row, include_events=False) for row in rows]}
+
+
+@app.get("/api/v2/assistant/runs/{run_id}/events")
+async def assistant_run_events(run_id: str, request: Request, after_sequence: int = 0):
+    database = db(request)
+    _assistant_run_row(database, run_id)
+    return {"run_id": run_id, "events": _assistant_run_events(database, run_id, after_sequence)}
+
+
+@app.post("/api/v2/assistant/runs/{run_id}/external-confirmation")
+async def assistant_external_confirmation(run_id: str, body: AssistantExternalConfirmationV3, request: Request):
+    database = db(request)
+    row = _assistant_run_row(database, run_id)
+    if row["status"] != "awaiting_external_confirmation":
+        raise HTTPException(409, f"当前运行不能进行外发确认：{row['status']}。")
+    profile_id = body.provider_profile_id or str(row["provider_profile_id"])
+    if profile_id != str(row["provider_profile_id"]):
+        raise HTTPException(409, "外发确认的 Provider 与当前运行不一致，请重新发起运行。")
+    current_hash = contract_bundle()["bundle_hash"]
+    if current_hash != str(row["contract_hash"]):
+        _assistant_update_run(database, run_id, status="stale_contract", error={"message": "规范已更新，请重新发送本条消息。", "kind": "contract_stale"})
+        _assistant_emit(database, run_id, "run_failed", "failed", {"message": "规范已更新，请重新发送本条消息。", "kind": "contract_stale"})
+        raise HTTPException(409, "FRAMEFLOW 规范已更新，请重新发送本条消息。")
+    if body.decision == "reject":
+        _assistant_update_run(database, run_id, status="canceled", error={"message": "用户拒绝本次附件外发。", "kind": "external_confirmation_rejected"}, awaiting={})
+        _assistant_emit(database, run_id, "run_interrupted", "canceled", {"message": "附件仍保存在本地，未发送给 Provider。"}, "external_attachment_confirmation")
+        _assistant_emit(database, run_id, "run_completed", "canceled", {"reason": "external_confirmation_rejected"})
+        return _assistant_run_payload(database, _assistant_run_row(database, run_id))
+    with database.connect() as connection:
+        conversation = connection.execute("SELECT external_consent_json FROM conversations WHERE id=?", (row["conversation_id"],)).fetchone()
+        consent = database.decode(conversation["external_consent_json"], {}) if conversation else {}
+        if not isinstance(consent, dict):
+            consent = {}
+        consent[str(row["provider_profile_id"])] = {"approved_at": utcnow(), "model": row["provider_model"], "scope": "attachments"}
+        connection.execute("UPDATE conversations SET external_consent_json=?,updated_at=? WHERE id=?", (database.encode(consent), utcnow(), row["conversation_id"]))
+    _assistant_update_run(database, run_id, status="preparing", awaiting={})
+    _assistant_emit(database, run_id, "item_completed", "succeeded", {"provider_profile_id": row["provider_profile_id"], "model": row["provider_model"], "approved_by": body.detail.get("approved_by") if isinstance(body.detail, dict) else None}, "external_attachment_confirmation")
+    _assistant_schedule(request.app, run_id)
+    return _assistant_run_payload(database, _assistant_run_row(database, run_id))
+
+
+@app.post("/api/v2/assistant/runs/{run_id}/cancel")
+async def cancel_assistant_run(run_id: str, request: Request):
+    database = db(request)
+    row = _assistant_run_row(database, run_id)
+    if row["status"] in ASSISTANT_TERMINAL_STATUSES:
+        raise HTTPException(409, f"Agent 运行已经结束：{row['status']}。")
+    _assistant_update_run(database, run_id, status="canceled", error={"message": "用户中止了本次 Agent 运行。", "kind": "canceled"}, awaiting={})
+    task = ASSISTANT_RUNTIME_TASKS.get(run_id)
+    if task and not task.done():
+        task.cancel()
+    _assistant_emit(database, run_id, "run_interrupted", "canceled", {"message": "运行已中止；用户消息、附件和已保存事件仍保留。"})
+    _assistant_emit(database, run_id, "run_completed", "canceled", {"reason": "user_canceled"})
+    return _assistant_run_payload(database, _assistant_run_row(database, run_id))
+
+
+@app.post("/api/v2/assistant/conversations/{conversation_id}/external-consent/reset")
+async def reset_assistant_external_consent(conversation_id: str, request: Request):
+    database = db(request)
+    _assistant_conversation_row(database, conversation_id)
+    with database.connect() as connection:
+        connection.execute("UPDATE conversations SET external_consent_json='{}',updated_at=? WHERE id=?", (utcnow(), conversation_id))
+        row = connection.execute("SELECT * FROM conversations WHERE id=?", (conversation_id,)).fetchone()
+    return {"conversation": _assistant_conversation_payload(database, row), "message": "下一次带附件发送将重新要求外发确认。"}
+
+
+@app.post("/api/v2/assistant/conversations/{conversation_id}/archive")
+async def archive_assistant_conversation(conversation_id: str, request: Request):
+    database = db(request)
+    _assistant_conversation_row(database, conversation_id)
+    with database.connect() as connection:
+        connection.execute("UPDATE conversations SET status='archived',updated_at=? WHERE id=?", (utcnow(), conversation_id))
+        row = connection.execute("SELECT * FROM conversations WHERE id=?", (conversation_id,)).fetchone()
+    return {"conversation": _assistant_conversation_payload(database, row), "message": "会话已归档；消息、附件和运行记录仍保留。"}
+
+
+@app.post("/api/v2/assistant/conversations/{conversation_id}/restore")
+async def restore_assistant_conversation(conversation_id: str, request: Request):
+    database = db(request)
+    _assistant_conversation_row(database, conversation_id)
+    with database.connect() as connection:
+        connection.execute("UPDATE conversations SET status='active',updated_at=? WHERE id=?", (utcnow(), conversation_id))
+        row = connection.execute("SELECT * FROM conversations WHERE id=?", (conversation_id,)).fetchone()
+    return {"conversation": _assistant_conversation_payload(database, row), "message": "会话已恢复为活动状态。"}
+
+
+def _assistant_selected_patch(patch: AgentPatchV3, selected_ids: set[str]) -> AgentPatchV3:
+    """Reduce graph operations to the items the user checked in the review UI."""
+
+    operations = list(patch.workspace_operations)
+    selected_graph = {
+        str(operation.target_id): operation.action
+        for operation in operations
+        if operation.id in selected_ids and operation.workspace == "workflow"
+    }
+    selected_add_nodes = [node for node in patch.add_nodes if selected_graph.get(node.id) == "add_node" or f"OP_WORKFLOW_ADD_NODE_{node.id}" in selected_ids]
+    selected_modify_nodes = [item for item in patch.modify_nodes if selected_graph.get(item.node_id) == "modify_node" or f"OP_WORKFLOW_MODIFY_NODE_{item.node_id}" in selected_ids]
+    selected_remove_nodes = [item for item in patch.remove_node_ids if selected_graph.get(item) == "remove_node" or f"OP_WORKFLOW_REMOVE_NODE_{item}" in selected_ids]
+    selected_add_edges = [edge for edge in patch.add_edges if selected_graph.get(edge.id) == "add_edge" or f"OP_WORKFLOW_ADD_EDGE_{edge.id}" in selected_ids]
+    selected_modify_edges = [item for item in patch.modify_edges if selected_graph.get(item.edge_id) == "modify_edge" or f"OP_WORKFLOW_MODIFY_EDGE_{item.edge_id}" in selected_ids]
+    selected_remove_edges = [item for item in patch.remove_edge_ids if selected_graph.get(item) == "remove_edge" or f"OP_WORKFLOW_REMOVE_EDGE_{item}" in selected_ids]
+    selected_candidates = []
+    for index, candidate in enumerate(patch.candidates, start=1):
+        operation_id = f"OP_CANDIDATE_{index:03d}"
+        if operation_id in selected_ids or str(candidate.target_id or "") in selected_ids:
+            selected_candidates.append(candidate)
+    selected_operations = [operation for operation in operations if operation.id in selected_ids]
+    return patch.model_copy(update={
+        "add_nodes": selected_add_nodes,
+        "modify_nodes": selected_modify_nodes,
+        "remove_node_ids": selected_remove_nodes,
+        "add_edges": selected_add_edges,
+        "modify_edges": selected_modify_edges,
+        "remove_edge_ids": selected_remove_edges,
+        "candidates": selected_candidates,
+        "workspace_operations": selected_operations,
+        "suggested_run_node_ids": [],
+        "suggested_approval_gates": [],
+        "actions": ["candidate_draft"] if selected_candidates else ["node_orchestration"] if selected_graph else [],
+        "requires_confirmation": False,
+    })
+
+
+def _assistant_story_candidate(doc: dict[str, Any], content: Any) -> dict[str, Any]:
+    proposed = deepcopy(doc)
+    if isinstance(content, str):
+        proposed["script"] = content
+    elif isinstance(content, dict):
+        payload = content.get("story") if isinstance(content.get("story"), dict) else content
+        if isinstance(payload, dict):
+            if "spec" in payload:
+                proposed["storySpec"] = payload["spec"]
+            for key in ("script", "scenes", "shots"):
+                if key in payload and payload[key] is not None:
+                    proposed[key] = payload[key]
+    try:
+        StoryDocumentUpdateV3.model_validate({
+            "expected_revision": 1,
+            "spec": proposed.get("storySpec") or {},
+            "script": proposed.get("script") or "",
+            "scenes": proposed.get("scenes") or [],
+            "shots": proposed.get("shots") or [],
+        })
+    except Exception as exc:
+        raise HTTPException(422, {"message": "故事候选未通过工作台字段校验。", "details": str(exc)}) from exc
+    storyboard_issues = _assistant_storyboard_issues(proposed, payload if isinstance(payload, dict) else {})
+    if storyboard_issues:
+        raise HTTPException(422, {"message": "故事候选未通过既有 storyboard 校验。", "issues": storyboard_issues})
+    checks = story_checks(proposed)
+    if checks.get("errors", 0):
+        raise HTTPException(422, {"message": "故事候选包含阻塞性校验错误，未写入工作台。", "checks": checks})
+    _synchronise_fusion_slots(proposed, create=bool(proposed.get("assetPromptRuns")))
+    return proposed
+
+
+def _assistant_audio_candidate(doc: dict[str, Any], content: Any, target_id: str | None = None) -> dict[str, Any]:
+    audio = _audio_studio_document(doc)
+    if not isinstance(content, dict):
+        return audio
+    payload = content.get("document") if isinstance(content.get("document"), dict) else content.get("audio") if isinstance(content.get("audio"), dict) else content
+    if isinstance(payload, dict) and any(key in payload for key in ("voices", "dialogues", "takes", "music_cues", "sound_design", "handoff")):
+        for key in ("version", "voices", "voice_references", "auditions", "dialogues", "takes", "music_cues", "sound_design", "handoff"):
+            if key in payload:
+                audio[key] = deepcopy(payload[key])
+        return _audio_studio_document({**doc, "audio": audio})
+    dialogue_items = payload.get("dialogues") if isinstance(payload.get("dialogues"), list) else []
+    dialogue = payload.get("dialogue") if isinstance(payload.get("dialogue"), dict) else None
+    if dialogue:
+        dialogue_items = [dialogue]
+    if dialogue_items:
+        existing = {str(item.get("id")): item for item in audio.get("dialogues", []) if isinstance(item, dict) and item.get("id")}
+        for item in dialogue_items:
+            if not isinstance(item, dict):
+                continue
+            item_id = str(item.get("id") or target_id or f"DIALOGUE_{len(existing)+1:03d}")
+            existing[item_id] = {**existing.get(item_id, {}), **deepcopy(item), "id": item_id, "execution_status": existing.get(item_id, {}).get("execution_status", "planned")}
+        audio["dialogues"] = list(existing.values())
+    candidate = payload.get("audioDetails") if isinstance(payload.get("audioDetails"), dict) else None
+    if candidate:
+        audio.setdefault("assistant_candidates", []).append({
+            "id": f"AUDIO_CANDIDATE_{secrets.token_hex(5)}",
+            "target_id": target_id,
+            "audioDetails": deepcopy(candidate),
+            "prompt": payload.get("prompt") or candidate.get("sourceText") or "",
+            "status": "draft",
+            "contract_snapshot": contract_snapshot(contract_bundle()),
+            "created_at": utcnow(),
+        })
+    return _audio_studio_document({**doc, "audio": audio})
+
+
+def _assistant_asset_metadata_candidate(doc: dict[str, Any], operation: Any) -> dict[str, Any]:
+    target_id = str(operation.target_id or "")
+    asset = _project_asset(doc, target_id)
+    content = operation.content if isinstance(operation.content, dict) else operation.after if isinstance(operation.after, dict) else {}
+    if isinstance(content.get("asset"), dict):
+        content = content["asset"]
+    allowed_asset_fields = {"name", "assetRole", "assetClass", "skill", "note", "promptTargetSkill", "promptRelevantShots", "mustPreserve", "mustAvoid", "assetSpec", "identityAnchors", "referenceRoles", "fusionPlan"}
+    changed = False
+    for key in allowed_asset_fields:
+        if key in content:
+            asset[key] = deepcopy(content[key])
+            changed = True
+    metadata_value = content.get("assetMetadata") if isinstance(content.get("assetMetadata"), dict) else content.get("metadata") if isinstance(content.get("metadata"), dict) else None
+    if metadata_value:
+        metadata = _asset_metadata(asset)
+        for key, value in metadata_value.items():
+            if str(key).lower() in {"artifact_id", "artifactid", "active_version_id", "activeversionid", "status", "qadecision", "promptqadecision", "registered", "production_ready"}:
+                continue
+            metadata[str(key)] = deepcopy(value)
+            changed = True
+        asset["assetMetadata"] = metadata
+    if not changed:
+        raise HTTPException(422, f"资产 {target_id} 的元数据候选没有可应用字段。")
+    return doc
+
+
+def _assistant_asset_prompt_candidate(database: Database, connection: sqlite3.Connection, doc: dict[str, Any], operation: Any, bundle: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
+    target_id = str(operation.target_id or "")
+    asset = _project_asset(doc, target_id)
+    content = operation.content if operation.content is not None else operation.after
+    if isinstance(content, str):
+        prompt = content.strip()
+        pack: dict[str, Any] = {}
+    elif isinstance(content, dict):
+        prompt = str(content.get("prompt") or "").strip()
+        pack = content.get("promptPack") if isinstance(content.get("promptPack"), dict) else content.get("prompt_pack") if isinstance(content.get("prompt_pack"), dict) else {}
+    else:
+        raise HTTPException(422, f"资产 {target_id} 的 Prompt 候选内容为空。")
+    if not prompt and not pack:
+        raise HTTPException(422, f"资产 {target_id} 的 Prompt 候选内容为空。")
+    canonical = canonicalize_prompt_output(_asset_class(asset), pack, prompt, context={"shots": doc.get("shots") or []})
+    previous = asset_audit.get_prompt_version(database, str(asset.get("promptVersion") or ""), doc["id"], target_id)
+    prompt_version = asset_audit.create_prompt_version(
+        database,
+        doc["id"],
+        target_id,
+        _asset_class(asset),
+        canonical["prompt"],
+        "assistant-workspace",
+        str((operation.contract_snapshot or {}).get("prompt_workflow") or PROMPT_WORKFLOW_ID),
+        parent_version=int(previous["version"]) if previous else None,
+        change_reason=operation.summary or "创作助手逐项应用 Prompt 候选",
+        connection=connection,
+    )
+    metadata = _asset_metadata(asset)
+    asset.update({
+        "prompt": canonical["prompt"],
+        "promptPack": canonical["promptPack"],
+        "promptQuality": canonical["promptQuality"],
+        "promptContractVersion": canonical["promptContractVersion"],
+        "promptWorkflow": canonical["promptWorkflow"],
+        "promptFieldOrder": canonical["promptFieldOrder"],
+        "promptVersion": prompt_version["id"],
+        "promptQaDecision": "Pending",
+        "promptStatus": "prompt-draft",
+        "generationChoice": "user-confirmation-required",
+        "generationChoiceStatus": "user-confirmation-required",
+        "generationStatus": asset.get("generationStatus") or "planned",
+        "mustPreserve": canonical["promptPack"].get("mustPreserve") or asset.get("mustPreserve") or [],
+        "mustAvoid": canonical["promptPack"].get("mustAvoid") or asset.get("mustAvoid") or [],
+    })
+    metadata.update({"assistant_contract_snapshot": contract_snapshot(bundle), "prompt_version": prompt_version["id"]})
+    asset["assetMetadata"] = metadata
+    return doc, prompt_version["id"]
+
+
+def _assistant_candidate_row(database: Database, connection: sqlite3.Connection, plan_id: str, project_id: str, operation: Any, status: str = "applied") -> str:
+    candidate_id = f"AGC_{secrets.token_hex(8)}"
+    kind = {"story": "storyboard", "assets": "prompt", "audio": "audio", "timeline": "timeline", "workflow": "brief"}.get(operation.workspace, "brief")
+    content = operation.content if operation.content is not None else operation.after
+    connection.execute(
+        "INSERT INTO agent_candidate_versions_v5(id,plan_id,project_id,kind,target_id,version,status,content_json,metadata_json,created_at,accepted_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            candidate_id,
+            plan_id,
+            project_id,
+            kind,
+            operation.target_id,
+            1,
+            status,
+            database.encode(redact(content)),
+            database.encode(redact({"operation_id": operation.id, "contract_snapshot": operation.contract_snapshot, "source_attachment_ids": operation.source_attachment_ids})),
+            utcnow(),
+            utcnow() if status == "applied" else None,
+        ),
+    )
+    return candidate_id
+
+
+@app.post("/api/v2/assistant/runs/{run_id}/apply")
+async def apply_assistant_run(run_id: str, body: AssistantApplyV3, request: Request):
+    database = db(request)
+    run = _assistant_run_row(database, run_id)
+    if str(run["assistant_mode"] if "assistant_mode" in run.keys() else "general") == AUDIO_ASSISTANT_MODE:
+        raise HTTPException(409, "声音助手不能使用通用 Agent Apply；请使用声音工坊的 audio-draft 草稿应用入口。")
+    if run["status"] != "succeeded":
+        raise HTTPException(409, f"Agent 运行当前不能应用计划：{run['status']}。")
+    result = database.decode(run["result_json"], {}) or {}
+    plan_id = str(body.plan_id or result.get("plan_id") or "")
+    current_bundle = contract_bundle()
+    if str(run["contract_hash"]) != current_bundle["bundle_hash"]:
+        if plan_id:
+            _assistant_mark_plan_stale(database, plan_id, current_bundle["bundle_hash"], str(run["contract_hash"]))
+        stale_error = {"message": "FRAMEFLOW 规范已更新，当前计划已冻结，请重新生成。", "kind": "contract_stale", "status": 409, "current_contract_hash": current_bundle["bundle_hash"], "plan_contract_hash": run["contract_hash"]}
+        _assistant_update_run(database, run_id, status="stale_contract", error=stale_error, checkpoint={"last_event": "contract_stale"})
+        _assistant_emit(database, run_id, "run_failed", "failed", stale_error, "contract_validation")
+        raise HTTPException(409, stale_error)
+    if str(body.expected_contract_bundle_hash) != current_bundle["bundle_hash"]:
+        raise HTTPException(409, {"message": "FRAMEFLOW 规范已更新，当前计划已冻结，请重新生成。", "current_contract_hash": current_bundle["bundle_hash"], "plan_contract_hash": run["contract_hash"]})
+    if not plan_id:
+        raise HTTPException(409, "当前 Agent 运行没有可应用的计划。")
+    plan_row = _agent_plan_row(database, plan_id)
+    if plan_row["status"] != "awaiting_review":
+        raise HTTPException(409, f"Agent 计划不能从 {plan_row['status']} 应用。")
+    if not body.selected_operation_ids:
+        raise HTTPException(422, "请至少勾选一项工作台修改后再应用。")
+    project_id = str(run["project_id"])
+    with database.connect() as connection:
+        project_row = connection.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+        graph_row = connection.execute("SELECT * FROM workflow_graphs WHERE project_id=?", (project_id,)).fetchone()
+        timeline_row = connection.execute("SELECT * FROM timelines_v3 WHERE project_id=?", (project_id,)).fetchone()
+        if not project_row or not graph_row:
+            raise HTTPException(404, "项目或工作流图不存在。")
+        if int(project_row["revision"]) != body.expected_project_revision:
+            raise HTTPException(409, {"message": "项目版本已变化，计划已失效。", "current_revision": project_row["revision"]})
+        if int(graph_row["revision"]) != body.expected_graph_revision:
+            raise HTTPException(409, {"message": "工作流图版本已变化，计划已失效。", "current_revision": graph_row["revision"]})
+        if body.expected_timeline_revision is not None and timeline_row and int(timeline_row["revision"]) != body.expected_timeline_revision:
+            raise HTTPException(409, {"message": "时间线版本已变化，计划已失效。", "current_revision": timeline_row["revision"]})
+        doc = database.decode(project_row["document_json"], {}) or {}
+        graph = database.decode(graph_row["graph_json"], {}) or {}
+        timeline_document = database.decode(timeline_row["document_json"], {}) if timeline_row else None
+        patch = AgentPatchV3.model_validate(database.decode(plan_row["patch_json"], {}) or {})
+        patch = ensure_workspace_operations(patch, graph, contract_snapshot(current_bundle), [str(item["id"]) for item in _assistant_internal_attachments(database, str(run["source_message_id"]))])
+        selected_ids = {str(item) for item in body.selected_operation_ids}
+        selected_operations = [item for item in patch.workspace_operations if item.id in selected_ids]
+        if not selected_operations:
+            raise HTTPException(422, "勾选的操作不属于当前计划。")
+        blocked_operations = [
+            item.id for item in selected_operations
+            if item.risk == "blocked"
+        ]
+        if blocked_operations:
+            raise HTTPException(422, {
+                "message": "计划包含受保护操作，不能由创作助手直接应用。",
+                "operation_ids": blocked_operations,
+            })
+        selected_patch = _assistant_selected_patch(patch, selected_ids)
+        proposed_graph = graph
+        graph_changed = bool(selected_patch.add_nodes or selected_patch.modify_nodes or selected_patch.remove_node_ids or selected_patch.add_edges or selected_patch.modify_edges or selected_patch.remove_edge_ids)
+        if graph_changed:
+            try:
+                proposed_graph = apply_patch_to_graph(graph, selected_patch)
+            except Exception as exc:
+                raise HTTPException(422, {"message": "工作流候选无法应用。", "details": str(exc)}) from exc
+        proposed_doc = deepcopy(doc)
+        project_changed = False
+        timeline_changed = False
+        audio_changed = False
+        candidate_ids: list[str] = []
+        applied_ids: list[str] = []
+        prompt_version_ids: list[str] = []
+        for operation in selected_operations:
+            content = operation.content if operation.content is not None else operation.after
+            if operation.workspace == "story":
+                proposed_doc = _assistant_story_candidate(proposed_doc, content)
+                project_changed = True
+            elif operation.workspace == "assets":
+                if operation.action in {"update_metadata", "update_asset_metadata"}:
+                    proposed_doc = _assistant_asset_metadata_candidate(proposed_doc, operation)
+                    project_changed = True
+                elif operation.action in {"create_prompt_candidate", "candidate_draft"} or isinstance(content, (str, dict)):
+                    proposed_doc, prompt_version_id = _assistant_asset_prompt_candidate(database, connection, proposed_doc, operation, current_bundle)
+                    if prompt_version_id:
+                        prompt_version_ids.append(prompt_version_id)
+                    project_changed = True
+            elif operation.workspace == "audio":
+                proposed_doc["audio"] = _assistant_audio_candidate(proposed_doc, content, operation.target_id)
+                audio_changed = True
+                project_changed = True
+            elif operation.workspace == "timeline":
+                timeline_candidate = content.get("document") if isinstance(content, dict) and isinstance(content.get("document"), dict) else content
+                if not isinstance(timeline_candidate, dict):
+                    raise HTTPException(422, "时间线候选必须是 JSON 对象。")
+                timeline_model = TimelineUpdateV3.model_validate({"expected_revision": 1, "document": timeline_candidate}).document
+                if not timeline_row:
+                    raise HTTPException(404, "项目时间线尚未初始化。")
+                timeline_document = timeline_model.model_dump(mode="json")
+                timeline_changed = True
+            elif operation.workspace == "workflow":
+                pass
+            candidate_ids.append(_assistant_candidate_row(database, connection, plan_id, project_id, operation))
+            applied_ids.append(operation.id)
+        now = utcnow()
+        next_project_revision = int(project_row["revision"])
+        if project_changed:
+            next_project_revision = save_project_document(request, proposed_doc, int(project_row["revision"]), connection=connection, audit_event={"project_id": project_id, "action": "assistant_workspace_applied", "target_type": "project", "target_id": project_id, "reason": "assistant_selected_operations", "before": {"revision": project_row["revision"]}, "after": {"workspaces": sorted({item.workspace for item in selected_operations})}})
+        if graph_changed:
+            next_graph_revision = int(graph_row["revision"]) + 1
+            connection.execute("UPDATE workflow_graphs SET revision=?,graph_json=?,updated_at=? WHERE project_id=?", (next_graph_revision, database.encode(proposed_graph), now, project_id))
+            connection.execute("INSERT INTO workflow_graph_events(project_id,revision,event_type,detail_json,created_at) VALUES(?,?,?,?,?)", (project_id, next_graph_revision, "assistant_workspace_applied", database.encode({"run_id": run_id, "plan_id": plan_id, "operation_ids": applied_ids}), now))
+        else:
+            next_graph_revision = int(graph_row["revision"])
+        if timeline_changed and timeline_row:
+            next_timeline_revision = int(timeline_row["revision"]) + 1
+            connection.execute("UPDATE timelines_v3 SET revision=?,document_json=?,updated_at=? WHERE project_id=?", (next_timeline_revision, database.encode(timeline_document), now, project_id))
+            connection.execute("INSERT INTO timeline_events_v6(project_id,revision,event_type,detail_json,created_at) VALUES(?,?,?,?,?)", (project_id, next_timeline_revision, "assistant_workspace_applied", database.encode({"run_id": run_id, "plan_id": plan_id, "operation_ids": applied_ids}), now))
+        else:
+            next_timeline_revision = int(timeline_row["revision"]) if timeline_row else None
+        if not project_changed and (graph_changed or timeline_changed):
+            sync_project_files(database, DATA_DIR, project_id, connection=connection)
+        elif project_changed:
+            sync_project_files(database, DATA_DIR, project_id, document=proposed_doc, revision=next_project_revision, connection=connection)
+        previous_decision = database.decode(plan_row["decision_json"], {}) or {}
+        all_operation_ids = {item.id for item in patch.workspace_operations}
+        plan_status = "applied" if selected_ids >= all_operation_ids else "partially_applied"
+        decision = {**previous_decision, "detail": redact(body.detail), "selected_operation_ids": sorted(selected_ids), "applied_operation_ids": applied_ids, "candidate_ids": candidate_ids, "prompt_version_ids": prompt_version_ids, "project_revision": next_project_revision, "graph_revision": next_graph_revision, "timeline_revision": next_timeline_revision, "contract_hash": current_bundle["bundle_hash"]}
+        connection.execute("UPDATE agent_plans_v5 SET status=?,decision_json=?,updated_at=? WHERE id=?", (plan_status, database.encode(decision), now, plan_id))
+        connection.execute("INSERT INTO agent_plan_events_v5(plan_id,event_type,detail_json,created_at) VALUES(?,?,?,?)", (plan_id, "workspace_applied", database.encode(decision), now))
+        updated_result = {**result, "apply": {"selected_operation_ids": sorted(selected_ids), "applied_operation_ids": applied_ids, "project_revision": next_project_revision, "graph_revision": next_graph_revision, "timeline_revision": next_timeline_revision}}
+        connection.execute("UPDATE assistant_runs_v18 SET result_json=?,checkpoint_json=?,updated_at=? WHERE id=?", (database.encode(updated_result), database.encode({"last_event": "workspace_apply", "plan_status": plan_status}), now, run_id))
+    _assistant_emit(database, run_id, "workspace_apply", "succeeded", {"plan_id": plan_id, "applied_operation_ids": applied_ids, "project_revision": next_project_revision, "graph_revision": next_graph_revision, "timeline_revision": next_timeline_revision}, "workspace_apply")
+    _assistant_emit(database, run_id, "run_completed", "succeeded", {"plan_id": plan_id, "plan_status": plan_status, "message": "已按勾选项应用到工作台。"})
+    if any(item.workspace == "story" for item in selected_operations):
+        try:
+            _sync_asset_board_after_document(database, project_id, proposed_doc, next_project_revision)
+        except Exception:
+            # The board is a rebuildable projection; do not turn a successful
+            # project transaction into a destructive retry if a projection
+            # refresh is temporarily unavailable.
+            pass
+    return {"run": _assistant_run_payload(database, _assistant_run_row(database, run_id)), "plan": _agent_plan_payload(database, _agent_plan_row(database, plan_id)), "applied_operation_ids": applied_ids, "project_revision": next_project_revision, "graph_revision": next_graph_revision, "timeline_revision": next_timeline_revision}
+
+
+@app.post("/api/v2/assistant/runs/{run_id}/reject")
+async def reject_assistant_run(run_id: str, body: AssistantRejectV3, request: Request):
+    database = db(request)
+    row = _assistant_run_row(database, run_id)
+    result = database.decode(row["result_json"], {}) or {}
+    plan_id = str(result.get("plan_id") or "")
+    if plan_id:
+        plan = _agent_plan_row(database, plan_id)
+        if plan["status"] == "awaiting_review":
+            now = utcnow()
+            decision = {**(database.decode(plan["decision_json"], {}) or {}), "detail": redact(body.detail)}
+            with database.connect() as connection:
+                connection.execute("UPDATE agent_plans_v5 SET status='rejected',decision_json=?,updated_at=? WHERE id=?", (database.encode(decision), now, plan_id))
+                connection.execute("INSERT INTO agent_plan_events_v5(plan_id,event_type,detail_json,created_at) VALUES(?,?,?,?)", (plan_id, "rejected", database.encode(decision), now))
+            _assistant_emit(database, run_id, "run_completed", "succeeded", {"plan_id": plan_id, "status": "rejected"}, "plan_preview")
+    return _assistant_run_payload(database, _assistant_run_row(database, run_id))
+
+
+@app.post("/api/v2/assistant/runs/{run_id}/audio-draft")
+async def apply_audio_assistant_draft(run_id: str, body: AudioAssistantDraftApplyV3, request: Request):
+    """Apply selected voice-preparation operations to a browser draft only.
+
+    This endpoint intentionally does not use the generic Agent apply path.  It
+    never writes the project document, creates candidate rows, calls MiniMax,
+    creates a Take/artifact, or changes QA/registration state.  The browser
+    receives a merged draft and decides when to use the existing audio save
+    flow.
+    """
+
+    database = db(request)
+    run = _assistant_run_row(database, run_id)
+    mode = str(run["assistant_mode"] if "assistant_mode" in run.keys() else "general")
+    if mode != AUDIO_ASSISTANT_MODE:
+        raise HTTPException(409, "只有声音工坊的 voice-preparation 运行可以应用声音草稿。")
+    if run["status"] != "succeeded":
+        raise HTTPException(409, f"声音助手运行当前不能应用草稿：{run['status']}。")
+
+    current_bundle = contract_bundle()
+    if str(run["contract_hash"]) != current_bundle["bundle_hash"]:
+        stale_error = {
+            "message": "FRAMEFLOW 规范已更新，当前声音方案已冻结，请重新分析。",
+            "kind": "contract_stale",
+            "status": 409,
+            "current_contract_hash": current_bundle["bundle_hash"],
+            "plan_contract_hash": run["contract_hash"],
+        }
+        raise HTTPException(409, stale_error)
+    if body.expected_contract_bundle_hash != current_bundle["bundle_hash"]:
+        raise HTTPException(409, {
+            "message": "FRAMEFLOW 规范已更新，当前声音方案已冻结，请重新分析。",
+            "kind": "contract_stale",
+            "current_contract_hash": current_bundle["bundle_hash"],
+            "plan_contract_hash": run["contract_hash"],
+        })
+
+    result = database.decode(run["result_json"], {}) or {}
+    plan_id = str(result.get("plan_id") or "")
+    base_hash = str(result.get("audio_base_hash") or "")
+    if not base_hash and plan_id:
+        with database.connect() as connection:
+            plan_row = connection.execute("SELECT input_snapshot_json FROM agent_plans_v5 WHERE id=? AND run_id=?", (plan_id, run_id)).fetchone()
+        snapshot = database.decode(plan_row["input_snapshot_json"], {}) if plan_row else {}
+        base_hash = str(snapshot.get("audio_draft_hash") or "")
+    if not base_hash:
+        raise HTTPException(409, "当前声音方案缺少草稿基线，请重新分析当前声音工坊。")
+    if body.base_audio_hash != base_hash:
+        raise HTTPException(409, {
+            "message": "当前声音草稿已被修改，旧 AI 方案不能覆盖。请重新分析当前草稿。",
+            "kind": "audio_draft_stale",
+            "expected_base_audio_hash": base_hash,
+            "received_base_audio_hash": body.base_audio_hash,
+        })
+
+    database_project: sqlite3.Row | None
+    with database.connect() as connection:
+        database_project = connection.execute("SELECT revision FROM projects WHERE id=?", (run["project_id"],)).fetchone()
+    if not database_project:
+        raise HTTPException(404, "项目不存在，不能应用声音草稿。")
+    current_revision = int(database_project["revision"])
+    run_base_revision = int(run["base_project_revision"])
+    if body.expected_project_revision != run_base_revision or body.expected_audio_revision != run_base_revision:
+        raise HTTPException(409, {
+            "message": "当前声音方案不是基于最新的项目/声音工作区版本，请重新分析。",
+            "kind": "audio_draft_stale",
+            "run_base_revision": run_base_revision,
+            "expected_project_revision": body.expected_project_revision,
+            "expected_audio_revision": body.expected_audio_revision,
+        })
+    if current_revision != body.expected_project_revision:
+        raise HTTPException(409, {
+            "message": "项目版本已变化，声音方案已失效，请重新分析。",
+            "current_revision": current_revision,
+        })
+    if current_revision != body.expected_audio_revision:
+        raise HTTPException(409, {
+            "message": "声音工作区版本已变化，声音方案已失效，请重新分析。",
+            "current_revision": current_revision,
+        })
+
+    submitted_document = _audio_studio_document({"audio": body.document})
+    submitted_hash = audio_document_hash(submitted_document)
+    if submitted_hash != base_hash:
+        raise HTTPException(409, {
+            "message": "当前声音草稿已被修改，旧 AI 方案不能覆盖。请重新分析当前草稿。",
+            "kind": "audio_draft_stale",
+            "expected_base_audio_hash": base_hash,
+            "received_audio_hash": submitted_hash,
+        })
+
+    patch_data = result.get("patch") if isinstance(result.get("patch"), dict) else {}
+    try:
+        patch = AgentPatchV3.model_validate(patch_data)
+    except Exception as exc:
+        raise HTTPException(422, {"message": "声音助手方案中的草稿操作无效。", "details": str(exc)}) from exc
+    operations = [item.model_dump(mode="json") for item in patch.workspace_operations]
+    if any(item.get("workspace") != "audio" for item in operations):
+        raise HTTPException(422, "声音助手草稿只能包含 audio 工作区操作。")
+    invalid_actions = sorted({str(item.get("action")) for item in operations if str(item.get("action")) not in SUPPORTED_AUDIO_ASSISTANT_OPERATIONS})
+    if invalid_actions:
+        raise HTTPException(422, {"message": "声音助手包含不受支持的草稿操作。", "actions": invalid_actions})
+    known_ids = {str(item.get("id")) for item in operations}
+    selected_ids = {str(item) for item in body.selected_operation_ids}
+    unknown_ids = sorted(selected_ids - known_ids)
+    if unknown_ids:
+        raise HTTPException(422, {"message": "勾选的声音操作不属于当前方案。", "operation_ids": unknown_ids})
+    selected_operations = [item for item in operations if str(item.get("id")) in selected_ids]
+    if any(str(item.get("risk")) == "blocked" for item in selected_operations):
+        raise HTTPException(422, "声音助手方案包含受保护操作，不能应用。")
+    try:
+        proposed, created_id_map, applied_ids = apply_audio_preparation_operations(
+            submitted_document,
+            operations,
+            selected_ids,
+        )
+    except AudioPreparationError as exc:
+        raise HTTPException(exc.status_code, {"message": str(exc), "kind": exc.kind}) from exc
+    proposed_hash = audio_document_hash(proposed)
+    _assistant_emit(
+        database,
+        run_id,
+        "audio_draft_apply",
+        "succeeded",
+        {
+            "persisted": False,
+            "applied_operation_ids": applied_ids,
+            "created_id_map": created_id_map,
+            "audio_hash": proposed_hash,
+        },
+        "audio_draft_apply",
+    )
+    return {
+        "persisted": False,
+        "document": proposed,
+        "applied_operation_ids": applied_ids,
+        "created_id_map": created_id_map,
+        "project_revision": current_revision,
+        "audio_revision": current_revision,
+        "audio_hash": proposed_hash,
+    }
+
+
 @app.get("/api/v2/providers/catalog")
 async def provider_catalog_v3(request:Request):
     database=db(request)
@@ -1474,13 +3309,10 @@ async def provider_contract_v3(provider_id:str,request:Request):
 
 @app.post("/api/v2/providers/{provider_id}/probe")
 async def probe_provider_v3(provider_id:str,request:Request):
-    database=db(request); profile=get_profile(database,provider_id)
-    result=await probe_profile(profile,get_profile_secret(profile))
-    contract=provider_contract(profile)
-    result.update({"adapter":contract["adapter"],"contract_version":contract["version"],"credential":credential_state(profile),"capability_specs":contract["capability_specs"],"input_limits":contract["input_limits"],"output_types":contract["output_types"],"task_modes":contract["task_modes"],"retry_policy":contract["retry_policy"]})
-    with database.connect() as c:
-        c.execute("UPDATE provider_profiles SET last_health_json=?,capabilities_json=?,updated_at=? WHERE id=?",(database.encode(result),database.encode(result.get("capabilities",contract["capabilities"])),utcnow(),provider_id))
-    return {"provider":public_profile(get_profile(database,provider_id)),"probe":result}
+    # Keep the compatibility endpoint on the same failure-classifying path as
+    # the settings UI.  In particular, invalid credentials must replace the
+    # previous health result instead of leaving the client in a stale state.
+    return await settings_provider_probe_v3(provider_id, request)
 
 
 @app.post("/api/v2/providers/route-preview")
@@ -1508,7 +3340,20 @@ async def provider_route_preview_v3(body:ProviderRoutePreviewV3,request:Request)
 def _settings_provider_payload(database: Database, row: sqlite3.Row) -> dict[str, Any]:
     profile = public_profile(row_profile(database, row))
     contract = provider_contract(profile)
-    health = profile.get("last_health") or {}
+    health = dict(profile.get("last_health") or {})
+    # Health results written by older builds may carry the old 4096-character
+    # OpenAI limit. The current MiniMax contract is authoritative for the
+    # settings response even before the next successful probe.
+    health.update({
+        "capabilities": contract["capabilities"],
+        "capability_specs": contract["capability_specs"],
+        "input_limits": contract["input_limits"],
+        "output_types": contract["output_types"],
+        "task_modes": contract["task_modes"],
+        "retry_policy": contract["retry_policy"],
+        "adapter": contract["adapter"],
+        "contract_version": contract["version"],
+    })
     return {
         **profile,
         "type": profile["provider_type"],
@@ -1557,7 +3402,12 @@ def _settings_system_status(database: Database) -> dict[str, Any]:
         "keyring": {"available": keyring_available, "backend": keyring_backend},
         "media": {"ffmpeg": find_binary("ffmpeg"), "ffprobe": find_binary("ffprobe")},
         "openai": {"profile_id": openai["id"] if openai else None, "credential_configured": bool(openai and openai["credential_configured"])},
-        "minimax": {"profile_id": minimax["id"] if minimax else None, "credential_configured": bool(minimax and minimax["credential_configured"])},
+        "minimax": {
+            "profile_id": minimax["id"] if minimax else None,
+            "credential_configured": bool(minimax and minimax["credential_configured"]),
+            "active_region": minimax.get("active_region") if minimax else None,
+            "credential_regions": minimax.get("credential_regions", {}) if minimax else {},
+        },
         "disk_free_bytes": shutil.disk_usage(ROOT).free,
         "provider_count": len(providers),
     }
@@ -1668,6 +3518,7 @@ async def settings_v3(request: Request):
         "presets": [{"preset_id": key, **value} for key, value in PROVIDER_PRESETS.items()],
         "bindings": _settings_binding_payload(database),
         "capabilities": list(CAPABILITIES),
+        "feature_flags": {"assistant_workspace_v2": assistant_workspace_v2_enabled()},
         "orchestrator_models": {"default": DEFAULT_ORCHESTRATOR_MODEL, "models": ORCHESTRATOR_MODEL_OPTIONS},
         "routing_policy": "先按 Provider 能力、启用状态和最近探测状态自动匹配；手动保存绑定后保留人工选择。",
     }
@@ -1706,36 +3557,143 @@ async def settings_provider_delete_v3(provider_id: str, request: Request):
     return {**result, "providers": _settings_providers(db(request))}
 
 
+def _minimax_health_for_storage(profile: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+    """Keep one last probe per MiniMax region while exposing the active one."""
+    if profile.get("provider_type") != "minimax":
+        return result
+    region = _credential_region_for_profile(profile) or MINIMAX_DEFAULT_REGION
+    previous = profile.get("last_health") if isinstance(profile.get("last_health"), dict) else {}
+    regional = previous.get("regions") if isinstance(previous.get("regions"), dict) else {}
+    regional = deepcopy(regional)
+    if not regional and previous.get("region") == region:
+        regional[region] = {key: deepcopy(value) for key, value in previous.items() if key != "regions"}
+    current_result = deepcopy(result)
+    current_result["credential_region"] = region
+    regional[region] = current_result
+    stored = deepcopy(current_result)
+    stored["regions"] = regional
+    return stored
+
+
+def _provider_credential_reference(profile: dict[str, Any], region: str | None = None) -> str:
+    if profile.get("provider_type") == "minimax":
+        selected_region = _credential_region_for_profile(profile, region) or MINIMAX_DEFAULT_REGION
+        return _minimax_credential_ref(profile, selected_region)
+    return str(profile["credential_ref"])
+
+
+def _clear_provider_credential(profile: dict[str, Any], region: str | None = None) -> bool:
+    if profile.get("provider_type") == "minimax" and region is None:
+        # Provider deletion is the one operation that should remove both
+        # regional slots; an explicit region means “clear only this slot”.
+        references = [_minimax_credential_ref(profile, item) for item in MINIMAX_REGIONS]
+        selected_region = None
+    else:
+        selected_region = _credential_region_for_profile(profile, region)
+        references = [_provider_credential_reference(profile, selected_region)]
+    # Remove the legacy single-slot China credential together with the new
+    # China slot. Never use it as a fallback for the international endpoint.
+    if profile.get("provider_type") == "minimax" and (selected_region == "cn" or region is None):
+        legacy_reference = str(profile.get("credential_ref") or "")
+        if legacy_reference and legacy_reference not in references:
+            references.append(legacy_reference)
+    cleared = False
+    for reference in references:
+        try:
+            delete_secret(reference)
+            cleared = True
+        except SecretStoreError:
+            continue
+    return cleared
+
+
+def _invalidate_minimax_region_health(database: Database, provider_id: str, region: str) -> None:
+    """Require a fresh probe after a regional credential changes."""
+    with database.connect() as connection:
+        row = connection.execute("SELECT last_health_json FROM provider_profiles WHERE id=?", (provider_id,)).fetchone()
+        if not row:
+            return
+        stored = database.decode(row["last_health_json"], None)
+        if not isinstance(stored, dict):
+            return
+        regional = stored.get("regions") if isinstance(stored.get("regions"), dict) else None
+        if regional is not None:
+            remaining = {key: value for key, value in regional.items() if key != region}
+            replacement = {"regions": remaining} if remaining else None
+        elif stored.get("region") == region:
+            replacement = None
+        else:
+            return
+        connection.execute("UPDATE provider_profiles SET last_health_json=?,updated_at=? WHERE id=?", (database.encode(replacement) if replacement is not None else None, utcnow(), provider_id))
+
+
 @app.post("/api/v2/settings/providers/{provider_id}/credential")
 async def settings_provider_credential_v3(provider_id: str, body: CredentialWrite, request: Request):
     database = db(request)
     profile = get_profile(database, provider_id)
+    region = _credential_region_for_profile(profile, body.region)
     try:
-        set_secret(profile["credential_ref"], body.api_key)
+        set_secret(_provider_credential_reference(profile, region), body.api_key)
     except Exception as exc:
         raise HTTPException(503, f"无法写入系统凭据库：{exc}") from exc
-    return {"ok": True, "provider_id": provider_id, "credential_configured": True, "credential_mask": mask_secret(body.api_key), "storage": "system_credential_store"}
+    if region:
+        _invalidate_minimax_region_health(database, provider_id, region)
+    response: dict[str, Any] = {
+        "ok": True,
+        "provider_id": provider_id,
+        "credential_configured": True,
+        "credential_mask": mask_secret(body.api_key),
+        "storage": "system_credential_store",
+    }
+    if region:
+        response.update({"region": region})
+        regions, _ = _minimax_credential_regions(profile)
+        regions[region] = {
+            **regions.get(region, {}),
+            "configured": True,
+            "credential_mask": mask_secret(body.api_key),
+        }
+        response["credential_regions"] = regions
+    return response
 
 
 @app.post("/api/v2/settings/providers/{provider_id}/credential/import")
 async def settings_provider_credential_import_v3(provider_id: str, body: CredentialImport, request: Request):
+    profile = get_profile(db(request), provider_id)
+    region = body.region
+    if profile["provider_type"] == "minimax":
+        if body.environment_variable == "MINIMAX_GLOBAL_API_KEY":
+            inferred_region = "global"
+        elif body.environment_variable in {"MINIMAX_CN_API_KEY", "MINIMAX_API_KEY"}:
+            inferred_region = "cn"
+        else:
+            inferred_region = _credential_region_for_profile(profile) or MINIMAX_DEFAULT_REGION
+        region = _credential_region_for_profile(profile, region or inferred_region)
+        allowed = {MINIMAX_REGION_ENVIRONMENT[region]}
+        if region == "cn":
+            allowed.add(MINIMAX_LEGACY_ENVIRONMENT)
+        if body.environment_variable not in allowed:
+            raise HTTPException(422, f"{body.environment_variable} 不属于 MiniMax {MINIMAX_REGION_LABELS[region]}凭据槽位，请选择对应区域变量。")
     value = os.environ.get(body.environment_variable, "")
     if not value:
         raise HTTPException(404, f"环境变量 {body.environment_variable} 未设置。")
-    return await settings_provider_credential_v3(provider_id, CredentialWrite(api_key=value), request)
+    return await settings_provider_credential_v3(provider_id, CredentialWrite(api_key=value, region=region), request)
 
 
 @app.delete("/api/v2/settings/providers/{provider_id}/credential")
-async def settings_provider_credential_clear_v3(provider_id: str, request: Request):
+async def settings_provider_credential_clear_v3(provider_id: str, request: Request, region: str | None = None):
     database = db(request)
     profile = get_profile(database, provider_id)
-    try:
-        delete_secret(profile["credential_ref"])
-        cleared = True
-    except SecretStoreError:
-        cleared = False
+    selected_region = _credential_region_for_profile(profile, region)
+    cleared = _clear_provider_credential(profile, selected_region)
+    if selected_region:
+        _invalidate_minimax_region_health(database, provider_id, selected_region)
     current = get_profile(database, provider_id)
-    return {"ok": True, "provider_id": provider_id, "cleared_system_store": cleared, "credential_configured": bool(current["credential_configured"]), "environment_variable": provider_environment(profile)}
+    response = {"ok": True, "provider_id": provider_id, "cleared_system_store": cleared, "credential_configured": bool(current["credential_configured"])}
+    if selected_region:
+        response["region"] = selected_region
+        response["credential_regions"] = current.get("credential_regions", {})
+    return response
 
 
 @app.post("/api/v2/settings/providers/{provider_id}/probe")
@@ -1795,9 +3753,21 @@ async def settings_provider_probe_v3(provider_id: str, request: Request):
             "error_kind": "connection",
             "checked_at": time.time(),
         }
+    if profile["provider_type"] == "minimax":
+        # Preserve the last known directory as a non-live cache when a
+        # refresh fails. This keeps discovery useful without claiming stale
+        # voices are currently executable.
+        previous_health = profile.get("last_health") if isinstance(profile.get("last_health"), dict) else {}
+        previous_voices = previous_health.get("voices") if isinstance(previous_health.get("voices"), list) else []
+        if result.get("ok") is not True and previous_voices and not result.get("voices"):
+            result["voices"] = deepcopy(previous_voices)
+        result.setdefault("region", minimax_region(profile))
+        result["catalog_status"] = "live" if result.get("ok") is True else "cached" if result.get("voices") else "unavailable"
+        result["catalog_source"] = "live" if result.get("ok") is True else "cached" if result.get("voices") else "documented"
     result.update({"adapter": contract["adapter"], "contract_version": contract["version"], "credential": credential_state(profile, credential), "capability_specs": contract["capability_specs"], "input_limits": contract["input_limits"], "output_types": contract["output_types"], "task_modes": contract["task_modes"], "retry_policy": contract["retry_policy"]})
+    health_for_storage = _minimax_health_for_storage(profile, result)
     with database.connect() as connection:
-        connection.execute("UPDATE provider_profiles SET last_health_json=?,capabilities_json=?,updated_at=? WHERE id=?", (database.encode(result), database.encode(result.get("capabilities", contract["capabilities"])), utcnow(), provider_id))
+        connection.execute("UPDATE provider_profiles SET last_health_json=?,capabilities_json=?,updated_at=? WHERE id=?", (database.encode(health_for_storage), database.encode(result.get("capabilities", contract["capabilities"])), utcnow(), provider_id))
     return {"provider": _settings_provider(database, provider_id), "probe": result}
 
 
@@ -1806,6 +3776,54 @@ async def settings_provider_models_v3(provider_id: str, request: Request):
     profile = get_profile(db(request), provider_id)
     health = profile.get("last_health") or {}
     return {"provider_id": provider_id, "models": health.get("models", []), "model_catalog": health.get("model_catalog", []), "model_readiness": health.get("model_readiness", {}), "last_probe": health.get("checked_at")}
+
+
+def _minimax_voice_catalog_payload(database: Database, provider_id: str) -> dict[str, Any]:
+    profile = get_profile(database, provider_id)
+    if profile["provider_type"] != "minimax":
+        raise HTTPException(409, "只有 MiniMax Provider 提供系统音色目录。")
+    health = profile.get("last_health") if isinstance(profile.get("last_health"), dict) else {}
+    live_voices = health.get("voices") if isinstance(health.get("voices"), list) else []
+    if health.get("ok") is True and live_voices:
+        status = "live"
+        source = "live"
+        voices = live_voices
+    elif live_voices:
+        status = "cached"
+        source = "cached"
+        voices = live_voices
+    else:
+        # Keep documented Japanese candidates visible so the user can plan a
+        # test while credentials/network are being repaired, but mark them as
+        # non-live and never claim that they are executable.
+        status = "unavailable"
+        source = "documented"
+        voices = minimax_documented_voice_catalog()
+    return {
+        "provider_id": provider_id,
+        "provider": "minimax",
+        "region": minimax_region(profile),
+        "status": status,
+        "catalog_source": source,
+        "checked_at": health.get("checked_at"),
+        "voices": voices,
+        "models": health.get("models") or list(MINIMAX_TTS_MODELS),
+        "error": health.get("error"),
+        "error_kind": health.get("error_kind"),
+    }
+
+
+@app.get("/api/v2/providers/{provider_id}/voices")
+async def provider_voice_catalog_v3(provider_id: str, request: Request):
+    return _minimax_voice_catalog_payload(db(request), provider_id)
+
+
+@app.post("/api/v2/providers/{provider_id}/voices/refresh")
+async def refresh_provider_voice_catalog_v3(provider_id: str, request: Request):
+    # Reuse the provider probe boundary.  It is read-only upstream and never
+    # calls T2A, so refreshing the catalogue cannot create a billable Take.
+    probe = await settings_provider_probe_v3(provider_id, request)
+    return {"catalog": _minimax_voice_catalog_payload(db(request), provider_id), "probe": probe.get("probe")}
 
 
 @app.get("/api/v2/settings/capability-bindings")
@@ -2608,6 +4626,10 @@ async def _run_asset_prompt_agent(request:Request,project_id:str,input_package:d
                   "如果一个原始资产包含多个组件，必须合并在同一张原始 ID 的卡片中，用 prompt、promptPack、detailAnchorRegistry 和 mustPreserve 表达组件差异；不要创建子资产卡，也不要把 canonicalName 当作 ID。"
                   "输出卡片的 id 必须与输入原始 ID 一一对应，不能因为组件属于不同 domain skill 就拆成多张卡。"
                   "若输入包含 review_feedback，把它作为本次重写的失败证据逐项修正，同时保留原身份锚点和未被指出的稳定细节，不要把反馈原文机械复制进最终画面描述。"
+                  "对于 assetClass=audio，切换到 voice-controller 和 MiniMax Speech Web 格式：不要套用视觉资产 Prompt，不要把空间、材质、光线、摄影机、画幅或建议尺寸写进声音描述。"
+                  "audio 资产必须在 promptPack.audioDetails 中填写 schemaVersion=minimax-speech-audio-v2、sourceText、providerText、textStatus、voiceSource、voiceIdentity、language、locale、dialect、performanceDirection、emotion、intensity、pace、pausePlan、pronunciation、provider、model、voiceId、providerVoiceId、providerRegion、speed、pitch、volume、languageBoost、targetDuration、relevantShots、continuityChecklist、mustPreserve 和 mustAvoid。"
+                  "audioDetails.sourceText 只能是实际要朗读的对白/旁白；不能包含资产 ID、镜头叙述、QA、授权、分轨或合同文字。prompt 字段只放 confirmed 的实际朗读文本；candidate、conflict 或 missing 时，prompt 使用简短待确认状态，绝不伪造最终台词。"
+                  "同一 audio 资产绑定多个镜头时，逐镜头保留候选文本和冲突，不要把 S03、S08、S16 等不同镜头合并成一段。MiniMax Web 的情绪/语气、速度、音调、音量和停顿是外部页面控制项；工作台只输出可复制文本块与单独的设置元数据。"
                   "你不生成图片、不调用图片服务、不宣称 Prompt QA 或图片 QA 已通过；所有卡片的 promptQaDecision 必须保持 Pending，"
                   "generationChoiceStatus 必须是 user-confirmation-required，等待用户确认后才允许图片生成。"
                   + prompt_contract_instructions())
@@ -3203,8 +5225,12 @@ def _validate_asset_prompt_output(result:dict[str,Any],allowed_ids:set[str],expe
         if not asset_id or asset_id not in allowed_ids:issues.append(f"资产 Prompt 卡引用了未知资产 {asset_id or '<empty>'}")
         if asset_id in seen:issues.append(f"资产 Prompt 卡重复 {asset_id}")
         seen.add(asset_id)
-        if not str(card.get("prompt") or "").strip():issues.append(f"资产 {asset_id} 的 Prompt 为空")
+        card_class=canonical_asset_class(card.get("assetClass") or "")
+        if not str(card.get("prompt") or "").strip() and card_class != "audio":
+            issues.append(f"资产 {asset_id} 的 Prompt 为空")
         if not isinstance(card.get("promptPack"),dict):issues.append(f"资产 {asset_id} 的 promptPack 必须是对象")
+        elif card_class == "audio" and not isinstance(card.get("promptPack",{}).get("audioDetails"),dict):
+            issues.append(f"音频资产 {asset_id} 的 promptPack.audioDetails 必须是对象")
         if not isinstance(card.get("relevantShots"),list):issues.append(f"资产 {asset_id} 的 relevantShots 必须是数组")
         else:
             unknown_shots=[str(shot_id) for shot_id in card.get("relevantShots",[]) if str(shot_id) not in shot_ids]
@@ -3908,27 +5934,38 @@ async def generate_asset_image_v3(project_id:str,logical_asset_id:str,body:Asset
 @app.post("/api/audio/speech")
 async def generate_speech(body:SpeechGenerate,request:Request):
     if not body.confirmed:raise HTTPException(409,"语音生成会产生费用，请先确认。")
+    if body.text_status != "confirmed":raise HTTPException(409,"正式语音生成只接受已确认的朗读文本。")
     database=db(request); profile,bound_model=resolve_profile(database,"tts",body.provider_profile_id)
     if profile["provider_type"] != "minimax":raise HTTPException(409,"当前工作台的 TTS 已固定使用 MiniMax，请先绑定 MiniMax TTS。")
     if not profile["enabled"]:raise HTTPException(409,"MiniMax TTS Provider 已停用。")
+    selected_region = minimax_region(profile)
+    if body.provider_region and body.provider_region != selected_region:
+        raise HTTPException(409, f"请求区域 {body.provider_region} 与 MiniMax Provider 当前区域 {selected_region} 不一致；请先在设置中切换 Provider 区域。")
     config=profile.get("model_config") if isinstance(profile.get("model_config"),dict) else {}
-    requested_model=None if body.model in ALLOWED_TTS_MODELS else body.model
-    model=str(requested_model or bound_model or config.get("tts_model") or MINIMAX_DEFAULT_TTS_MODEL)
-    requested_voice=None if body.voice in ALLOWED_TTS_VOICES else body.voice
-    voice_id=str(requested_voice or config.get("voice_id") or MINIMAX_DEFAULT_VOICE_ID)
+    if body.model not in MINIMAX_TTS_MODELS:raise HTTPException(422,"MiniMax TTS 模型无效，请选择 speech-2.8-hd 或其他受支持的 Speech 模型。")
+    model=str(body.model or bound_model or config.get("tts_model") or MINIMAX_DEFAULT_TTS_MODEL)
+    voice_id=str(body.voice or config.get("voice_id") or MINIMAX_DEFAULT_VOICE_ID)
     if model not in MINIMAX_TTS_MODELS:raise HTTPException(422,"MiniMax TTS 模型无效，请选择最近探测到的 speech 模型。")
     if body.format not in MINIMAX_TTS_FORMATS:raise HTTPException(422,"MiniMax TTS 只支持 mp3、wav、flac 输出。")
     if not MINIMAX_TTS_SPEED_MIN <= body.speed <= MINIMAX_TTS_SPEED_MAX:raise HTTPException(422,"MiniMax TTS 语速必须在 0.5 到 2.0 之间。")
-    upstream=minimax_tts_payload(profile,{"model":model,"text":body.text,"voice":voice_id,"format":body.format,"speed":body.speed,"volume":body.volume,"pitch":body.pitch,"emotion":body.emotion,"language_boost":body.language_boost,"pronunciation_dict":body.pronunciation_dict,"sample_rate":body.sample_rate,"bitrate":body.bitrate,"aigc_watermark":body.aigc_watermark})
+    source_text = str(body.source_text or body.text)
+    language_boost=language_boost_for_locale(body.locale, body.language) or body.language_boost
+    provider_request={"model":model,"text":body.text,"voice":voice_id,"format":body.format,"speed":body.speed,"volume":body.volume,"pitch":body.pitch,"emotion":body.emotion,"language_boost":language_boost,"locale":body.locale,"language":body.language,"pronunciation_dict":body.pronunciation_dict,"pause_plan":body.pause_plan,"sound_tags":body.sound_tags,"sample_rate":body.sample_rate,"bitrate":body.bitrate,"aigc_watermark":body.aigc_watermark}
+    if body.provider_text:
+        provider_request["provider_text"] = body.provider_text
+    upstream=minimax_tts_payload(profile,provider_request)
+    provider_text=str(upstream.get("text") or body.text)
     audio,provider_metadata=await minimax_speech(profile,get_profile_secret(profile),upstream)
     safe_id=re.sub(r"[^A-Za-z0-9_-]","",body.dialogue_id)[:40] or "DLG"; target=safe_project_path(DATA_DIR,body.project_id,"artifacts/audio") if body.project_id else GENERATED_AUDIO_DIR; target.mkdir(parents=True,exist_ok=True); dest=target/f"{safe_id}-{secrets.token_hex(8)}.{body.format}"; dest.write_bytes(audio)
-    artifact=register_artifact(database,body.project_id,"audio",dest,profile,model,None,{"voice":voice_id,"format":body.format,"source_type":"minimax-tts","provider_type":"minimax","trace_id":provider_metadata.get("trace_id"),"extra_info":provider_metadata.get("extra_info",{}),"instructions":body.instructions,"ai_generated_disclosure":True})
-    return {"url":artifact_url(body.project_id,dest),"filename":dest.name,"model":model,"voice":voice_id,"format":body.format,"duration":audio_duration(dest),"artifact_id":artifact["id"],"provider":profile["display_name"],"provider_type":"minimax","provider_profile_id":profile["id"],"source_type":"minimax-tts","trace_id":provider_metadata.get("trace_id"),"disclosure":"此声音由 MiniMax AI 合成。"}
+    artifact=register_artifact(database,body.project_id,"audio",dest,profile,model,None,{"voice":voice_id,"format":body.format,"source_type":"minimax-tts","provider_type":"minimax","provider_region":selected_region,"source_text":source_text,"provider_text":provider_text,"text_status":body.text_status,"language":body.language,"locale":body.locale,"dialect":body.dialect,"language_boost":upstream.get("language_boost"),"speed":body.speed,"pitch":body.pitch,"volume":body.volume,"emotion":body.emotion or None,"trace_id":provider_metadata.get("trace_id"),"extra_info":provider_metadata.get("extra_info",{}),"instructions":body.instructions,"ai_generated_disclosure":True})
+    return {"url":artifact_url(body.project_id,dest),"filename":dest.name,"model":model,"voice":voice_id,"format":body.format,"duration":audio_duration(dest),"artifact_id":artifact["id"],"provider":profile["display_name"],"provider_type":"minimax","provider_profile_id":profile["id"],"provider_region":selected_region,"source_type":"minimax-tts","source_text":source_text,"provider_text":provider_text,"language":body.language,"locale":body.locale,"language_boost":upstream.get("language_boost"),"trace_id":provider_metadata.get("trace_id"),"extra_info":provider_metadata.get("extra_info",{}),"settings":{"speed":body.speed,"pitch":body.pitch,"volume":body.volume,"format":body.format,"sample_rate":body.sample_rate,"bitrate":body.bitrate},"disclosure":"此声音由 MiniMax AI 合成。"}
 
 
 def _default_audio_studio() -> dict[str, Any]:
     return {
-        "version": 1,
+        "version": 2,
+        "schema_version": "minimax-speech-audio-v2",
+        "schemaVersion": "minimax-speech-audio-v2",
         "selected_mode": "overview",
         "voices": [],
         "voice_references": [],
@@ -3961,6 +5998,47 @@ def _audio_status(record: dict[str, Any], default: str = "planned") -> str:
     return str(_audio_value(record, "status", "execution_status", "executionStatus", default=default))
 
 
+def _audio_text_status(record: dict[str, Any], source_text: str) -> str:
+    raw = str(_audio_value(record, "text_status", "textStatus", "source_text_status", "sourceTextStatus", default="") or "").strip().lower().replace("_", "-")
+    if raw in {"confirmed", "user-confirmed", "approved", "locked", "final"}:
+        # A newly edited draft must not look confirmed merely because an old
+        # v1 record used a boolean/status flag.  Generated records retain the
+        # status through their artifact/take link; ungenerated lines need the
+        # explicit confirmation hash written by /audio/text-confirmation.
+        artifact_id = _audio_value(record, "artifact_id", "artifactId")
+        selected_take_id = _audio_value(record, "selected_take_id", "selectedTakeId")
+        confirmation = _audio_value(record, "text_confirmation", "textConfirmation", default={})
+        expected_hash = hashlib.sha256(source_text.encode("utf-8")).hexdigest() if source_text else ""
+        if source_text and not artifact_id and not selected_take_id and not isinstance(confirmation, dict):
+            return "candidate"
+        if source_text and not artifact_id and not selected_take_id and str(confirmation.get("status") or "") != "confirmed":
+            return "candidate"
+        if source_text and not artifact_id and not selected_take_id and str(confirmation.get("text_sha256") or "") != expected_hash:
+            return "candidate"
+        return "confirmed" if source_text else "missing"
+    if raw in {"candidate", "provisional", "pending", "user-confirmation-required", "needs-confirmation"}:
+        return "candidate" if source_text else "missing"
+    if raw == "conflict":
+        return "conflict"
+    return "confirmed" if source_text else "missing"
+
+
+def _audio_settings(record: dict[str, Any]) -> dict[str, Any]:
+    nested = _audio_value(record, "settings", default={})
+    settings = dict(nested) if isinstance(nested, dict) else {}
+    aliases = {
+        "speed": ("speed",), "pitch": ("pitch",), "volume": ("volume", "vol"),
+        "format": ("format",), "sample_rate": ("sample_rate", "sampleRate"),
+        "bitrate": ("bitrate",), "channel": ("channel", "channels"),
+    }
+    for target, keys in aliases.items():
+        if settings.get(target) is None:
+            value = _audio_value(record, *keys)
+            if value is not None:
+                settings[target] = value
+    return settings
+
+
 def _audio_reference_record(record: dict[str, Any], index: int) -> dict[str, Any]:
     return {
         **record,
@@ -3981,19 +6059,29 @@ def _audio_voice_record(record: dict[str, Any], index: int) -> dict[str, Any]:
     traits = _audio_value(record, "traits", default=[])
     if isinstance(traits, str):
         traits = [item.strip() for item in re.split(r"[,，]", traits) if item.strip()]
+    source_type = str(_audio_value(record, "source_type", "sourceType", default="preset"))
+    locale = str(_audio_value(record, "locale", default="") or "")
+    language = str(_audio_value(record, "language", default="") or "")
+    stored_language_boost = _audio_value(record, "language_boost", "languageBoost")
     return {
         **record,
         "id": str(_audio_value(record, "id", default=f"V{index:03d}")),
         "name": str(_audio_value(record, "name", default="未命名声音")),
         "character_id": _audio_value(record, "character_id", "characterId"),
         "role": str(_audio_value(record, "role", default="character")),
-        "source_type": str(_audio_value(record, "source_type", "sourceType", default="design")),
+        "source_type": source_type,
         "provider": _audio_value(record, "provider"),
         "model": _audio_value(record, "model"),
         "provider_profile_id": _audio_value(record, "provider_profile_id", "providerProfileId"),
         "provider_voice_id": _audio_value(record, "provider_voice_id", "providerVoiceId"),
-        "language": _audio_value(record, "language", default=""),
+        "provider_voice_name": _audio_value(record, "provider_voice_name", "providerVoiceName", default=""),
+        "provider_voice_source": _audio_value(record, "provider_voice_source", "providerVoiceSource", default="system" if source_type == "preset" else source_type),
+        "provider_region": _audio_value(record, "provider_region", "providerRegion", default="cn"),
+        "locale": locale,
+        "language": language,
         "dialect": _audio_value(record, "dialect", default=""),
+        "language_boost": stored_language_boost or language_boost_for_locale(locale, language),
+        "catalog_snapshot": _audio_value(record, "catalog_snapshot", "catalogSnapshot", default={}),
         "traits": traits if isinstance(traits, list) else [],
         "pronunciation_risks": _audio_value(record, "pronunciation_risks", "pronunciationRisks", default=[]),
         "register": str(_audio_value(record, "register", default="")),
@@ -4019,13 +6107,28 @@ def _audio_audition_record(record: dict[str, Any], index: int) -> dict[str, Any]
     condition = str(_audio_value(record, "condition", default="neutral"))
     if condition not in conditions:
         condition = "neutral"
+    source_text = str(_audio_value(record, "source_text", "sourceText", "text", default=""))
+    provider_text = str(_audio_value(record, "provider_text", "providerText", default=source_text))
+    locale = str(_audio_value(record, "locale", default="") or "")
+    language = str(_audio_value(record, "language", default="") or "")
+    stored_language_boost = _audio_value(record, "language_boost", "languageBoost")
     return {
         **record,
         "id": str(_audio_value(record, "id", default=f"AUD{index:03d}")),
         "voice_id": _audio_value(record, "voice_id", "voiceId"),
         "character_id": _audio_value(record, "character_id", "characterId"),
         "condition": condition,
-        "text": str(_audio_value(record, "text", default="")),
+        "text": source_text,
+        "source_text": source_text,
+        "provider_text": provider_text,
+        "text_status": _audio_text_status(record, source_text),
+        "locale": locale,
+        "language": language,
+        "dialect": _audio_value(record, "dialect", default=""),
+        "language_boost": stored_language_boost or language_boost_for_locale(locale, language),
+        "provider_region": _audio_value(record, "provider_region", "providerRegion", default="cn"),
+        "variant": str(_audio_value(record, "variant", "condition", default=condition)),
+        "settings": _audio_settings(record),
         "emotion": str(_audio_value(record, "emotion", default="")),
         "instructions": str(_audio_value(record, "instructions", default="")),
         "target_duration": _audio_value(record, "target_duration", "targetDuration"),
@@ -4040,6 +6143,11 @@ def _audio_audition_record(record: dict[str, Any], index: int) -> dict[str, Any]
 
 
 def _audio_dialogue_record(record: dict[str, Any], index: int) -> dict[str, Any]:
+    source_text = str(_audio_value(record, "source_text", "sourceText", "text", default=""))
+    provider_text = str(_audio_value(record, "provider_text", "providerText", default=source_text))
+    locale = str(_audio_value(record, "locale", default="") or "")
+    language = str(_audio_value(record, "language", default="") or "")
+    stored_language_boost = _audio_value(record, "language_boost", "languageBoost")
     return {
         **record,
         "id": str(_audio_value(record, "id", default=f"DLG{index:03d}")),
@@ -4047,7 +6155,16 @@ def _audio_dialogue_record(record: dict[str, Any], index: int) -> dict[str, Any]
         "character_id": _audio_value(record, "character_id", "characterId"),
         "voice_id": _audio_value(record, "voice_id", "voiceId"),
         "shot_ids": _audio_ids(_audio_value(record, "shot_ids", "shotIds", default=[])),
-        "text": str(_audio_value(record, "text", default="")),
+        "text": source_text,
+        "source_text": source_text,
+        "provider_text": provider_text,
+        "text_status": _audio_text_status(record, source_text),
+        "locale": locale,
+        "language": language,
+        "dialect": _audio_value(record, "dialect", default=""),
+        "language_boost": stored_language_boost or language_boost_for_locale(locale, language),
+        "provider_region": _audio_value(record, "provider_region", "providerRegion", default="cn"),
+        "settings": _audio_settings(record),
         "emotion": str(_audio_value(record, "emotion", default="")),
         "target_duration": _audio_value(record, "target_duration", "targetDuration"),
         "artifact_id": _audio_value(record, "artifact_id", "artifactId"),
@@ -4064,6 +6181,11 @@ def _audio_dialogue_record(record: dict[str, Any], index: int) -> dict[str, Any]
 
 
 def _audio_take_record(record: dict[str, Any], index: int) -> dict[str, Any]:
+    source_text = str(_audio_value(record, "source_text", "sourceText", default=""))
+    provider_text = str(_audio_value(record, "provider_text", "providerText", default=source_text))
+    locale = str(_audio_value(record, "locale", default="") or "")
+    language = str(_audio_value(record, "language", default="") or "")
+    stored_language_boost = _audio_value(record, "language_boost", "languageBoost")
     return {
         **record,
         "id": str(_audio_value(record, "id", default=f"TAKE{index:03d}")),
@@ -4076,6 +6198,21 @@ def _audio_take_record(record: dict[str, Any], index: int) -> dict[str, Any]:
         "provider_profile_id": _audio_value(record, "provider_profile_id", "providerProfileId"),
         "provider": _audio_value(record, "provider"),
         "model": _audio_value(record, "model"),
+        "locale": locale,
+        "language": language,
+        "dialect": _audio_value(record, "dialect", default=""),
+        "language_boost": stored_language_boost or language_boost_for_locale(locale, language),
+        "provider_region": _audio_value(record, "provider_region", "providerRegion", default="cn"),
+        "source_text": source_text,
+        "provider_text": provider_text,
+        "text_status": _audio_text_status(record, source_text),
+        "settings": _audio_settings(record),
+        "trace_id": _audio_value(record, "trace_id", "traceId"),
+        "extra_info": _audio_value(record, "extra_info", "extraInfo", default={}),
+        "duration": _audio_value(record, "duration"),
+        "format": _audio_value(record, "format"),
+        "sample_rate": _audio_value(record, "sample_rate", "sampleRate"),
+        "channels": _audio_value(record, "channels", "channel"),
         "operation": str(_audio_value(record, "operation", default="tts")),
         "status": _audio_status(record),
         "notes": str(_audio_value(record, "notes", default="")),
@@ -4130,6 +6267,11 @@ def _audio_studio_document(doc: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(stored, dict):
         stored = doc if any(key in doc for key in ("voices", "dialogues", "music_cues", "musicCues", "sound_design", "soundEffects", "ambience", "handoff")) else _default_audio_studio()
     result = {**_default_audio_studio(), **stored}
+    # v1 documents remain readable, but every normalized response advertises
+    # the v2 write contract so the next save upgrades it without data loss.
+    result["version"] = max(2, int(result.get("version") or 1))
+    result["schema_version"] = "minimax-speech-audio-v2"
+    result["schemaVersion"] = "minimax-speech-audio-v2"
     voices = result.get("voices") if isinstance(result.get("voices"), list) else []
     references = result.get("voice_references") if isinstance(result.get("voice_references"), list) else []
     auditions = result.get("auditions") if isinstance(result.get("auditions"), list) else []
@@ -4161,6 +6303,49 @@ def _audio_studio_document(doc: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _enforce_audio_text_confirmation(current_audio: dict[str, Any], next_audio: dict[str, Any]) -> None:
+    """Invalidate stale line confirmations when the browser saves a draft.
+
+    Only ``/audio/text-confirmation`` may create a new confirmation.  A normal
+    audio-studio save may preserve an unchanged, valid confirmation, but it
+    cannot smuggle a new hash in alongside an edited source/provider line.
+    """
+
+    for collection_name in ("dialogues", "auditions"):
+        current_rows = current_audio.get(collection_name) if isinstance(current_audio.get(collection_name), list) else []
+        next_rows = next_audio.get(collection_name) if isinstance(next_audio.get(collection_name), list) else []
+        current_by_id = {str(item.get("id")): item for item in current_rows if isinstance(item, dict) and item.get("id")}
+        for row in next_rows:
+            if not isinstance(row, dict):
+                continue
+            source_text = str(row.get("source_text") or row.get("text") or "").strip()
+            provider_text = str(row.get("provider_text") or source_text).strip()
+            confirmation = row.get("text_confirmation") if isinstance(row.get("text_confirmation"), dict) else {}
+            expected_hash = hashlib.sha256(source_text.encode("utf-8")).hexdigest() if source_text else ""
+            current = current_by_id.get(str(row.get("id")))
+            current_source = str((current or {}).get("source_text") or (current or {}).get("text") or "").strip()
+            current_provider = str((current or {}).get("provider_text") or current_source).strip()
+            current_confirmation = (current or {}).get("text_confirmation") if isinstance((current or {}).get("text_confirmation"), dict) else {}
+            unchanged_valid = bool(
+                current
+                and current.get("text_status") == "confirmed"
+                and current_source == source_text
+                and current_provider == provider_text
+                and str(current_confirmation.get("status") or "") == "confirmed"
+                and str(current_confirmation.get("text_sha256") or "") == hashlib.sha256(current_source.encode("utf-8")).hexdigest()
+            )
+            incoming_valid = bool(
+                row.get("text_status") == "confirmed"
+                and str(confirmation.get("status") or "") == "confirmed"
+                and str(confirmation.get("text_sha256") or "") == expected_hash
+            )
+            if incoming_valid and unchanged_valid:
+                continue
+            if row.get("text_status") == "confirmed" or confirmation:
+                row["text_status"] = "candidate" if source_text else "missing"
+                row.pop("text_confirmation", None)
+
+
 def _audio_gate_item(status: str, missing: list[str], next_action: str, **extra: Any) -> dict[str, Any]:
     return {"status": status, "allowed": status == "ready", "missing": list(dict.fromkeys(missing)), "next_action": next_action, **extra}
 
@@ -4182,6 +6367,8 @@ def _audio_studio_gates(document: dict[str, Any], capabilities: dict[str, dict[s
                 voice_missing.append(f"{voice_id}:consent-verified")
             if not str(voice.get("consent_evidence_ref") or "").strip():
                 voice_missing.append(f"{voice_id}:consent_evidence_ref")
+        if str(voice.get("source_type") or "") == "preset" and not str(voice.get("provider_voice_id") or "").strip():
+            voice_missing.append(f"{voice_id}:provider_voice_id")
         if voice.get("status") != "approved":
             voice_missing.append(f"{voice_id}:voice_approval")
         voice_auditions = [item for item in auditions if str(item.get("voice_id") or "") == voice_id]
@@ -4189,6 +6376,8 @@ def _audio_studio_gates(document: dict[str, Any], capabilities: dict[str, dict[s
             match = next((item for item in voice_auditions if item.get("condition") == condition), None)
             if not match or match.get("status") != "approved" or not match.get("artifact_id"):
                 audition_missing.append(f"{voice_id}:{condition}")
+            elif match.get("text_status") != "confirmed":
+                audition_missing.append(f"{voice_id}:{condition}:text-confirmed")
     if not voices:
         voice_missing.append("至少建立一个人物声音简报")
     voice_gate = _audio_gate_item("ready" if not voice_missing else "pending", voice_missing, "锁定声音身份" if voice_missing else "声音身份已锁定", count=len(voices))
@@ -4217,6 +6406,8 @@ def _audio_studio_gates(document: dict[str, Any], capabilities: dict[str, dict[s
             dialogue_missing.append(f"{dialogue_id}:voice_id")
         if not dialogue.get("shot_ids"):
             dialogue_missing.append(f"{dialogue_id}:shot_ids")
+        if dialogue.get("text_status") != "confirmed" or not str(dialogue.get("provider_text") or dialogue.get("text") or "").strip():
+            dialogue_missing.append(f"{dialogue_id}:text-confirmed")
         selected_take_id = dialogue.get("selected_take_id")
         selected_take = next((item for item in takes if str(item.get("id")) == str(selected_take_id)), None) if selected_take_id else None
         if not selected_take or selected_take.get("status") != "approved" or not selected_take.get("artifact_id"):
@@ -4231,6 +6422,12 @@ def _audio_studio_envelope(database: Database, project_id: str, doc: dict[str, A
     library = _library_payload(database, project_id, doc)
     audio_assets = [asset for asset in library["assets"] if asset.get("assetClass") in {"audio", "music", "sfx"}]
     capabilities = _effective_capabilities(database)
+    tts_provider_id = (capabilities.get("tts") or {}).get("provider_profile_id")
+    minimax_catalog = _minimax_voice_catalog_payload(database, str(tts_provider_id)) if tts_provider_id else {
+        "provider_id": None, "provider": "minimax", "region": MINIMAX_DEFAULT_REGION, "status": "unavailable",
+        "catalog_source": "none", "checked_at": None, "voices": minimax_documented_voice_catalog(),
+        "models": list(MINIMAX_TTS_MODELS), "error": "尚未绑定 MiniMax TTS Provider。", "error_kind": "configuration",
+    }
     return {
         "project_id": project_id,
         "revision": revision,
@@ -4238,6 +6435,7 @@ def _audio_studio_envelope(database: Database, project_id: str, doc: dict[str, A
         "assets": audio_assets,
         "capabilities": capabilities,
         "audio_gates": _audio_studio_gates(_audio_studio_document(doc), capabilities, audio_assets),
+        "minimax_voice_catalog": minimax_catalog,
         "workflow": {"router": "voice-controller", "voice": "voice-performance-director", "music": "music-sound-designer", "qa_owner": "voice-controller"},
     }
 
@@ -4258,7 +6456,9 @@ async def write_audio_studio_v3(project_id: str, body: dict[str, Any], request: 
     document = body.get("document") if isinstance(body.get("document"), dict) else body
     if not isinstance(document, dict):
         raise HTTPException(422, "声音工作区文档必须是 JSON 对象。")
+    current_audio = _audio_studio_document(doc)
     audio = _audio_studio_document(document)
+    _enforce_audio_text_confirmation(current_audio, audio)
     audio["version"] = max(1, int(audio.get("version") or 1))
     audio["updated_at"] = utcnow()
     database = db(request)
@@ -4271,6 +6471,88 @@ async def write_audio_studio_v3(project_id: str, body: dict[str, Any], request: 
     doc["audio"] = audio
     next_revision = save_project_document(request, doc, revision)
     return _audio_studio_envelope(database, project_id, doc, next_revision)
+
+
+@app.post("/api/v2/projects/{project_id}/audio/text-confirmation")
+async def confirm_audio_text_v3(project_id: str, body: AudioTextConfirmationV3, request: Request):
+    """Persist an explicit user confirmation for one audio line.
+
+    Confirmation is intentionally separate from preparation and generation.
+    The endpoint updates only the selected dialogue/audition record, records a
+    source-text hash, and never calls MiniMax.
+    """
+
+    doc, revision = await read_project_doc(request, project_id)
+    if revision != body.expected_revision:
+        raise HTTPException(409, {"message": "声音工作区版本已变化，请刷新后再确认台词。", "current_revision": revision})
+    audio = _audio_studio_document(doc)
+    collection_name = "dialogues" if body.target_type == "dialogue" else "auditions"
+    collection = audio.get(collection_name) if isinstance(audio.get(collection_name), list) else []
+    target = next((item for item in collection if isinstance(item, dict) and str(item.get("id")) == body.target_id), None)
+    if target is None:
+        raise HTTPException(404, f"{body.target_type} {body.target_id} 不存在于当前声音工作区。")
+
+    current_source = str(target.get("source_text") or target.get("text") or "").strip()
+    if current_source != body.source_text.strip():
+        raise HTTPException(409, {
+            "message": "当前台词内容已变化，请刷新后重新确认。",
+            "kind": "text_stale",
+            "current_source_text": current_source,
+        })
+    provider_text = str(body.provider_text or target.get("provider_text") or current_source).strip()
+    if not provider_text:
+        raise HTTPException(422, "provider_text 不能为空。")
+    model = str(target.get("model") or MINIMAX_DEFAULT_TTS_MODEL)
+    try:
+        validate_minimax_tts_text(provider_text, model)
+    except ProviderError as exc:
+        raise HTTPException(exc.status_code, {"message": str(exc), "kind": exc.kind}) from exc
+
+    text_hash = hashlib.sha256(body.source_text.strip().encode("utf-8")).hexdigest()
+    existing_confirmation = target.get("text_confirmation") if isinstance(target.get("text_confirmation"), dict) else {}
+    if (
+        target.get("text_status") == "confirmed"
+        and str(existing_confirmation.get("text_sha256") or "") == text_hash
+        and str(target.get("provider_text") or provider_text) == provider_text
+    ):
+        return {
+            "project_id": project_id,
+            "revision": revision,
+            "persisted": False,
+            "target_type": body.target_type,
+            "target_id": body.target_id,
+            "text_confirmation": existing_confirmation,
+            "document": audio,
+        }
+
+    # A generated record is immutable at the dialogue/audition level.  A
+    # changed line must become a new Take rather than silently rewriting the
+    # text that an existing artifact was produced from.
+    if target.get("artifact_id") or target.get("selected_take_id"):
+        raise HTTPException(409, "已有生成结果的台词不能被覆盖，请创建新的 Take。")
+
+    confirmation = {
+        "status": "confirmed",
+        "confirmed_by": "user",
+        "confirmed_at": utcnow(),
+        "text_sha256": text_hash,
+    }
+    target["text"] = body.source_text.strip()
+    target["source_text"] = body.source_text.strip()
+    target["provider_text"] = provider_text
+    target["text_status"] = "confirmed"
+    target["text_confirmation"] = confirmation
+    doc["audio"] = audio
+    next_revision = save_project_document(request, doc, revision)
+    return {
+        "project_id": project_id,
+        "revision": next_revision,
+        "persisted": True,
+        "target_type": body.target_type,
+        "target_id": body.target_id,
+        "text_confirmation": confirmation,
+        "document": audio,
+    }
 
 
 @app.post("/api/v2/projects/{project_id}/audio/tts")
@@ -4290,11 +6572,80 @@ async def generate_project_speech_v3(project_id: str, body: SpeechGenerate, requ
         raise HTTPException(409, "当前声音路径尚无可执行 Provider voice ID，请先导出 provider-neutral 包或绑定支持该路径的 Provider。")
     if voice.get("source_type") == "clone" and voice.get("consent_status") != "consent-verified":
         raise HTTPException(409, "Clone 声音在 consent-verified 前不能执行。")
-    payload = body.model_copy(update={"project_id": project_id})
+    if body.text_status != "confirmed":
+        raise HTTPException(409, "正式对白生成只接受已确认的 sourceText；候选或冲突文本不能执行。")
+    target_record: dict[str, Any] | None = None
+    target_type = "dialogue"
+    if body.audition_id:
+        target_type = "audition"
+        target_record = next((item for item in audio.get("auditions", []) if isinstance(item, dict) and str(item.get("id")) == str(body.audition_id)), None)
+    elif body.dialogue_id:
+        target_record = next((item for item in audio.get("dialogues", []) if isinstance(item, dict) and str(item.get("id")) == str(body.dialogue_id)), None)
+    if target_record is not None:
+        target_source_text = str(target_record.get("source_text") or target_record.get("text") or "").strip()
+        target_provider_text = str(target_record.get("provider_text") or target_source_text).strip()
+        if target_record.get("text_status") != "confirmed":
+            raise HTTPException(409, f"{target_type} {target_record.get('id')} 的台词尚未确认，不能生成。")
+        confirmation = target_record.get("text_confirmation") if isinstance(target_record.get("text_confirmation"), dict) else {}
+        expected_text_hash = hashlib.sha256(target_source_text.encode("utf-8")).hexdigest()
+        if not target_source_text or str(confirmation.get("text_sha256") or "") != expected_text_hash:
+            raise HTTPException(409, f"{target_type} {target_record.get('id')} 缺少匹配的台词确认 hash，请重新确认台词。")
+        if str(target_record.get("voice_id") or "") != str(body.voice_id or ""):
+            raise HTTPException(409, f"{target_type} {target_record.get('id')} 绑定的声音 profile 已变化，请刷新后重新生成。")
+        requested_source_text = str(body.source_text or body.text).strip()
+        requested_provider_text = str(body.provider_text or body.text).strip()
+        if requested_source_text != target_source_text:
+            raise HTTPException(409, "请求中的 source_text 与当前已确认台词不一致。")
+        if requested_provider_text != target_provider_text:
+            raise HTTPException(409, "请求中的 provider_text 与当前已确认台词不一致。")
+        source_text = target_source_text
+        provider_text = target_provider_text
+    else:
+        # Keep the older direct project TTS call usable for existing clients
+        # that generated a standalone line before dialogue records were added.
+        # New or managed dialogue/audition records always take the stricter
+        # confirmation-hash path above.
+        source_text = str(body.source_text or body.text).strip()
+        # Leave provider_text unset when a legacy caller did not provide one;
+        # minimax_tts_payload can then compile its pause_plan into the native
+        # MiniMax text without changing the compatibility route's behavior.
+        provider_text = str(body.provider_text).strip() if body.provider_text else None
+    target_language = target_record.get("language") if target_record else None
+    target_locale = target_record.get("locale") if target_record else None
+    task_language = body.language or target_language or voice.get("language") or None
+    task_locale = body.locale or target_locale or voice.get("locale") or None
+    task_language_boost = language_boost_for_locale(task_locale, task_language) or body.language_boost or voice.get("language_boost")
+    task_provider_region = body.provider_region or voice.get("provider_region") or None
+    selected_provider_id = str(voice.get("provider_profile_id") or body.provider_profile_id or "") or None
+    if str(voice.get("source_type") or "") == "preset":
+        catalog_provider_id = selected_provider_id or str((_effective_capabilities(database).get("tts") or {}).get("provider_profile_id") or "")
+        if catalog_provider_id:
+            catalog = _minimax_voice_catalog_payload(database, catalog_provider_id)
+            if catalog.get("status") not in {"live", "cached"}:
+                detail = catalog.get("error_kind") or "unavailable"
+                raise HTTPException(409, f"MiniMax 系统音色目录当前不可用（{detail}），不能把文档候选当作可执行 voice_id。")
+            catalog_voice_ids = {str(item.get("voice_id")) for item in catalog.get("voices", []) if isinstance(item, dict) and item.get("source") == "system" and item.get("voice_id")}
+            if str(voice.get("provider_voice_id")) not in catalog_voice_ids:
+                raise HTTPException(409, "当前 provider_voice_id 不在所选 MiniMax 区域的实时/缓存系统音色目录中，请刷新目录后重新选择。")
+    payload = body.model_copy(update={
+        "project_id": project_id,
+        "provider_profile_id": selected_provider_id,
+        "voice": str(voice.get("provider_voice_id") or body.voice or ""),
+        "source_text": source_text,
+        "provider_text": provider_text,
+        "language": task_language,
+        "locale": task_locale,
+        "language_boost": task_language_boost,
+        "provider_region": task_provider_region,
+    })
+    existing_audio_take_ids = {str(item.get("id")) for item in audio.get("takes", []) if isinstance(item, dict)}
+    if body.take_id and str(body.take_id) in existing_audio_take_ids:
+        raise HTTPException(409, "take_id 已存在；每次生成必须创建新的 Take，不能覆盖历史版本。")
     result = await generate_speech(payload, request)
     artifact_id = str(result.get("artifact_id") or "")
     if not artifact_id:
         raise HTTPException(502, "Provider 没有返回可登记的 audio artifact。")
+    effective_provider_text = str(result.get("provider_text") or provider_text or source_text)
     metadata = _asset_metadata(asset)
     metadata.update({
         "audio_operation": body.operation or "tts",
@@ -4302,6 +6653,17 @@ async def generate_project_speech_v3(project_id: str, body: SpeechGenerate, requ
         "voice_id": body.voice_id,
         "audition_id": body.audition_id,
         "emotion": body.emotion,
+        "source_text": source_text,
+        "provider_text": effective_provider_text,
+        "text_status": body.text_status,
+        "language": task_language,
+        "locale": task_locale,
+        "dialect": body.dialect or voice.get("dialect"),
+        "language_boost": result.get("language_boost") or task_language_boost,
+        "provider_region": result.get("provider_region"),
+        "settings": result.get("settings") or {},
+        "trace_id": result.get("trace_id"),
+        "extra_info": result.get("extra_info") or {},
         "target_duration": body.target_duration,
         "shot_ids": list(body.shot_ids),
         "consent_status": voice.get("consent_status") or "not-required",
@@ -4322,20 +6684,31 @@ async def generate_project_speech_v3(project_id: str, body: SpeechGenerate, requ
         )
     existing_takes = [item for item in audio.get("takes", []) if isinstance(item, dict) and str(item.get("dialogue_id")) == str(body.dialogue_id) and str(item.get("voice_id")) == str(body.voice_id)]
     version = max([int(item.get("version") or 0) for item in existing_takes] or [0]) + 1
-    take_id = body.take_id or f"TAKE{len(audio.get('takes', [])) + 1:03d}"
+    if body.take_id:
+        take_id = body.take_id
+    else:
+        next_take_number = len(existing_audio_take_ids) + 1
+        take_id = f"TAKE{next_take_number:03d}"
+        while take_id in existing_audio_take_ids:
+            next_take_number += 1
+            take_id = f"TAKE{next_take_number:03d}"
     take = {
         "id": take_id, "dialogue_id": body.dialogue_id, "voice_id": body.voice_id, "version": version,
         "artifact_id": artifact_id, "logical_asset_id": body.logical_asset_id, "qa_run_id": None,
-        "provider_profile_id": result.get("provider_profile_id") or body.provider_profile_id, "provider": result.get("provider"), "model": result.get("model") or body.model,
-        "operation": body.operation or "tts", "status": "generated-pending-qa", "notes": body.instructions,
+        "provider_profile_id": result.get("provider_profile_id") or selected_provider_id, "provider": result.get("provider"), "model": result.get("model") or body.model,
+        "operation": body.operation or "tts", "status": "generated-pending-qa", "source_text": source_text, "provider_text": effective_provider_text,
+        "text_status": "confirmed", "locale": task_locale, "language": task_language, "dialect": body.dialect or voice.get("dialect"),
+        "language_boost": result.get("language_boost") or task_language_boost, "provider_region": result.get("provider_region") or task_provider_region,
+        "settings": result.get("settings") or {}, "trace_id": result.get("trace_id"), "extra_info": result.get("extra_info") or {},
+        "duration": result.get("duration"), "format": result.get("format") or body.format, "sample_rate": body.sample_rate, "channels": 1, "notes": body.instructions,
     }
-    audio["takes"] = [item for item in audio.get("takes", []) if not (isinstance(item, dict) and str(item.get("id")) == str(take_id))] + [take]
+    audio["takes"] = [item for item in audio.get("takes", []) if isinstance(item, dict)] + [take]
     for audition in audio.get("auditions", []):
         if body.audition_id and str(audition.get("id")) == str(body.audition_id):
-            audition.update({"artifact_id": artifact_id, "status": "generated-pending-qa"})
+            audition.update({"artifact_id": artifact_id, "status": "generated-pending-qa", "source_text": source_text, "provider_text": effective_provider_text, "text_status": "confirmed", "provider_profile_id": result.get("provider_profile_id") or selected_provider_id, "provider": result.get("provider"), "model": result.get("model") or body.model, "locale": task_locale, "language": task_language, "dialect": body.dialect or voice.get("dialect"), "language_boost": result.get("language_boost") or task_language_boost, "provider_region": result.get("provider_region") or task_provider_region, "settings": result.get("settings") or {}})
     for dialogue in audio.get("dialogues", []):
         if str(dialogue.get("id")) == str(body.dialogue_id):
-            dialogue.update({"voice_id": body.voice_id, "execution_status": "generated-pending-qa", "artifact_id": artifact_id, "qa_run_id": None, "provider_profile_id": result.get("provider_profile_id") or body.provider_profile_id, "provider": result.get("provider"), "model": result.get("model") or body.model})
+            dialogue.update({"voice_id": body.voice_id, "execution_status": "generated-pending-qa", "artifact_id": artifact_id, "qa_run_id": None, "provider_profile_id": result.get("provider_profile_id") or selected_provider_id, "provider": result.get("provider"), "model": result.get("model") or body.model, "source_text": source_text, "provider_text": effective_provider_text, "text_status": "confirmed", "language": task_language, "locale": task_locale, "dialect": body.dialect or voice.get("dialect"), "language_boost": result.get("language_boost") or task_language_boost, "provider_region": result.get("provider_region") or task_provider_region, "settings": result.get("settings") or {}})
     doc["audio"] = audio
     next_revision = save_project_document(request, doc, revision)
     result.update({"project_id": project_id, "revision": next_revision, "logical_asset_id": body.logical_asset_id, "take_id": take_id, "execution_status": "generated-pending-qa", "qa_required": True})
@@ -5834,7 +8207,7 @@ def _audio_qa_missing(report: dict[str, Any]) -> list[str]:
     """Return missing human-listening checks for an Approved audio artifact."""
     required = {
         "technical": ("format", "sample_rate", "channels", "duration", "no_clipping", "noise_ok"),
-        "performance": ("text_accuracy", "pronunciation", "language_dialect", "emotion", "rhythm", "continuity", "handles"),
+        "performance": ("text_accuracy", "text_completeness", "pronunciation", "language_dialect", "speed_natural", "pause_natural", "sentence_intonation", "mechanical_rhythm", "pitch_stability", "anime_style", "artifacts", "voice_consistency", "emotion", "rhythm", "continuity", "handles"),
         "rights": ("authorization",),
     }
     missing: list[str] = []

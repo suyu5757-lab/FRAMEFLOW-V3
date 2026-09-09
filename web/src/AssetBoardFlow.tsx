@@ -1,5 +1,5 @@
-import { useEffect, useRef } from 'react';
-import type { CSSProperties, DragEvent, MouseEvent } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { CSSProperties, DragEvent, MouseEvent, PointerEvent as ReactPointerEvent } from 'react';
 import {
   Background,
   Controls,
@@ -20,6 +20,8 @@ import {
   useReactFlow,
 } from '@xyflow/react';
 import { assetClassLabels, assetStatusLabels } from './asset-state';
+import { assetBoardSelectionKey } from './asset-board-selection';
+import { generationReferenceAssetsFromConfig } from './asset-reference-requirements';
 import type { AssetBoardNode, LibraryAsset } from './types';
 
 export type AssetProductionTarget = 'prompt' | 'upload';
@@ -82,7 +84,97 @@ function resolveAssetProductionTarget(input: { hasPrompt: boolean; hasMedia: boo
   return input.hasPrompt && !input.hasMedia ? 'upload' : 'prompt';
 }
 
-function AssetBoardCard({ data, selected }: NodeProps<AssetFlowNode>) {
+function PromptTextScroller({ label, text, empty }: { label: string; text: string; empty: boolean }) {
+  const textRef = useRef<HTMLPreElement>(null);
+  const scrollbarRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<{ pointerId: number; startClientY: number; startScrollTop: number } | null>(null);
+  const [active, setActive] = useState(false);
+  const [scrollMetrics, setScrollMetrics] = useState({ scrollable: false, thumbHeight: 100, thumbTop: 0 });
+
+  useEffect(() => {
+    const element = textRef.current;
+    if (!element) return undefined;
+    const updateMetrics = () => {
+      const maxScrollTop = Math.max(0, element.scrollHeight - element.clientHeight);
+      if (!maxScrollTop) {
+        setScrollMetrics({ scrollable: false, thumbHeight: 100, thumbTop: 0 });
+        return;
+      }
+      const thumbHeight = Math.max(18, Math.min(100, (element.clientHeight / element.scrollHeight) * 100));
+      const thumbTop = (element.scrollTop / maxScrollTop) * Math.max(0, 100 - thumbHeight);
+      setScrollMetrics({ scrollable: true, thumbHeight, thumbTop });
+    };
+    const handleScroll = () => {
+      updateMetrics();
+      setActive(true);
+    };
+    updateMetrics();
+    element.addEventListener('scroll', handleScroll, { passive: true });
+    window.addEventListener('resize', updateMetrics);
+    const resizeObserver = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(updateMetrics);
+    resizeObserver?.observe(element);
+    return () => {
+      element.removeEventListener('scroll', handleScroll);
+      window.removeEventListener('resize', updateMetrics);
+      resizeObserver?.disconnect();
+    };
+  }, [text]);
+
+  const focusText = () => {
+    setActive(true);
+    textRef.current?.focus({ preventScroll: true });
+  };
+  const stopDragging = (event?: ReactPointerEvent<HTMLDivElement>) => {
+    if (event && dragRef.current?.pointerId === event.pointerId && event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    dragRef.current = null;
+  };
+  const handleThumbPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    focusText();
+    dragRef.current = { pointerId: event.pointerId, startClientY: event.clientY, startScrollTop: textRef.current?.scrollTop || 0 };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const handleThumbPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    const element = textRef.current;
+    const scrollbar = scrollbarRef.current;
+    if (!drag || drag.pointerId !== event.pointerId || !element || !scrollbar) return;
+    const bounds = scrollbar.getBoundingClientRect();
+    const thumbHeight = bounds.height * (scrollMetrics.thumbHeight / 100);
+    const maxThumbTravel = Math.max(1, bounds.height - thumbHeight);
+    const maxScrollTop = Math.max(0, element.scrollHeight - element.clientHeight);
+    const nextScrollTop = drag.startScrollTop + ((event.clientY - drag.startClientY) / maxThumbTravel) * maxScrollTop;
+    element.scrollTop = Math.max(0, Math.min(maxScrollTop, nextScrollTop));
+  };
+  const handleScrollbarPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.target !== event.currentTarget) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const element = textRef.current;
+    const scrollbar = scrollbarRef.current;
+    if (!element || !scrollbar) return;
+    focusText();
+    const bounds = scrollbar.getBoundingClientRect();
+    const thumbHeight = bounds.height * (scrollMetrics.thumbHeight / 100);
+    const maxThumbTravel = Math.max(1, bounds.height - thumbHeight);
+    const maxScrollTop = Math.max(0, element.scrollHeight - element.clientHeight);
+    const desiredThumbTop = Math.max(0, Math.min(maxThumbTravel, event.clientY - bounds.top - (thumbHeight / 2)));
+    element.scrollTop = (desiredThumbTop / maxThumbTravel) * maxScrollTop;
+  };
+  const displayText = text || '提示词为空，可点击“编辑 Prompt”手动填写，或使用 AI 编写 Prompt。';
+
+  return <div className={`asset-board-prompt-scroll-shell${active ? ' is-active' : ''}`} onMouseEnter={() => setActive(true)} onMouseLeave={() => { if (!dragRef.current && document.activeElement !== textRef.current) setActive(false); }}>
+    <pre ref={textRef} tabIndex={0} aria-label={`${label} Prompt`} className={`asset-board-prompt-text nodrag nopan ${empty ? 'empty' : ''}`} onPointerDown={() => { focusText(); }} onFocus={() => setActive(true)} onBlur={(event) => { if (!event.currentTarget.matches(':hover') && !dragRef.current) setActive(false); }}>{displayText}</pre>
+    {scrollMetrics.scrollable && <div ref={scrollbarRef} className="asset-board-prompt-scrollbar" aria-hidden="true" onPointerDown={handleScrollbarPointerDown}>
+      <div className="asset-board-prompt-scrollbar-thumb" style={{ height: `${scrollMetrics.thumbHeight}%`, top: `${scrollMetrics.thumbTop}%` }} onPointerDown={handleThumbPointerDown} onPointerMove={handleThumbPointerMove} onPointerUp={stopDragging} onPointerCancel={stopDragging} />
+    </div>}
+  </div>;
+}
+
+function AssetBoardCard({ data, selected, id, positionAbsoluteX, positionAbsoluteY, onNodeClick }: NodeProps<AssetFlowNode> & { onNodeClick: AssetBoardFlowProps['onNodeClick'] }) {
   if (data.node_type === 'table') {
     const rawColumns = Array.isArray(data.config.grid_columns) ? data.config.grid_columns as Array<{ key: string; label: string; english: string; description: string }> : [];
     const layoutMode = String(data.config.layout_mode || 'adaptive') as AssetBoardLayoutMode;
@@ -186,6 +278,7 @@ function AssetBoardCard({ data, selected }: NodeProps<AssetFlowNode>) {
     const prerequisiteItems = Array.isArray(data.config.prerequisite_items) ? data.config.prerequisite_items.filter((item): item is Record<string, any> => Boolean(item && typeof item === 'object')) : prerequisiteBlockedDependencies;
     const prerequisiteAssetSummary = prerequisiteItems.map((item) => String(item.name || item.asset_id || '前置资产')).join('、');
     const prerequisiteIncompleteSummary = prerequisiteItems.filter((item) => item.production_ready !== true).map((item) => `${String(item.name || item.asset_id || '前置资产')}（${String(item.next_action || '完成审核')}）`).join('；');
+    const generationReferenceAssets = generationReferenceAssetsFromConfig(data.config, String(data.asset_id || ''));
     const canUploadAsset = fusionPromptActionable && !artifactId && prerequisiteGateAllowed;
     const handlePromptFileDrop = (event: DragEvent<HTMLElement>) => {
       if (!canUploadAsset) return;
@@ -201,14 +294,20 @@ function AssetBoardCard({ data, selected }: NodeProps<AssetFlowNode>) {
       event.stopPropagation();
       event.dataTransfer.dropEffect = 'copy';
     };
-    return <article className={`asset-board-card asset-board-prompt-card ${isFusionSlot ? 'fusion-slot-card' : ''} ${selected ? 'selected' : ''}`} data-asset-card-type="handoff" data-asset-id={String(data.asset_id || '')} data-grid-row={rowKey} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); data.onContextMenu?.({ nodeId: data.id, assetId: String(data.asset_id), label: data.label, nodeType: data.node_type, rowKey, x: event.clientX, y: event.clientY }); }}>
+    const selectPromptCard = (event: MouseEvent) => {
+      const selectionKey = assetBoardSelectionKey(data);
+      if (!selectionKey) return;
+      onNodeClick({ target: event.currentTarget, shiftKey: event.shiftKey, ctrlKey: event.ctrlKey, metaKey: event.metaKey } as unknown as MouseEvent, { id, type: 'asset-board', position: { x: positionAbsoluteX, y: positionAbsoluteY }, data } as AssetFlowNode);
+    };
+    return <article className={`asset-board-card asset-board-prompt-card ${isFusionSlot ? 'fusion-slot-card' : ''} ${selected ? 'selected' : ''}`} data-asset-card-type="handoff" data-asset-id={String(data.asset_id || '')} data-grid-row={rowKey} onClickCapture={selectPromptCard} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); data.onContextMenu?.({ nodeId: data.id, assetId: String(data.asset_id), label: data.label, nodeType: data.node_type, rowKey, x: event.clientX, y: event.clientY }); }}>
       <Handle type="target" position={Position.Left} />
       {artifactUrl ? <div className="asset-board-prompt-media"><div className="asset-board-prompt-media-frame"><img src={artifactUrl} alt={`${data.label} 已上传资产`} />{artifactRemovable && <button type="button" className="asset-board-prompt-media-remove nodrag nopan" aria-label={`${artifactRemoveLabel}：${data.label}`} title={artifactRemoveLabel} onClick={(event) => { event.preventDefault(); event.stopPropagation(); data.onRemoveArtifact?.(String(data.asset_id), artifactId); }}>×</button>}</div><div className="asset-board-prompt-media-meta"><span>{artifactActive ? '当前登记资产' : '已上传候选'}</span><i>{artifactState}</i></div></div> : (productionDraft || (isFusionSlot && !artifactId)) && <div className="asset-board-prompt-media asset-board-prompt-media-empty"><strong>{isFusionSlot ? '融合图片位置' : '图片位置'}</strong><span>{isFusionSlot ? fusionPromptStale ? '已有 Fusion Prompt，可直接上传新的候选图' : 'Fusion Prompt 已就绪，可生成或上传' : '可从右侧上传候选图片'}</span></div>}
       <div className={`asset-board-prompt-content${canUploadAsset ? ' asset-board-prompt-drop-target nodrag nopan' : ''}`} onDragOver={canUploadAsset ? handlePromptFileDragOver : undefined} onDrop={canUploadAsset ? handlePromptFileDrop : undefined}>
-        <div className="asset-board-card-meta"><span>{isFusionPrompt ? (fusionPromptUsable ? '正式融合 Prompt' : isFusionSlot ? '镜头融合规划' : '融合规划 / 历史 Prompt') : '资产 Prompt'}</span><i>{fusionPromptStale ? '输入已变化 · 待重新融合' : isFusionSlot && !fusionGateAllowed ? fusionGateDisplayReason : !fusionPromptReady ? '等待基础资产就绪' : artifactId ? artifactState : promptQa === 'Approved' ? 'Prompt 已通过' : promptQa}</i></div>
+        <div className="asset-board-card-meta"><span>{isFusionPrompt ? (fusionPromptUsable ? '正式融合 Prompt' : isFusionSlot ? '镜头融合规划' : '融合规划 / 历史 Prompt') : assetClass === 'audio' ? 'MiniMax Web 声音输入' : '资产 Prompt'}</span><i>{assetClass === 'audio' ? (artifactId ? artifactState : '声音文本 / 字段待确认') : fusionPromptStale ? '输入已变化 · 待重新融合' : isFusionSlot && !fusionGateAllowed ? fusionGateDisplayReason : !fusionPromptReady ? '等待基础资产就绪' : artifactId ? artifactState : promptQa === 'Approved' ? 'Prompt 已通过' : promptQa}</i></div>
         <strong>{data.label}</strong>
         <small>{data.asset_id || '资产'} · {String(data.config.target_skill || 'video-asset-regulator')}{relevantShots ? ` · ${relevantShots}` : ''}{isFusionSlot && fusionSourceIds.length ? ` · 来源 ${fusionSourceIds.join('、')}` : ''}</small>
-        <pre tabIndex={0} aria-label={`${data.label} Prompt`} className={`asset-board-prompt-text ${productionDraft && !String(data.config.prompt || '').trim() ? 'empty' : ''}`}>{String(data.config.prompt || '').trim() || (isFusionSlot ? '等待前置基础资产完成 Prompt QA、图片 QA 与登记后生成 Fusion Prompt。' : '提示词为空，可点击“编辑 Prompt”手动填写，或使用 AI 编写 Prompt。')}</pre>
+        <PromptTextScroller label={data.label} text={String(data.config.prompt || '').trim() || (isFusionSlot ? '等待前置基础资产完成 Prompt QA、图片 QA 与登记后生成 Fusion Prompt。' : '')} empty={productionDraft && !String(data.config.prompt || '').trim()} />
+        {generationReferenceAssets.length > 0 && <div className="asset-board-reference-summary" role="status"><strong>图片生成参考资产</strong><span>参考图：{generationReferenceAssets.map((item) => item.label).join('、')}</span><small>这些资产需要提供给图片生成 Agent 作为参考图，不等同于生产审核前置门禁。</small></div>}
         {prerequisiteItems.length > 0 && <div className={`asset-board-prerequisite-summary ${prerequisiteGateAllowed ? 'ready' : 'blocked'}`} role="status"><strong>生成所需前置资产</strong><span>前置资产：{prerequisiteAssetSummary}</span><small>{prerequisiteIncompleteSummary ? `当前未完成：${prerequisiteIncompleteSummary}` : '当前：全部完成，可进入生产'}</small></div>}
         <div className="asset-board-prompt-state"><span>{isFusionSlot && fusionNeedsPrompt ? '融合 Prompt：等待前置资产' : !fusionPromptReady ? '正式 Prompt：尚未生成' : artifactId ? `图片：${artifactState}` : `图像执行：${generationStatus}`}</span>{promptCoverageLabel && <span title="Prompt Contract 细节覆盖度">{promptCoverageLabel}</span>}{isFusionSlot && !fusionGateAllowed && <span title={fusionGateDisplayReason}>{fusionGateDisplayReason}</span>}{fusionPromptStale && <span>请重新生成 Fusion Prompt</span>}{!eligible && <span>非图像资产</span>}</div>
         <div className="asset-board-prompt-actions">
@@ -216,11 +315,12 @@ function AssetBoardCard({ data, selected }: NodeProps<AssetFlowNode>) {
           {productionDraft && !isFusionSlot && !String(data.config.prompt || '').trim() && <button className="asset-board-prompt-primary" onClick={(event) => { event.stopPropagation(); data.onOpenAssetProduction?.(String(data.asset_id), 'prompt', data.id); }}>编辑 Prompt</button>}
           {productionDraft && !isFusionSlot && !String(data.config.prompt || '').trim() && <button onClick={(event) => { event.stopPropagation(); data.onGeneratePrompt?.(String(data.asset_id)); }}>AI 编写 Prompt</button>}
           {isFusionSlot && fusionNeedsPrompt && <button className="asset-board-prompt-primary" disabled={!fusionGateAllowed || !fusionShotId || !fusionSourceIds.length || !data.onGenerateFusionPrompt} title={fusionGateDisplayReason} onClick={(event) => { event.stopPropagation(); data.onGenerateFusionPrompt?.(String(data.asset_id), fusionSourceIds, fusionShotId); }}>{fusionPromptStale ? '重新生成 Fusion Prompt' : '生成 Fusion Prompt'}</button>}
-          {fusionPromptUsable && !artifactId && String(data.config.prompt || '').trim() && <button onClick={(event) => { event.stopPropagation(); data.onCopyPrompt?.(String(data.asset_id)); }}>复制 Prompt</button>}
+          {assetClass !== 'audio' && fusionPromptUsable && !artifactId && String(data.config.prompt || '').trim() && <button className="asset-board-prompt-rewrite" onClick={(event) => { event.stopPropagation(); data.onRejectAsset?.(String(data.asset_id), ''); }}>重写 Prompt</button>}
+          {fusionPromptUsable && !artifactId && String(data.config.prompt || '').trim() && <button onClick={(event) => { event.stopPropagation(); data.onCopyPrompt?.(String(data.asset_id)); }}>{assetClass === 'audio' ? '复制 MiniMax Web 包' : '复制 Prompt'}</button>}
           {fusionPromptActionable && prerequisiteGateAllowed && artifactId && !artifactApproved && <button className="asset-board-prompt-primary" onClick={(event) => { event.stopPropagation(); data.onApproveAsset?.(String(data.asset_id), artifactId); }}>{isFusionPrompt ? '人工审核通过' : '审核通过'}</button>}
           {fusionPromptActionable && artifactId && !artifactApproved && <button onClick={(event) => { event.stopPropagation(); data.onRejectAsset?.(String(data.asset_id), artifactId); }}>审核不通过并重写提示词</button>}
           {fusionPromptActionable && prerequisiteGateAllowed && artifactId && artifactStatus === 'approved_pending_registration' && <button className="asset-board-prompt-primary" onClick={(event) => { event.stopPropagation(); data.onRegisterAsset?.(String(data.asset_id), artifactId); }}>登记为资产</button>}
-          {fusionPromptUsable && !artifactId && String(data.config.prompt || '').trim() && promptQa !== 'Approved' && <button className="asset-board-prompt-primary" onClick={(event) => { event.stopPropagation(); data.onApprovePrompt?.(String(data.asset_id)); }}>通过 Prompt QA</button>}
+          {assetClass !== 'audio' && fusionPromptUsable && !artifactId && String(data.config.prompt || '').trim() && promptQa !== 'Approved' && <button className="asset-board-prompt-primary" onClick={(event) => { event.stopPropagation(); data.onApprovePrompt?.(String(data.asset_id)); }}>通过 Prompt QA</button>}
           {fusionPromptUsable && prerequisiteGateAllowed && !artifactId && String(data.config.prompt || '').trim() && promptQa === 'Approved' && eligible && generationStatus !== 'generated-pending-qa' && <button className="asset-board-prompt-primary" onClick={(event) => { event.stopPropagation(); data.onGenerateImage?.(String(data.asset_id)); }}>{isCharacterPrompt ? '确认生成角色结构参考图' : '确认并生成'}</button>}
         </div>
       </div>
@@ -239,7 +339,7 @@ function AssetBoardCard({ data, selected }: NodeProps<AssetFlowNode>) {
     <Handle type="target" position={Position.Left} />
     {isMedia && <img className="asset-board-thumb" src={String(data.config.url)} alt="候选素材" />}
     {data.node_type === 'asset' && rowKey && rowKey !== 'shared' && String(data.config.manual_shot_id || '') === rowKey && <b className="asset-board-assignment-corner">加入 {rowKey} 分镜资产组</b>}
-    <div className="asset-board-card-meta"><span>{data.node_type === 'handoff' ? '人工桥接' : data.node_type === 'artifact' ? '候选版本' : assetClassLabels[assetClass] || assetClass || '资产'}</span><div className="asset-board-card-meta-actions"><i>{assetBoardStatusLabel(data.status)}</i>{canCollapseAssetScope && <button type="button" className="asset-board-scope-toggle" aria-expanded={!data.collapsed} aria-label={`${data.collapsed ? '展开' : '收起'} ${data.label} 下游内容`} title={`${data.collapsed ? '展开' : '收起'}下游内容`} onClick={(event) => { event.preventDefault(); event.stopPropagation(); const rowScope = String(data.config.grid_row_key || 'shared'); data.onToggleScope?.({ type: 'asset', id: String(data.asset_id), keepNodeId: data.id, scopeKey: `asset:${data.asset_id}:${rowScope}` }); }}>{data.collapsed ? '展开' : '收起'}</button>}</div></div>
+    <div className="asset-board-card-meta"><span>{data.node_type === 'handoff' ? 'Prompt / 图片卡' : data.node_type === 'artifact' ? '候选版本' : assetClassLabels[assetClass] || assetClass || '资产'}</span><div className="asset-board-card-meta-actions"><i>{assetBoardStatusLabel(data.status)}</i>{canCollapseAssetScope && <button type="button" className="asset-board-scope-toggle" aria-expanded={!data.collapsed} aria-label={`${data.collapsed ? '展开' : '收起'} ${data.label} 下游内容`} title={`${data.collapsed ? '展开' : '收起'}下游内容`} onClick={(event) => { event.preventDefault(); event.stopPropagation(); const rowScope = String(data.config.grid_row_key || 'shared'); data.onToggleScope?.({ type: 'asset', id: String(data.asset_id), keepNodeId: data.id, scopeKey: `asset:${data.asset_id}:${rowScope}` }); }}>{data.collapsed ? '展开' : '收起'}</button>}</div></div>
     <strong>{data.label}</strong>
     <small>{data.asset_id || data.shot_id || '空间节点'}{data.config.grade ? ` · ${String(data.config.grade)}` : ''}{rowKey && rowKey !== 'shared' ? ` · ${rowKey}` : ''}</small>
     {showProductionShortcuts && <div className="asset-board-production-shortcuts"><span title={productionShortcutLabel}>{productionShortcutLabel}</span><div><button type="button" aria-label={`打开 ${data.label} 的制作操作台`} onClick={(event) => { event.stopPropagation(); data.onOpenAssetProduction?.(String(data.asset_id), productionTarget, data.id); }}>打开制作操作台</button></div></div>}
@@ -262,7 +362,7 @@ export type AssetBoardFlowProps = {
 };
 
 function AssetBoardFlowInner({ nodes, edges, onNodesChange, onEdgesChange, onConnect, onNodeClick, onNodeDragStart, onNodeDragStop, onMoveEnd, defaultViewport, focusTarget = '' }: AssetBoardFlowProps) {
-  const nodeTypes = { 'asset-board': AssetBoardCard };
+  const nodeTypes = useMemo(() => ({ 'asset-board': (props: NodeProps<AssetFlowNode>) => <AssetBoardCard {...props} onNodeClick={onNodeClick} /> }), [onNodeClick]);
   const flow = useReactFlow();
   const focusedTargetRef = useRef('');
   useEffect(() => {

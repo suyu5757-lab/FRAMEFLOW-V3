@@ -92,13 +92,16 @@ class ProviderProfileUpdate(StrictModel):
 
 class CredentialWrite(StrictModel):
     api_key: str = Field(min_length=1, max_length=10000)
+    region: Literal["cn", "global"] | None = None
 
 
 class CredentialImport(StrictModel):
     environment_variable: Literal[
         "OPENAI_API_KEY", "DEEPSEEK_API_KEY",
-        "OPENCODE_SERVER_PASSWORD", "COMFYUI_API_KEY", "MINIMAX_API_KEY",
+        "OPENCODE_SERVER_PASSWORD", "COMFYUI_API_KEY",
+        "MINIMAX_API_KEY", "MINIMAX_CN_API_KEY", "MINIMAX_GLOBAL_API_KEY",
     ]
+    region: Literal["cn", "global"] | None = None
 
 
 class CapabilityBinding(StrictModel):
@@ -116,6 +119,74 @@ class AssistantRequest(StrictModel):
     message: str = Field(min_length=1, max_length=30000)
     context: dict[str, Any] = Field(default_factory=dict)
     skill_id: str | None = None
+    assistant_mode: Literal["general", "voice-preparation"] = "general"
+
+
+class AssistantRunCreateV3(StrictModel):
+    """Input for the durable, project-scoped Agent workspace run."""
+
+    project_id: str = Field(min_length=1, max_length=100)
+    conversation_id: str | None = Field(default=None, max_length=160)
+    message: str = Field(min_length=1, max_length=30000)
+    assistant_mode: Literal["general", "voice-preparation"] = "general"
+    attachment_ids: list[str] = Field(default_factory=list, max_length=8)
+    selected_node_ids: list[str] = Field(default_factory=list, max_length=120)
+    skill_id: str | None = Field(default=None, max_length=120)
+    provider_profile_id: str | None = Field(default=None, max_length=120)
+    model: str | None = Field(default=None, max_length=200)
+    context: dict[str, Any] = Field(default_factory=dict)
+    cost_boundary: dict[str, Any] = Field(default_factory=dict)
+    client_message_id: str = Field(min_length=1, max_length=160)
+
+
+class AssistantConversationCreateV3(StrictModel):
+    title: str = Field(default="", max_length=200)
+    assistant_mode: Literal["general", "voice-preparation"] = "general"
+
+
+class AssistantConversationUpdateV3(StrictModel):
+    title: str = Field(min_length=1, max_length=200)
+
+
+class AssistantExternalConfirmationV3(StrictModel):
+    decision: Literal["approve", "reject"]
+    provider_profile_id: str | None = Field(default=None, max_length=120)
+    detail: dict[str, Any] = Field(default_factory=dict)
+
+
+class AssistantApplyV3(StrictModel):
+    plan_id: str | None = Field(default=None, max_length=160)
+    selected_operation_ids: list[str] = Field(default_factory=list, max_length=200)
+    expected_project_revision: int = Field(ge=1)
+    expected_graph_revision: int = Field(ge=1)
+    expected_timeline_revision: int | None = Field(default=None, ge=1)
+    expected_contract_bundle_hash: str = Field(min_length=32, max_length=128)
+    detail: dict[str, Any] = Field(default_factory=dict)
+
+
+class AssistantRejectV3(StrictModel):
+    detail: dict[str, Any] = Field(default_factory=dict)
+
+
+class AudioAssistantDraftApplyV3(StrictModel):
+    """Apply selected audio-assistant operations to a local draft only."""
+
+    selected_operation_ids: list[str] = Field(default_factory=list, max_length=100)
+    expected_project_revision: int = Field(ge=1)
+    expected_audio_revision: int = Field(ge=1)
+    expected_contract_bundle_hash: str = Field(min_length=32, max_length=128)
+    base_audio_hash: str = Field(min_length=32, max_length=128)
+    document: dict[str, Any] = Field(default_factory=dict)
+
+
+class AudioTextConfirmationV3(StrictModel):
+    """Record an explicit user confirmation for one dialogue or audition line."""
+
+    target_type: Literal["dialogue", "audition"]
+    target_id: str = Field(min_length=1, max_length=160)
+    source_text: str = Field(min_length=1, max_length=9999)
+    provider_text: str | None = Field(default=None, min_length=1, max_length=9999)
+    expected_revision: int = Field(ge=1)
 
 
 class WorkflowRunCreate(StrictModel):
@@ -180,16 +251,28 @@ class ImageEdit(StrictModel):
 
 
 class SpeechGenerate(StrictModel):
-    text: str = Field(min_length=1, max_length=4096)
-    model: str = "gpt-4o-mini-tts"
-    voice: str = "coral"
-    format: Literal["mp3", "opus", "aac", "flac", "wav", "pcm"] = "wav"
+    # `text` is the providerText sent to MiniMax.  source_text is kept beside
+    # it for audit/history so provider control markers never replace the
+    # user's confirmed source line.
+    text: str = Field(min_length=1, max_length=9999)
+    source_text: str | None = Field(default=None, min_length=1, max_length=9999)
+    provider_text: str | None = Field(default=None, min_length=1, max_length=9999)
+    text_status: Literal["missing", "candidate", "conflict", "confirmed"] = "confirmed"
+    model: str = "speech-2.8-hd"
+    voice: str = ""
+    format: Literal["mp3", "wav", "flac"] = "wav"
     instructions: str = ""
-    speed: float = Field(default=1.0, ge=0.25, le=4.0)
+    speed: float = Field(default=1.0, ge=0.5, le=2.0)
     volume: float = Field(default=1.0, ge=0, le=10)
     pitch: int = Field(default=0, ge=-12, le=12)
     language_boost: str | None = Field(default=None, max_length=80)
+    locale: str | None = Field(default=None, max_length=32)
+    language: str | None = Field(default=None, max_length=80)
+    dialect: str | None = Field(default=None, max_length=120)
+    provider_region: Literal["cn", "global"] | None = None
     pronunciation_dict: dict[str, Any] = Field(default_factory=dict)
+    pause_plan: list[dict[str, Any]] = Field(default_factory=list, max_length=64)
+    sound_tags: list[str | dict[str, Any]] = Field(default_factory=list, max_length=32)
     sample_rate: int | None = Field(default=None, ge=8000, le=96000)
     bitrate: int | None = Field(default=None, ge=8000, le=512000)
     aigc_watermark: bool = False
@@ -197,7 +280,7 @@ class SpeechGenerate(StrictModel):
     project_id: str | None = None
     logical_asset_id: str | None = Field(default=None, max_length=120)
     shot_ids: list[str] = Field(default_factory=list, max_length=64)
-    emotion: str = Field(default="", max_length=240)
+    emotion: str | None = Field(default=None, max_length=80)
     target_duration: float | None = Field(default=None, gt=0, le=3600)
     confirmed: bool = False
     provider_profile_id: str | None = None
@@ -634,7 +717,7 @@ class AgentEdgeChangeV3(StrictModel):
 
 
 class AgentCandidateV3(StrictModel):
-    kind: Literal["script", "prompt", "storyboard", "brief"]
+    kind: Literal["script", "prompt", "storyboard", "brief", "audio", "timeline", "asset_metadata"]
     title: str = Field(default="Agent 候选", max_length=200)
     target_id: str | None = Field(default=None, max_length=160)
     content: str | dict[str, Any] = ""
@@ -646,6 +729,25 @@ class AgentApprovalGateV3(StrictModel):
     reason: str = Field(min_length=1, max_length=120)
     node_ids: list[str] = Field(default_factory=list)
     detail: dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentWorkspaceOperationV3(StrictModel):
+    """One reviewable cross-workspace change produced by the Agent."""
+
+    id: str = Field(min_length=1, max_length=160)
+    workspace: Literal["story", "assets", "audio", "timeline", "workflow"]
+    action: str = Field(min_length=1, max_length=120)
+    target_id: str | None = Field(default=None, max_length=160)
+    title: str = Field(default="Agent 工作台候选", max_length=240)
+    summary: str = Field(default="", max_length=2000)
+    before: Any = None
+    after: Any = None
+    content: Any = None
+    source_attachment_ids: list[str] = Field(default_factory=list, max_length=8)
+    source_refs: list[str] = Field(default_factory=list, max_length=32)
+    contract_snapshot: dict[str, Any] = Field(default_factory=dict)
+    risk: Literal["safe_draft", "review_required", "blocked"] = "safe_draft"
+    requires_confirmation: bool = False
 
 
 class AgentPatchV3(StrictModel):
@@ -665,6 +767,7 @@ class AgentPatchV3(StrictModel):
     requires_confirmation: bool = False
     unsupported_operations: list[str] = Field(default_factory=list)
     notes: str = Field(default="", max_length=4000)
+    workspace_operations: list[AgentWorkspaceOperationV3] = Field(default_factory=list, max_length=200)
 
 
 class AgentPlanCreateV3(StrictModel):

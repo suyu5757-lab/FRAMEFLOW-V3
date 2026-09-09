@@ -13,6 +13,7 @@ WORKFLOWS: dict[str, dict[str, Any]] = {
     "video-shot-director": {"version": "1.0.0", "next_routes": ["seedance-shot-packager"], "approval_policy": "deterministic_gate"},
     "seedance-shot-packager": {"version": "2.5.0", "next_routes": ["video-shot-director"], "approval_policy": "paid_confirmation"},
     "voice-controller": {"version": "2.0.0", "next_routes": ["voice-performance-director", "music-sound-designer", "video-asset-regulator"], "approval_policy": "paid_confirmation"},
+    "voice-preparation-assistant": {"version": "1.0.0", "next_routes": ["voice-controller"], "approval_policy": "supervised"},
     "voice-performance-director": {"version": "1.0.0", "next_routes": ["voice-controller", "video-shot-director"], "approval_policy": "paid_confirmation"},
     "music-sound-designer": {"version": "1.0.0", "next_routes": ["voice-controller", "video-shot-director"], "approval_policy": "paid_confirmation"},
     "final-render": {"version": "1.0.0", "next_routes": [], "approval_policy": "final_confirmation"},

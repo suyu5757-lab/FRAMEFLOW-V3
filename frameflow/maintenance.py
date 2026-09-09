@@ -42,6 +42,8 @@ PROJECT_SCOPED_TABLES = (
     "render_jobs_v6",
     "media_proxies_v6",
     "asset_boards_v7",
+    "assistant_attachments_v18",
+    "assistant_runs_v18",
 )
 
 ACTIVE_RUN_STATUSES = ("queued", "running", "awaiting_confirmation", "paused")
@@ -107,6 +109,14 @@ def delete_project_records(database: Database, project_id: str, *, audit_event: 
             plan_ids = [str(row[0]) for row in connection.execute("SELECT id FROM agent_plans_v5 WHERE project_id=?", (project_id,)).fetchall()]
             if "agent_plan_events_v5" in tables:
                 counts["agent_plan_events_v5"] = _delete_by_ids(connection, "agent_plan_events_v5", "plan_id", plan_ids)
+
+        if "assistant_runs_v18" in tables:
+            run_ids = [str(row[0]) for row in connection.execute("SELECT id FROM assistant_runs_v18 WHERE project_id=?", (project_id,)).fetchall()]
+            if "assistant_run_events_v18" in tables:
+                counts["assistant_run_events_v18"] = _delete_by_ids(connection, "assistant_run_events_v18", "run_id", run_ids)
+        if "assistant_attachments_v18" in tables and "assistant_message_attachments_v18" in tables:
+            attachment_ids = [str(row[0]) for row in connection.execute("SELECT id FROM assistant_attachments_v18 WHERE project_id=?", (project_id,)).fetchall()]
+            counts["assistant_message_attachments_v18"] = _delete_by_ids(connection, "assistant_message_attachments_v18", "attachment_id", attachment_ids)
 
         for table in PROJECT_SCOPED_TABLES:
             if table not in tables:

@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 
-async function seedProject(page: Page, name = '浏览器验收项目') {
+async function seedProject(page: Page, name = '浏览器验收项目'): Promise<string> {
   const response = await page.request.post('/api/v2/projects', {
     data: { name, ratio: '16:9', duration: 12, generator: 'seedance2.0', brief: 'Playwright deterministic fixture' },
   });
@@ -8,19 +8,26 @@ async function seedProject(page: Page, name = '浏览器验收项目') {
   return (await response.json()).document.id as string;
 }
 
-async function openWorkbench(page: Page) {
+async function openWorkbench(page: Page, expectedProjectName = '浏览器验收项目', projectId?: string) {
   await page.goto('/');
   await expect(page.locator('.brand')).toContainText('FRAMEFLOW');
-  await expect(page.locator('.project-title')).toContainText('浏览器验收项目');
+  if (!((await page.locator('.project-title').textContent()) || '').includes(expectedProjectName)) {
+    await switchToProject(page, expectedProjectName, projectId);
+  }
+  await expect(page.locator('.project-title')).toContainText(expectedProjectName);
 }
 
-async function switchToProject(page: Page, name: string) {
-  await page.getByRole('button', { name: '项目管理' }).click();
-  const target = page.locator('.project-manager-row').filter({ hasText: name });
+async function switchToProject(page: Page, name: string, projectId?: string) {
+  const managerButton = page.getByRole('button', { name: '项目管理', exact: true });
+  const dialog = page.getByRole('dialog', { name: /项目管理/ });
+  if (!(await dialog.isVisible().catch(() => false))) { await expect(managerButton).toBeEnabled(); await managerButton.click(); }
+  await expect(dialog).toBeVisible();
+  const target = projectId ? page.locator(`.project-manager-row[data-project-id="${projectId}"]`) : page.locator('.project-manager-row').filter({ hasText: name }).first();
   await expect(target).toBeVisible();
   const switchButton = target.getByRole('button', { name: '切换到此项目' });
   if (await switchButton.count()) await switchButton.click();
-  else await page.getByRole('button', { name: '完成', exact: true }).click();
+  else await page.getByRole('button', { name: '关闭项目管理' }).click();
+  await expect(dialog).toHaveCount(0);
   await expect(page.locator('.project-title')).toContainText(name);
 }
 
@@ -116,6 +123,37 @@ test.describe('FrameFlow V3 workbench', () => {
     expect(errors).toEqual([]);
   });
 
+  test('MiniMax settings keep China and Global credentials in separate slots', async ({ page }) => {
+    const projectName = `MiniMax 双区域凭据验收项目-${Date.now()}`;
+    const projectId = await seedProject(page, projectName);
+    const removableProviderName = '临时可删除 Agent';
+    const removableProvider = await page.request.post('/api/v2/settings/providers', {
+      data: { id: `e2e-removable-agent-${Date.now()}`, provider_type: 'openai_compatible', display_name: removableProviderName, base_url: 'https://example.test/v1', capabilities: [], enabled: true, model_config: {} },
+    });
+    expect(removableProvider.ok()).toBeTruthy();
+    await openWorkbench(page, projectName, projectId);
+    await page.getByRole('button', { name: '设置与 Provider' }).click();
+    await expect(page.getByRole('heading', { name: '设置与 Provider 控制面' })).toBeVisible();
+    const removableProviderRow = page.locator('.settings-provider-item').filter({ hasText: removableProviderName });
+    await expect(removableProviderRow.getByRole('button', { name: `删除 ${removableProviderName}` })).toBeVisible();
+    await removableProviderRow.getByRole('button', { name: `删除 ${removableProviderName}` }).click();
+    const deleteProviderDialog = page.getByRole('dialog', { name: '确认删除 Provider' });
+    await expect(deleteProviderDialog).toBeVisible();
+    await deleteProviderDialog.getByRole('button', { name: '删除 Provider' }).click();
+    await expect(removableProviderRow).toHaveCount(0);
+    await expect(page.locator('.settings-presets')).toContainText('删除配置后仍可重新添加');
+    await expect(page.locator('.settings-minimax-credentials')).toContainText('MiniMax TTS 接入');
+    await expect(page.getByLabel('默认 TTS 模型')).toHaveCount(1);
+    await expect(page.locator('.settings-agent-form').filter({ hasText: 'MiniMax TTS 模型' })).toHaveCount(0);
+    await expect(page.locator('.settings-minimax-region-card')).toHaveCount(2);
+    await expect(page.locator('.settings-minimax-region-card').filter({ hasText: '中国区' })).toBeVisible();
+    await expect(page.locator('.settings-minimax-region-card').filter({ hasText: '国际区' })).toBeVisible();
+    await expect(page.getByLabel('中国区 MiniMax API Key')).toBeVisible();
+    await expect(page.getByLabel('国际区 MiniMax API Key')).toBeVisible();
+    await expect(page.locator('option[value="MINIMAX_CN_API_KEY"]')).toHaveCount(1);
+    await expect(page.locator('option[value="MINIMAX_GLOBAL_API_KEY"]')).toHaveCount(1);
+  });
+
   test('timeline opens as a shot-first delivery control room', async ({ page }) => {
     await seedProject(page, '时间线交付验收项目');
     await openWorkbench(page);
@@ -129,7 +167,7 @@ test.describe('FrameFlow V3 workbench', () => {
   });
 
   test('paid workflow gate can be cancelled without creating a run', async ({ page }) => {
-    await seedProject(page, '费用门禁项目');
+    const projectId = await seedProject(page, '费用门禁项目');
     await page.route('**/api/v2/runs/estimate', async (route) => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ estimate: {
         node_count: 1, paid_node_count: 1, paid_nodes: [{ node_id: 'video-generation', kind: 'video', estimated_cost: 1.2, currency: 'USD', model: 'local-fake' }], estimated_cost: 1.2, currency: 'USD', requires_confirmation: true, impact_node_ids: ['video-generation'],
@@ -139,7 +177,7 @@ test.describe('FrameFlow V3 workbench', () => {
     await page.route('**/api/v2/runs', async (route) => { runCreated = true; await route.continue(); });
     await openWorkbench(page);
     await page.getByRole('button', { name: '项目管理' }).click();
-    const target = page.locator('.project-manager-row').filter({ hasText: '费用门禁项目' });
+    const target = page.locator(`.project-manager-row[data-project-id="${projectId}"]`);
     await target.getByRole('button', { name: '切换到此项目' }).click();
     await expect(page.locator('.project-title')).toContainText('费用门禁项目');
     await page.locator('nav button').filter({ hasText: '故事与分镜' }).click();
@@ -153,7 +191,7 @@ test.describe('FrameFlow V3 workbench', () => {
   test('asset production workspace replaces the standalone asset section', async ({ page }) => {
     const fixture = await seedAssetBoardProject(page, `资产生产唯一入口验收项目-${Date.now()}`);
     await page.goto('/');
-    await switchToProject(page, fixture.name);
+    await switchToProject(page, fixture.name, fixture.id);
     const navigation = page.locator('.studio-sidebar nav');
     await expect(navigation.getByRole('button', { name: /统一资产库/ })).toHaveCount(0);
     await expect(navigation.getByRole('button', { name: /人物与角色/ })).toHaveCount(0);
@@ -170,7 +208,7 @@ test.describe('FrameFlow V3 workbench', () => {
     const fixture = await seedAssetBoardProject(page);
     const assetName = '于村祠堂雨夜';
     await page.goto('/');
-    await switchToProject(page, fixture.name);
+    await switchToProject(page, fixture.name, fixture.id);
     await page.getByRole('button', { name: /资产生产工作区/ }).click();
 
     const sceneCard = page.locator('.asset-board-card.asset-board-asset').filter({ hasText: assetName }).first();
@@ -224,7 +262,7 @@ test.describe('FrameFlow V3 workbench', () => {
     await expect(sceneNode).toHaveClass(/selected/);
     await expect(collapseButton).toHaveAttribute('aria-expanded', 'true');
 
-    await promptCard.click();
+    await promptCard.locator('.asset-board-card-meta > span').click();
     await expect(promptNode).toHaveClass(/selected/);
     await expect(sceneNode).not.toHaveClass(/selected/);
     await expect(page.locator('.asset-production-panel header > span')).toContainText('Prompt / 图片卡');
@@ -271,7 +309,7 @@ test.describe('FrameFlow V3 workbench', () => {
     for (const viewport of [{ width: 1468, height: 945 }, { width: 1280, height: 824 }]) {
       await page.setViewportSize(viewport);
       await page.goto('/');
-      await switchToProject(page, fixture.name);
+      await switchToProject(page, fixture.name, fixture.id);
       await page.getByRole('button', { name: /资产生产工作区/ }).click();
       const toolbar = page.locator('.asset-board-toolbar');
       await expect(toolbar).toBeVisible();
@@ -285,9 +323,8 @@ test.describe('FrameFlow V3 workbench', () => {
 
   test('audio workbench keeps provider-neutral and QA gates explicit', async ({ page }) => {
     const name = `人物声音闭环验收项目-${Date.now()}`;
-    await seedProject(page, name);
-    await page.goto('/');
-    await switchToProject(page, name);
+    const projectId = await seedProject(page, name);
+    await openWorkbench(page, name, projectId);
     await page.getByRole('button', { name: /声音资产工坊/ }).click();
     await expect(page.getByText('人物声音闭环向导')).toBeVisible();
     await expect(page.getByText(/provider-neutral 可继续规划/).first()).toBeVisible();
@@ -309,6 +346,28 @@ test.describe('FrameFlow V3 workbench', () => {
     await expect((await download).suggestedFilename()).toContain('voice-auditions.json');
   });
 
+  test('embeds the voice preparation assistant inside the audio workbench', async ({ page }) => {
+    const name = `声音前置 AI 内嵌验收项目-${Date.now()}`;
+    const projectId = await seedProject(page, name);
+    await openWorkbench(page, name, projectId);
+    await page.getByRole('button', { name: /声音资产工坊/ }).click();
+
+    const panel = page.locator('.audio-assistant-panel');
+    await expect(panel).toBeVisible();
+    await expect(panel).toContainText('VOICE PREP AI');
+    await expect(panel).toContainText('声音前置准备');
+    await expect(panel).toContainText('规划');
+    await expect(panel).toContainText('OpenCode');
+    await expect(panel).toContainText('生成');
+    await expect(panel).toContainText('MiniMax');
+    await expect(panel.getByRole('textbox', { name: '声音前置准备对话' })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: /FRAMEFLOW AI Agent 工作台/ })).toHaveCount(0);
+
+    await panel.getByRole('button', { name: '收起' }).click();
+    await expect(panel).toContainText('AI 声音方案');
+    await expect(panel.getByRole('button', { name: /展开继续/ })).toBeVisible();
+  });
+
   test('provider-free UI can create scenes, stable shots and core logical assets', async ({ page }) => {
     const name = `纯人工生产闭环-${Date.now()}`;
     const created = await page.request.post('/api/v2/projects', { data: { name, ratio: '16:9', duration: 20, generator: 'manual', brief: 'Provider disabled manual workflow' } });
@@ -321,7 +380,7 @@ test.describe('FrameFlow V3 workbench', () => {
     });
 
     await page.goto('/');
-    await switchToProject(page, name);
+    await switchToProject(page, name, projectId);
     await page.locator('.studio-sidebar').getByRole('button', { name: /故事与分镜/ }).click();
     await page.getByRole('button', { name: '＋ 新增场景' }).click();
     const sceneRow = page.locator('.manual-scene-row').last();
