@@ -247,6 +247,45 @@ class MiniMaxTtsRouteTests(unittest.TestCase):
         self.assertEqual(payload["catalog_source"], "documented")
         self.assertIn("Japanese_SportyStudent", {item["voice_id"] for item in payload["voices"]})
 
+    def test_system_voice_catalog_can_read_the_non_active_region_without_switching_provider(self) -> None:
+        response = self.client.get("/api/v2/providers/minimax-default/voices?region=global")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["region"], "global")
+        self.assertEqual(response.json()["base_url"], "https://api.minimax.io/v1")
+
+    def test_audio_studio_exposes_both_minimax_region_routes(self) -> None:
+        project_id = f"PRJ_MINIMAX_ROUTES_{uuid.uuid4().hex[:8]}"
+        project = {"id": project_id, "name": "MiniMax region routes", "ratio": "16:9", "duration": 10, "generator": "Seedance 2.5", "assets": [], "audio": {}}
+        created = self.client.put(f"/api/v2/projects/{project_id}", json={"document": project})
+        self.assertEqual(created.status_code, 200, created.text)
+        response = self.client.get(f"/api/v2/projects/{project_id}/audio-studio")
+        self.assertEqual(response.status_code, 200, response.text)
+        routes = response.json()["tts_routes"]
+        self.assertEqual({item["region"] for item in routes}, {"cn", "global"})
+        self.assertEqual(response.json()["default_tts_route_id"], "minimax-default:cn")
+
+    def test_project_speech_can_use_a_configured_non_active_region(self) -> None:
+        project_id = f"PRJ_MINIMAX_GLOBAL_{uuid.uuid4().hex[:8]}"
+        project = {
+            "id": project_id,
+            "name": "MiniMax global route test",
+            "ratio": "16:9",
+            "duration": 10,
+            "generator": "Seedance 2.5",
+            "assets": [{"id": "AUD001", "name": "对白资产", "skill": "audio", "assetClass": "audio", "assetRole": "dialogue", "status": "missing", "assetMetadata": {"asset_class": "audio"}}],
+            "audio": {"voices": [{"id": "V001", "source_type": "preset", "provider_voice_id": MINIMAX_DEFAULT_VOICE_ID, "provider_profile_id": "minimax-default", "provider_region": "global", "consent_status": "not-required"}], "dialogues": [], "auditions": [], "takes": [], "handoff": {"status": "provisional", "approved_asset_ids": []}},
+        }
+        with tempfile.TemporaryDirectory(prefix="frameflow-minimax-global-output-") as output_root:
+            output_dir = Path(output_root)
+            resource_dir = output_dir / "resource"
+            with mock.patch.object(server, "DATA_DIR", resource_dir), mock.patch.object(server, "GENERATED_DIR", output_dir / "generated"), mock.patch.object(server, "GENERATED_AUDIO_DIR", output_dir / "generated" / "audio"), mock.patch.object(server, "get_profile_secret", return_value="provider-secret"), mock.patch.object(server, "_minimax_voice_catalog_payload", return_value={"status": "live", "region": "global", "voices": [{"voice_id": MINIMAX_DEFAULT_VOICE_ID, "source": "system"}]}), mock.patch.object(server, "minimax_speech", new=mock.AsyncMock(return_value=(b"RIFF", {"trace_id": "trace-global", "extra_info": {}}))) as speech:
+                created = self.client.put(f"/api/v2/projects/{project_id}", json={"document": project})
+                self.assertEqual(created.status_code, 200, created.text)
+                response = self.client.post(f"/api/v2/projects/{project_id}/audio/tts", json={"text": "Global MiniMax", "voice": MINIMAX_DEFAULT_VOICE_ID, "voice_id": "V001", "dialogue_id": "DLG001", "logical_asset_id": "AUD001", "provider_region": "global", "confirmed": True})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(speech.await_args.args[0]["base_url"], "https://api.minimax.io/v1")
+        self.assertEqual(response.json()["provider_region"], "global")
+
     def test_probe_transport_failure_returns_failed_probe_instead_of_500(self) -> None:
         with mock.patch.object(server, "get_profile_secret", return_value="provider-secret"), mock.patch.object(server, "probe_profile", new=mock.AsyncMock(side_effect=httpx.ConnectError("offline"))):
             response = self.client.post("/api/v2/settings/providers/minimax-default/probe")

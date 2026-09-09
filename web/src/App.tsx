@@ -3517,16 +3517,16 @@ function Studio() {
   }, providerId ? 'Provider 配置已保存' : 'V3 Provider 已创建');
   const addSettingsPreset = (presetId: string) => runSettingsAction(async () => { await studioApi.addSettingsProviderPreset(presetId); }, 'Provider 预设已添加');
   const deleteSettingsProvider = async (providerId: string) => {
-    if (!(await requestConfirmation('确认删除 Provider', '确认删除这个 V3 Provider 配置？其系统凭据也会被尝试清除，项目内容不会被删除。', '删除 Provider', true))) return;
-    runSettingsAction(async () => { await studioApi.deleteSettingsProvider(providerId); }, 'Provider 配置已删除');
+    if (!(await requestConfirmation('确认删除 Provider', '这会永久删除该 Provider 的接入配置、系统凭据和能力绑定；项目内容与下方快速接入预设会保留。确认继续？', '删除 Provider', true))) return;
+    runSettingsAction(async () => { await studioApi.deleteSettingsProvider(providerId); }, 'Provider 配置、系统凭据和能力绑定已彻底删除；快速接入预设仍保留');
   };
   const writeSettingsCredential = (providerId: string, value: string, region?: MiniMaxRegion) => runSettingsAction(async () => { await studioApi.writeSettingsCredential(providerId, value, region); }, region ? `已写入 MiniMax ${minimaxRegionLabels[region].name} Key` : '凭据已写入系统凭据库');
   const importSettingsCredential = (providerId: string, environmentVariable: string, region?: MiniMaxRegion) => runSettingsAction(async () => { await studioApi.importSettingsCredential(providerId, environmentVariable, region); }, region ? `已从 ${environmentVariable} 导入 MiniMax ${minimaxRegionLabels[region].name} Key` : `已从 ${environmentVariable} 导入凭据`);
   const clearSettingsCredential = (providerId: string, region?: MiniMaxRegion) => runSettingsAction(async () => { await studioApi.clearSettingsCredential(providerId, region); }, region ? `MiniMax ${minimaxRegionLabels[region].name} Key 已清除` : '系统凭据已清除');
   const probeSettingsProvider = (providerId: string) => runSettingsAction(async () => { await studioApi.probeSettingsProvider(providerId); }, 'Provider 探测完成，模型目录已更新');
-  const refreshMinimaxCatalog = async () => {
+  const refreshMinimaxCatalog = async (region?: MiniMaxRegion) => {
     const providerId = settings?.providers.find((provider) => provider.provider_type === 'minimax')?.id || 'minimax-default';
-    const ok = await probeSettingsProvider(providerId);
+    const ok = await runSettingsAction(async () => { await studioApi.refreshMinimaxVoices(providerId, region); }, region ? `已刷新 MiniMax ${minimaxRegionLabels[region].name} 音色目录` : 'MiniMax 音色目录已刷新');
     await refreshAudioStudio();
     return ok;
   };

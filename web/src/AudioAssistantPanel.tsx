@@ -21,6 +21,8 @@ type AudioAssistantPanelProps = {
   envelope: AudioStudioEnvelope;
   audioDocument: AudioStudioDocument;
   focus: AudioAssistantFocus;
+  providerProfileId?: string | null;
+  providerRegion?: string | null;
   dirty: boolean;
   busy?: boolean;
   onDraftApplied: (document: AudioStudioDocument) => void;
@@ -134,7 +136,7 @@ function AuditionSummary({ auditions }: { auditions: AudioPreparationAudition[] 
   </div>;
 }
 
-export function AudioAssistantPanel({ projectId, projectName, envelope, audioDocument, focus, dirty, busy: parentBusy = false, onDraftApplied, onSave, onNotice }: AudioAssistantPanelProps) {
+export function AudioAssistantPanel({ projectId, projectName, envelope, audioDocument, focus, providerProfileId, providerRegion, dirty, busy: parentBusy = false, onDraftApplied, onSave, onNotice }: AudioAssistantPanelProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [conversations, setConversations] = useState<AssistantConversation[]>([]);
   const [conversationId, setConversationId] = useState('');
@@ -284,6 +286,8 @@ export function AudioAssistantPanel({ projectId, projectName, envelope, audioDoc
         context: {
           active_view: 'audio',
           audio_focus: activeFocus,
+          audio_provider_profile_id: providerProfileId || null,
+          audio_provider_region: providerRegion || null,
           audio_draft: audioDocument,
           revisions: { project: envelope.revision, audio: envelope.revision },
           pending_changes: { audio: dirty },

@@ -528,6 +528,37 @@ def provider_environment(profile:dict[str,Any]|sqlite3.Row, region: str | None =
     return "OPENAI_API_KEY"
 
 
+def _regional_minimax_profile(profile: dict[str, Any], region: str | None = None) -> dict[str, Any]:
+    """Return a credential- and endpoint-scoped MiniMax profile copy.
+
+    A MiniMax profile can expose two independent regional credential slots. The
+    active Provider setting remains the default route for the rest of the app,
+    while audio work can explicitly select either configured region without
+    mutating that global setting or silently crossing regions.
+    """
+    if profile.get("provider_type") != "minimax":
+        return profile
+    selected_region = _credential_region_for_profile(profile, region)
+    regional = deepcopy(profile)
+    config = deepcopy(profile.get("model_config") if isinstance(profile.get("model_config"), dict) else {})
+    config["region"] = selected_region
+    regional["model_config"] = config
+    regional["base_url"] = MINIMAX_REGION_BASE_URLS[selected_region]
+    return regional
+
+
+def _minimax_region_health(profile: dict[str, Any], region: str) -> dict[str, Any]:
+    """Read only the health/catalog cache belonging to one MiniMax region."""
+    health = profile.get("last_health") if isinstance(profile.get("last_health"), dict) else {}
+    regional = health.get("regions") if isinstance(health.get("regions"), dict) else {}
+    selected = regional.get(region)
+    if isinstance(selected, dict):
+        return deepcopy(selected)
+    if str(health.get("credential_region") or minimax_region(profile)) == region:
+        return {key: deepcopy(value) for key, value in health.items() if key != "regions"}
+    return {}
+
+
 def _normalize_minimax_config(base_url: str, raw_config: Any) -> dict[str, Any]:
     config = deepcopy(raw_config) if isinstance(raw_config, dict) else {}
     configured_region = str(config.get("region") or "").strip().lower()
@@ -941,10 +972,15 @@ async def remove_profile(pid:str,request:Request):
     if pid in {"openai-default","jimeng-default","opencode-default","minimax-default"}:raise HTTPException(409,"默认配置不能删除。")
     database=db(request); profile=get_profile(database,pid)
     with database.connect() as c:
-        if c.execute("SELECT 1 FROM capability_bindings WHERE provider_profile_id=?",(pid,)).fetchone():raise HTTPException(409,"该配置仍是默认能力绑定。")
+        binding_rows = c.execute("SELECT capability FROM capability_bindings WHERE provider_profile_id=? ORDER BY capability",(pid,)).fetchall()
+        removed_capabilities = [str(row["capability"]) for row in binding_rows]
+        # A Provider profile is a self-contained integration. Remove its
+        # routing bindings in the same transaction so deleting a profile
+        # cannot leave a dangling default route behind.
+        c.execute("DELETE FROM capability_bindings WHERE provider_profile_id=?",(pid,))
         c.execute("DELETE FROM provider_profiles WHERE id=?",(pid,))
     _clear_provider_credential(profile)
-    return {"ok":True}
+    return {"ok":True,"provider_id":pid,"removed_capabilities":removed_capabilities}
 @app.post("/api/provider-profiles/{pid}/credential")
 async def write_credential(pid:str,body:CredentialWrite,request:Request):
     profile=get_profile(db(request),pid)
@@ -2417,8 +2453,10 @@ async def _execute_assistant_run(application: FastAPI, run_id: str) -> None:
         snapshot["context_budget_chars"] = project_context_budget
         if assistant_mode == AUDIO_ASSISTANT_MODE:
             capabilities = _effective_capabilities(database)
-            tts_provider_id = str((capabilities.get("tts") or {}).get("provider_profile_id") or "")
-            audio_catalog = _minimax_voice_catalog_payload(database, tts_provider_id) if tts_provider_id else {
+            audio_context_input = context if isinstance(context, dict) else {}
+            tts_provider_id = str(audio_context_input.get("audio_provider_profile_id") or (capabilities.get("tts") or {}).get("provider_profile_id") or "")
+            tts_region = str(audio_context_input.get("audio_provider_region") or "").strip().lower() or None
+            audio_catalog = _minimax_voice_catalog_payload(database, tts_provider_id, tts_region) if tts_provider_id else {
                 "provider_id": None,
                 "provider": "minimax",
                 "region": MINIMAX_DEFAULT_REGION,
@@ -2436,6 +2474,11 @@ async def _execute_assistant_run(application: FastAPI, run_id: str) -> None:
                 audio_catalog,
                 context.get("audio_focus") if isinstance(context, dict) and isinstance(context.get("audio_focus"), dict) else None,
             )
+            audio_context["tts_route"] = {
+                "provider_profile_id": tts_provider_id or None,
+                "region": audio_catalog.get("region") if isinstance(audio_catalog, dict) else tts_region,
+                "catalog_status": audio_catalog.get("status") if isinstance(audio_catalog, dict) else "unavailable",
+            }
             snapshot["audio_preparation_context"] = audio_context
             snapshot["audio_draft_hash"] = audio_document_hash(audio_document)
         instructions = assistant_system_instructions(bundle, skill if isinstance(skill, dict) else None)
@@ -3697,9 +3740,10 @@ async def settings_provider_credential_clear_v3(provider_id: str, request: Reque
 
 
 @app.post("/api/v2/settings/providers/{provider_id}/probe")
-async def settings_provider_probe_v3(provider_id: str, request: Request):
+async def settings_provider_probe_v3(provider_id: str, request: Request, region: str | None = None):
     database = db(request)
-    profile = get_profile(database, provider_id)
+    base_profile = get_profile(database, provider_id)
+    profile = _regional_minimax_profile(base_profile, region) if base_profile.get("provider_type") == "minimax" and region else base_profile
     contract = provider_contract(profile)
     started = time.perf_counter()
     credential = ""
@@ -3757,7 +3801,7 @@ async def settings_provider_probe_v3(provider_id: str, request: Request):
         # Preserve the last known directory as a non-live cache when a
         # refresh fails. This keeps discovery useful without claiming stale
         # voices are currently executable.
-        previous_health = profile.get("last_health") if isinstance(profile.get("last_health"), dict) else {}
+        previous_health = _minimax_region_health(base_profile, minimax_region(profile))
         previous_voices = previous_health.get("voices") if isinstance(previous_health.get("voices"), list) else []
         if result.get("ok") is not True and previous_voices and not result.get("voices"):
             result["voices"] = deepcopy(previous_voices)
@@ -3778,11 +3822,12 @@ async def settings_provider_models_v3(provider_id: str, request: Request):
     return {"provider_id": provider_id, "models": health.get("models", []), "model_catalog": health.get("model_catalog", []), "model_readiness": health.get("model_readiness", {}), "last_probe": health.get("checked_at")}
 
 
-def _minimax_voice_catalog_payload(database: Database, provider_id: str) -> dict[str, Any]:
+def _minimax_voice_catalog_payload(database: Database, provider_id: str, region: str | None = None) -> dict[str, Any]:
     profile = get_profile(database, provider_id)
     if profile["provider_type"] != "minimax":
         raise HTTPException(409, "只有 MiniMax Provider 提供系统音色目录。")
-    health = profile.get("last_health") if isinstance(profile.get("last_health"), dict) else {}
+    selected_region = _credential_region_for_profile(profile, region)
+    health = _minimax_region_health(profile, selected_region)
     live_voices = health.get("voices") if isinstance(health.get("voices"), list) else []
     if health.get("ok") is True and live_voices:
         status = "live"
@@ -3802,7 +3847,9 @@ def _minimax_voice_catalog_payload(database: Database, provider_id: str) -> dict
     return {
         "provider_id": provider_id,
         "provider": "minimax",
-        "region": minimax_region(profile),
+        "region": selected_region,
+        "base_url": MINIMAX_REGION_BASE_URLS[selected_region],
+        "credential_configured": bool(_minimax_secret(profile, selected_region)),
         "status": status,
         "catalog_source": source,
         "checked_at": health.get("checked_at"),
@@ -3813,17 +3860,60 @@ def _minimax_voice_catalog_payload(database: Database, provider_id: str) -> dict
     }
 
 
+def _minimax_tts_routes(database: Database) -> list[dict[str, Any]]:
+    """Expose every enabled MiniMax profile and its independent regions."""
+    with database.connect() as connection:
+        rows = connection.execute(
+            "SELECT id FROM provider_profiles WHERE provider_type=? AND enabled=1 ORDER BY display_name,id",
+            ("minimax",),
+        ).fetchall()
+        binding = connection.execute(
+            "SELECT provider_profile_id FROM capability_bindings WHERE capability='tts'",
+        ).fetchone()
+    default_provider_id = str(binding["provider_profile_id"]) if binding else ""
+    routes: list[dict[str, Any]] = []
+    for row in rows:
+        provider_id = str(row["id"])
+        profile = get_profile(database, provider_id)
+        config = profile.get("model_config") if isinstance(profile.get("model_config"), dict) else {}
+        model = str(config.get("tts_model") or MINIMAX_DEFAULT_TTS_MODEL)
+        for region in MINIMAX_REGIONS:
+            catalog = _minimax_voice_catalog_payload(database, provider_id, region)
+            route_id = f"{provider_id}:{region}"
+            route_ready = bool(profile.get("enabled") and catalog.get("credential_configured") and catalog.get("status") in {"live", "cached"})
+            routes.append({
+                "id": route_id,
+                "provider_profile_id": provider_id,
+                "provider": "minimax",
+                "display_name": profile.get("display_name") or "MiniMax TTS",
+                "region": region,
+                "base_url": MINIMAX_REGION_BASE_URLS[region],
+                "model": model,
+                "enabled": bool(profile.get("enabled")),
+                "credential_configured": bool(catalog.get("credential_configured")),
+                "ready": route_ready,
+                "active": provider_id == default_provider_id and region == str(profile.get("active_region") or MINIMAX_DEFAULT_REGION),
+                "catalog": catalog,
+            })
+    return routes
+
+
 @app.get("/api/v2/providers/{provider_id}/voices")
 async def provider_voice_catalog_v3(provider_id: str, request: Request):
-    return _minimax_voice_catalog_payload(db(request), provider_id)
+    return _minimax_voice_catalog_payload(db(request), provider_id, request.query_params.get("region"))
 
 
 @app.post("/api/v2/providers/{provider_id}/voices/refresh")
 async def refresh_provider_voice_catalog_v3(provider_id: str, request: Request):
     # Reuse the provider probe boundary.  It is read-only upstream and never
     # calls T2A, so refreshing the catalogue cannot create a billable Take.
-    probe = await settings_provider_probe_v3(provider_id, request)
-    return {"catalog": _minimax_voice_catalog_payload(db(request), provider_id), "probe": probe.get("probe")}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    region = str(body.get("region") or request.query_params.get("region") or "").strip().lower() or None
+    probe = await settings_provider_probe_v3(provider_id, request, region=region)
+    return {"catalog": _minimax_voice_catalog_payload(db(request), provider_id, region), "probe": probe.get("probe")}
 
 
 @app.get("/api/v2/settings/capability-bindings")
@@ -5938,9 +6028,8 @@ async def generate_speech(body:SpeechGenerate,request:Request):
     database=db(request); profile,bound_model=resolve_profile(database,"tts",body.provider_profile_id)
     if profile["provider_type"] != "minimax":raise HTTPException(409,"当前工作台的 TTS 已固定使用 MiniMax，请先绑定 MiniMax TTS。")
     if not profile["enabled"]:raise HTTPException(409,"MiniMax TTS Provider 已停用。")
-    selected_region = minimax_region(profile)
-    if body.provider_region and body.provider_region != selected_region:
-        raise HTTPException(409, f"请求区域 {body.provider_region} 与 MiniMax Provider 当前区域 {selected_region} 不一致；请先在设置中切换 Provider 区域。")
+    selected_region = _credential_region_for_profile(profile, body.provider_region)
+    profile = _regional_minimax_profile(profile, selected_region)
     config=profile.get("model_config") if isinstance(profile.get("model_config"),dict) else {}
     if body.model not in MINIMAX_TTS_MODELS:raise HTTPException(422,"MiniMax TTS 模型无效，请选择 speech-2.8-hd 或其他受支持的 Speech 模型。")
     model=str(body.model or bound_model or config.get("tts_model") or MINIMAX_DEFAULT_TTS_MODEL)
@@ -6423,11 +6512,13 @@ def _audio_studio_envelope(database: Database, project_id: str, doc: dict[str, A
     audio_assets = [asset for asset in library["assets"] if asset.get("assetClass") in {"audio", "music", "sfx"}]
     capabilities = _effective_capabilities(database)
     tts_provider_id = (capabilities.get("tts") or {}).get("provider_profile_id")
-    minimax_catalog = _minimax_voice_catalog_payload(database, str(tts_provider_id)) if tts_provider_id else {
+    tts_routes = _minimax_tts_routes(database)
+    default_route = next((item for item in tts_routes if item.get("active")), None) or next((item for item in tts_routes if item.get("ready")), None)
+    minimax_catalog = (default_route.get("catalog") if default_route else None) or (_minimax_voice_catalog_payload(database, str(tts_provider_id)) if tts_provider_id else {
         "provider_id": None, "provider": "minimax", "region": MINIMAX_DEFAULT_REGION, "status": "unavailable",
         "catalog_source": "none", "checked_at": None, "voices": minimax_documented_voice_catalog(),
         "models": list(MINIMAX_TTS_MODELS), "error": "尚未绑定 MiniMax TTS Provider。", "error_kind": "configuration",
-    }
+    })
     return {
         "project_id": project_id,
         "revision": revision,
@@ -6436,6 +6527,8 @@ def _audio_studio_envelope(database: Database, project_id: str, doc: dict[str, A
         "capabilities": capabilities,
         "audio_gates": _audio_studio_gates(_audio_studio_document(doc), capabilities, audio_assets),
         "minimax_voice_catalog": minimax_catalog,
+        "tts_routes": tts_routes,
+        "default_tts_route_id": default_route.get("id") if default_route else None,
         "workflow": {"router": "voice-controller", "voice": "voice-performance-director", "music": "music-sound-designer", "qa_owner": "voice-controller"},
     }
 
@@ -6617,10 +6710,12 @@ async def generate_project_speech_v3(project_id: str, body: SpeechGenerate, requ
     task_language_boost = language_boost_for_locale(task_locale, task_language) or body.language_boost or voice.get("language_boost")
     task_provider_region = body.provider_region or voice.get("provider_region") or None
     selected_provider_id = str(voice.get("provider_profile_id") or body.provider_profile_id or "") or None
+    if body.provider_region and voice.get("provider_region") and body.provider_region != voice.get("provider_region"):
+        raise HTTPException(409, "请求区域与声音 profile 已绑定区域不一致；请切换对应的 MiniMax TTS 接入或重新建立声音 profile。")
     if str(voice.get("source_type") or "") == "preset":
         catalog_provider_id = selected_provider_id or str((_effective_capabilities(database).get("tts") or {}).get("provider_profile_id") or "")
         if catalog_provider_id:
-            catalog = _minimax_voice_catalog_payload(database, catalog_provider_id)
+            catalog = _minimax_voice_catalog_payload(database, catalog_provider_id, task_provider_region)
             if catalog.get("status") not in {"live", "cached"}:
                 detail = catalog.get("error_kind") or "unavailable"
                 raise HTTPException(409, f"MiniMax 系统音色目录当前不可用（{detail}），不能把文档候选当作可执行 voice_id。")

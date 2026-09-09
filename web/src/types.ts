@@ -47,6 +47,21 @@ export type MiniMaxVoiceCatalog = {
   error_kind?: string | null;
 };
 
+export type AudioTtsRoute = {
+  id: string;
+  provider_profile_id: string;
+  provider: 'minimax' | string;
+  display_name: string;
+  region: MiniMaxRegion | string;
+  base_url: string;
+  model: string;
+  enabled: boolean;
+  credential_configured: boolean;
+  ready: boolean;
+  active?: boolean;
+  catalog: MiniMaxVoiceCatalog;
+};
+
 export type AudioVoiceProfile = {
   id: string;
   name: string;
@@ -245,6 +260,8 @@ export type AudioStudioEnvelope = {
   audio_gates?: Record<string, { status: string; allowed: boolean; missing: string[]; next_action: string; [key: string]: unknown }>;
   workflow?: { router?: string; voice?: string; music?: string; qa_owner?: string };
   minimax_voice_catalog?: MiniMaxVoiceCatalog;
+  tts_routes?: AudioTtsRoute[];
+  default_tts_route_id?: string | null;
 };
 
 export type SpeechGenerateInput = {

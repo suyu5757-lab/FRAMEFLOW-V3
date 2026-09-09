@@ -60,6 +60,41 @@ class FrameflowV3SettingsTests(unittest.TestCase):
         self.assertEqual(deleted.status_code, 200, deleted.text)
         self.assertFalse(any(item["id"] == "settings-test-provider" for item in deleted.json()["providers"]))
 
+    def test_provider_delete_removes_profile_bindings_and_credential_but_keeps_presets(self) -> None:
+        provider_id = "settings-delete-provider"
+        created = self.client.post("/api/v2/settings/providers", json={
+            "id": provider_id,
+            "provider_type": "openai_compatible",
+            "display_name": "待彻底删除接口",
+            "base_url": "https://example.test/v1",
+            "model_config": {},
+            "capabilities": ["orchestrator"],
+            "enabled": True,
+        })
+        self.assertEqual(created.status_code, 200, created.text)
+        bound = self.client.put("/api/v2/settings/capability-bindings", json={
+            "capability": "orchestrator",
+            "provider_profile_id": provider_id,
+            "model": None,
+        })
+        self.assertEqual(bound.status_code, 200, bound.text)
+
+        with mock.patch.object(server, "delete_secret") as clear_secret:
+            deleted = self.client.delete(f"/api/v2/settings/providers/{provider_id}")
+
+        self.assertEqual(deleted.status_code, 200, deleted.text)
+        self.assertEqual(deleted.json()["provider_id"], provider_id)
+        self.assertEqual(deleted.json()["removed_capabilities"], ["orchestrator"])
+        clear_secret.assert_called_once_with(f"provider:{provider_id}")
+        settings = self.client.get("/api/v2/settings").json()
+        self.assertFalse(any(item["id"] == provider_id for item in settings["providers"]))
+        self.assertFalse(any(item["provider_profile_id"] == provider_id for item in settings["bindings"]))
+        presets = self.client.get("/api/v2/settings/providers").json()["presets"]
+        self.assertTrue(any(item["preset_id"] == "comfyui" for item in presets))
+        readded = self.client.post("/api/v2/settings/providers/from-preset/comfyui", json={})
+        self.assertEqual(readded.status_code, 200, readded.text)
+        self.assertEqual(readded.json()["provider"]["id"], "comfyui-default")
+
     def test_credential_write_import_clear_and_probe_never_echo_secret(self) -> None:
         secret = "sk-settings-secret-123456"
         with mock.patch.object(server, "set_secret") as write, mock.patch.object(server, "get_secret", return_value=secret), mock.patch.dict(server.os.environ, {"OPENAI_API_KEY": secret}, clear=False):

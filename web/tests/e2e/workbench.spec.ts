@@ -127,10 +127,15 @@ test.describe('FrameFlow V3 workbench', () => {
     const projectName = `MiniMax 双区域凭据验收项目-${Date.now()}`;
     const projectId = await seedProject(page, projectName);
     const removableProviderName = '临时可删除 Agent';
+    const removableProviderId = `e2e-removable-agent-${Date.now()}`;
     const removableProvider = await page.request.post('/api/v2/settings/providers', {
-      data: { id: `e2e-removable-agent-${Date.now()}`, provider_type: 'openai_compatible', display_name: removableProviderName, base_url: 'https://example.test/v1', capabilities: [], enabled: true, model_config: {} },
+      data: { id: removableProviderId, provider_type: 'openai_compatible', display_name: removableProviderName, base_url: 'https://example.test/v1', capabilities: ['orchestrator'], enabled: true, model_config: {} },
     });
     expect(removableProvider.ok()).toBeTruthy();
+    const bound = await page.request.put('/api/v2/settings/capability-bindings', {
+      data: { capability: 'orchestrator', provider_profile_id: removableProviderId, model: null },
+    });
+    expect(bound.ok()).toBeTruthy();
     await openWorkbench(page, projectName, projectId);
     await page.getByRole('button', { name: '设置与 Provider' }).click();
     await expect(page.getByRole('heading', { name: '设置与 Provider 控制面' })).toBeVisible();
@@ -331,6 +336,8 @@ test.describe('FrameFlow V3 workbench', () => {
     await expect(page.getByText(/有文件只代表候选存在/)).toBeVisible();
 
     await page.getByRole('button', { name: '人物声音' }).click();
+    const minimaxRegionOptions = await page.getByLabel('执行区域').locator('option').allTextContents();
+    expect(minimaxRegionOptions).toEqual(expect.arrayContaining(['cn · 中国区', 'global · 国际区']));
     await page.getByLabel('角色 / 旁白 ID').fill('C001');
     await page.getByLabel('声音名称').fill('C001 · Voice Design');
     await page.getByLabel('表演特征').fill('克制，近距离，句尾收住');
