@@ -628,6 +628,36 @@ async def openai_assistant(profile: dict[str, Any], api_key: str, model: str, me
 
 
 
+STORYBOARD_SCENE_LEDGER_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "id": {"type": "string"},
+        "name": {"type": "string"},
+        "description": {"type": "string"},
+        "interiorExterior": {"type": "string"},
+        "timeOfDay": {"type": "string"},
+        "location": {"type": "string"},
+        "characterIds": {"type": "array", "items": {"type": "string"}},
+        "propIds": {"type": "array", "items": {"type": "string"}},
+        "narrativeFunction": {"type": "string"},
+        "emotion": {"type": "string"},
+        "visualAnchors": {"type": "array", "items": {"type": "string"}},
+        "spatialGeography": {"type": "string"},
+        "materialEvidence": {"type": "string"},
+        "lightingCausality": {"type": "string"},
+        "soundscape": {"type": "string"},
+        "productionDifficulty": {"type": "string"},
+        "relevantShots": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": [
+        "id", "name", "description", "interiorExterior", "timeOfDay", "location",
+        "characterIds", "propIds", "narrativeFunction", "emotion", "visualAnchors",
+        "spatialGeography", "materialEvidence", "lightingCausality", "soundscape",
+        "productionDifficulty", "relevantShots",
+    ],
+    "additionalProperties": True,
+}
+
 STORYBOARD_CONTINUITY_SCHEMA = {
     "type": "object",
     "properties": {
@@ -698,12 +728,7 @@ STORYBOARD_OUTPUT_SCHEMA = {
         },
         "scenes": {
             "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {"id": {"type": "string"}, "name": {"type": "string"}},
-                "required": ["id", "name"],
-                "additionalProperties": True,
-            },
+            "items": STORYBOARD_SCENE_LEDGER_SCHEMA,
         },
         "shots": {
             "type": "array",

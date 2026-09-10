@@ -10,6 +10,48 @@ SHOT_REQUIRED_FIELDS = ("id", "scene", "duration", "purpose", "size", "camera", 
 SHOT_DETAIL_FIELDS = ("composition", "movement", "performance", "dialogue", "narration", "lighting", "color", "style", "firstFrame", "lastFrame", "sound", "continuity")
 
 
+_SCRIPT_DURATION_PATTERN = re.compile(
+    r"(?:视频|影片|项目|成片|总|目标)?\s*(?:时长|长度|片长|duration|runtime)"
+    r"\s*[:：=]?\s*(?:约|大约|大致|about|around)?\s*"
+    r"(?P<first>\d+(?:\.\d+)?)\s*"
+    r"(?:(?P<separator>-|–|—|~|～|至|到)\s*(?P<second>\d+(?:\.\d+)?)\s*)?"
+    r"(?P<unit>秒|s|sec(?:ond)?s?)(?=\s|$|[^\w])",
+    re.IGNORECASE,
+)
+
+
+def extract_script_duration(text: str | None) -> dict[str, Any] | None:
+    """Extract an explicit duration instruction from source script text.
+
+    StorySpec.duration is intentionally a planning reference. When a script
+    itself says ``总时长：约14秒`` or ``视频时长：13–15秒``, the script is the
+    authoritative input for a storyboard run. Ranges use their midpoint as the
+    planning value while preserving the original range for the UI and audit
+    trail. Timecode ranges are not matched because this pattern requires a
+    duration label immediately before the number.
+    """
+    source = str(text or "")
+    if not source.strip():
+        return None
+    match = _SCRIPT_DURATION_PATTERN.search(source)
+    if not match:
+        return None
+    first = float(match.group("first"))
+    second_value = match.group("second")
+    second = float(second_value) if second_value else first
+    minimum = min(first, second)
+    maximum = max(first, second)
+    target = round((minimum + maximum) / 2, 3)
+    raw = match.group(0).strip()
+    return {
+        "source": "script_explicit",
+        "minimum": minimum,
+        "maximum": maximum,
+        "target": target,
+        "raw": raw,
+    }
+
+
 def shot_budget(duration: int, current: dict[str, Any] | None = None) -> dict[str, Any]:
     """Return the conservative production budget used by the desktop story desk.
 
@@ -45,14 +87,22 @@ def shot_budget(duration: int, current: dict[str, Any] | None = None) -> dict[st
 
 def story_spec(document: dict[str, Any]) -> dict[str, Any]:
     current = document.get("storySpec") if isinstance(document.get("storySpec"), dict) else {}
-    duration = int(current.get("duration") or document.get("duration") or 30)
+    reference_duration = int(current.get("duration") or document.get("duration") or 30)
+    script_duration = extract_script_duration(document.get("script"))
+    duration = int(math.ceil(float(script_duration["target"]))) if script_duration else reference_duration
     budget = shot_budget(duration, current)
+    duration_source = "script_explicit" if script_duration else str(current.get("duration_source") or "reference")
+    if duration_source not in {"reference", "script_explicit", "storyboard_import"}:
+        duration_source = "reference"
     return {
         "workflow_mode": str(current.get("workflow_mode") or "optimize_script_and_storyboard"),
         "creative_goal": str(current.get("creative_goal") or document.get("brief") or ""),
         "audience": str(current.get("audience") or ""),
         "platform": str(current.get("platform") or ""),
         "duration": duration,
+        "duration_source": duration_source,
+        "script_duration": script_duration,
+        "reference_duration": reference_duration,
         "ratio": str(current.get("ratio") or document.get("ratio") or "9:16"),
         "language": str(current.get("language") or "中文"),
         "brand_requirements": list(current.get("brand_requirements") or []),
@@ -113,6 +163,19 @@ def story_checks(document: dict[str, Any]) -> dict[str, Any]:
     for scene_id, count in Counter(str(scene.get("id") or "") for scene in scenes).items():
         if scene_id and count > 1:
             issue("scene_id_duplicate", "error", f"场次 ID {scene_id} 重复。")
+    scene_ledger_fields = (
+        "id", "name", "description", "interiorExterior", "timeOfDay", "location",
+        "characterIds", "propIds", "narrativeFunction", "emotion", "visualAnchors",
+        "spatialGeography", "materialEvidence", "lightingCausality", "soundscape",
+        "productionDifficulty", "relevantShots",
+    )
+    for scene in scenes:
+        scene_id = str(scene.get("id") or "未命名场景")
+        missing = [field for field in scene_ledger_fields if field not in scene or scene.get(field) is None or (field not in {"characterIds", "propIds", "visualAnchors", "relevantShots"} and scene.get(field) == "")]
+        invalid_lists = [field for field in ("characterIds", "propIds", "visualAnchors", "relevantShots") if field in scene and not isinstance(scene.get(field), list)]
+        if missing or invalid_lists:
+            details = {"missing_fields": missing, "invalid_list_fields": invalid_lists}
+            issue("scene_ledger_incomplete", "warning", f"场景 {scene_id} 的场景账本尚未完整，AI 工作流或人工补充后才能作为完整前期规格使用。", details=details)
     total_duration = 0.0
     dialogue_duration = 0.0
     missing_assets: list[dict[str, Any]] = []
@@ -223,15 +286,16 @@ def story_checks(document: dict[str, Any]) -> dict[str, Any]:
         # into asset production.
         issue("asset_gap", "warning", "镜头引用了待资产生产登记的资产。", details={"missing_assets": missing_assets})
 
-    target_duration = float(payload["spec"].get("duration") or document.get("duration") or 0)
-    budget = shot_budget(int(target_duration or 30), payload["spec"])
+    # The duration entered in StorySpec is a planning reference only.  It is
+    # used to suggest a conservative shot-count range, while the actual final
+    # runtime is the sum of the reviewed shots.  Do not turn a deliberate edit
+    # into a story warning merely because it differs from the initial estimate.
+    reference_duration = float(payload["spec"].get("duration") or document.get("duration") or 0)
+    budget = shot_budget(int(reference_duration or 30), payload["spec"])
     if len(shots) > budget["shot_count_max"]:
         issue("shot_budget_exceeded", "error", f"当前 {len(shots)} 个镜头超过稳定制作上限 {budget['shot_count_max']} 个。请合并同场重复建立/反应镜头，或在制作设置中主动提高上限。", details={"actual": len(shots), **budget})
     elif len(shots) >= budget["shot_count_max"]:
         issue("shot_budget_near_limit", "warning", f"当前镜头数量已达到稳定制作上限 {budget['shot_count_max']} 个。后续新增镜头会阻塞资产生产。", details={"actual": len(shots), **budget})
-    if shots and target_duration > 0 and abs(total_duration - target_duration) > max(1.0, target_duration * 0.1):
-        issue("duration_mismatch", "warning", "镜头总时长与项目目标时长偏差超过 10%。", details={"target": target_duration, "actual": round(total_duration, 3)})
-
     errors = sum(1 for item in issues if item["severity"] == "error")
     warnings = sum(1 for item in issues if item["severity"] == "warning")
     return {
@@ -239,5 +303,16 @@ def story_checks(document: dict[str, Any]) -> dict[str, Any]:
         "errors": errors,
         "warnings": warnings,
         "issues": issues,
-        "metrics": {"scene_count": len(scenes), "shot_count": len(shots), "total_duration": round(total_duration, 3), "target_duration": target_duration, "estimated_dialogue_duration": round(dialogue_duration, 3), "shot_budget": budget},
+        "metrics": {
+            "scene_count": len(scenes),
+            "shot_count": len(shots),
+            "total_duration": round(total_duration, 3),
+            # Keep target_duration for API compatibility; expose its meaning
+            # explicitly so consumers do not treat it as the final runtime.
+            "target_duration": reference_duration,
+            "reference_duration": reference_duration,
+            "duration_difference": round(total_duration - reference_duration, 3),
+            "estimated_dialogue_duration": round(dialogue_duration, 3),
+            "shot_budget": budget,
+        },
     }

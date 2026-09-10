@@ -28,6 +28,29 @@ def project_document() -> dict:
     }
 
 
+def scene_ledger(scene_id: str, name: str, relevant_shots: list[str] | None = None) -> dict:
+    """Build the complete scene contract used by storyboard-run fixtures."""
+    return {
+        "id": scene_id,
+        "name": name,
+        "description": f"{name} 的空间摘要",
+        "interiorExterior": "外景",
+        "timeOfDay": "夜",
+        "location": name,
+        "characterIds": [],
+        "propIds": [],
+        "narrativeFunction": "建立空间与叙事状态",
+        "emotion": "克制的悬念",
+        "visualAnchors": ["明确的空间边界", "可见的材质状态"],
+        "spatialGeography": "前景与主体位置清晰，背景保持连续",
+        "materialEvidence": "地面和主体表面有可见接触与反光",
+        "lightingCausality": "主光源方向与阴影结果一致",
+        "soundscape": "环境声持续并服务于剪辑衔接",
+        "productionDifficulty": "medium",
+        "relevantShots": relevant_shots or [],
+    }
+
+
 class FrameflowV3Tests(unittest.TestCase):
     def setUp(self) -> None:
         self.db_path = Path(__file__).parent / f"test-v3-{uuid.uuid4().hex}.db"
@@ -58,6 +81,9 @@ class FrameflowV3Tests(unittest.TestCase):
         self.assertIn("promptTimeline", seedance["required"])
         self.assertIn("referenceAssignments", seedance["required"])
         self.assertIn("fallbackRoute", seedance["required"])
+        scene_schema = STORYBOARD_OUTPUT_SCHEMA["properties"]["scenes"]["items"]
+        self.assertIn("relevantShots", scene_schema["required"])
+        self.assertIn("lightingCausality", scene_schema["required"])
 
     def test_graph_is_projected_and_revision_conflicts_are_rejected(self) -> None:
         first = self.client.get("/api/v2/projects/PRJ_V3/graph")
@@ -371,7 +397,7 @@ class FrameflowV3Tests(unittest.TestCase):
         created = self.client.post("/api/v2/projects/PRJ_V3/story/runs", json={"goal": "full", "strength": "balanced"})
         self.assertEqual(created.status_code, 200, created.text)
         run_id = created.json()["id"]
-        candidate = {"proposedScript": "候选剧本", "feasibility": {"verdict": "可执行", "difficulty": "low"}, "productionElements": {}, "scenes": [{"id": "SC01", "name": "室内"}], "shots": [
+        candidate = {"proposedScript": "候选剧本", "feasibility": {"verdict": "可执行", "difficulty": "low"}, "productionElements": {}, "scenes": [scene_ledger("SC01", "室内", ["SH01", "SH03"])], "shots": [
             {"id": "SH01", "scene": "SC01", "duration": 5, "purpose": "更新镜头一", "size": "特写", "camera": "固定", "action": "按键", "visibleEvent": "手指按下按键", "eventConsequence": "指示灯亮起", "seedancePlan": {"model": "seedance2.5", "generationMode": "reference_to_video"}, "continuity": {"cutIn": "手指入画"}},
             {"id": "SH03", "scene": "SC01", "duration": 3, "purpose": "新镜头", "size": "全景", "camera": "拉远", "action": "离开", "visibleEvent": "角色离开画面", "eventConsequence": "门口只剩雨幕", "seedancePlan": {"model": "seedance2.5", "generationMode": "reference_to_video"}, "continuity": {"cutOut": "雨声延续"}},
         ], "risks": [], "assetHandoff": {"characters": [], "scenes": [], "props": []}}
@@ -397,7 +423,7 @@ class FrameflowV3Tests(unittest.TestCase):
             "proposedScript": "候选剧本：他按下播放键。",
             "feasibility": {"verdict": "可执行", "difficulty": "low"},
             "productionElements": {},
-            "scenes": [{"id": "SC01", "name": "雨夜"}],
+            "scenes": [scene_ledger("SC01", "雨夜", ["SH01"])],
             "shots": [{"id": "SH01", "scene": "SC01", "duration": 5, "purpose": "悬念", "size": "近景", "camera": "固定", "action": "按键", "visibleEvent": "手指按下按键", "eventConsequence": "屏幕突然亮起", "seedancePlan": {"model": "seedance2.5", "generationMode": "reference_to_video"}, "continuity": {"cutIn": "黑屏后入画"}}],
             "risks": [],
             "assetHandoff": {"characters": [], "scenes": [], "props": []},
@@ -427,7 +453,7 @@ class FrameflowV3Tests(unittest.TestCase):
             "proposedScript": "先接受剧本，不应立即进入资产总控。",
             "feasibility": {"verdict": "可执行", "difficulty": "low"},
             "productionElements": {},
-            "scenes": [{"id": "SC01", "name": "室内"}],
+            "scenes": [scene_ledger("SC01", "室内", ["SH01"])],
             "shots": [{"id": "SH01", "scene": "SC01", "duration": 5, "purpose": "建立", "size": "中景", "camera": "固定", "action": "抬头", "visibleEvent": "角色抬头看向门外", "eventConsequence": "雨水从屋檐落下遮断视线", "seedancePlan": {"model": "seedance2.5", "generationMode": "reference_to_video"}, "continuity": {"cutIn": "环境声先入"}}],
             "risks": [], "assetHandoff": {"characters": [], "scenes": [], "props": []},
         }
@@ -447,13 +473,84 @@ class FrameflowV3Tests(unittest.TestCase):
         self.assertEqual(current["script"], candidate["proposedScript"])
         self.assertEqual(current["shots"][0]["id"], "SH01")
 
+    def test_explicit_script_duration_overrides_reference_duration_for_story_runs(self) -> None:
+        source = "视频时长：13–15秒。少女在机库中抬眼，机甲回应。"
+        saved = self.client.put("/api/v2/projects/PRJ_V3/story", json={
+            "expected_revision": 1,
+            "spec": {"creative_goal": "剧本时长优先", "duration": 30, "ratio": "16:9", "generator_profile": "seedance2.5"},
+            "script": source,
+            "scenes": [],
+            "shots": [],
+        })
+        self.assertEqual(saved.status_code, 200, saved.text)
+        # Deliberately send the old page reference duration. The server must
+        # still derive the run duration and automatic budget from the script.
+        created = self.client.post("/api/v2/projects/PRJ_V3/story/runs", json={
+            "workflow_mode": "optimize_script_and_storyboard",
+            "duration": 30,
+            "generator_profile": "seedance2.5",
+        })
+        self.assertEqual(created.status_code, 200, created.text)
+        run = self.client.get(f"/api/v2/story-runs/{created.json()['id']}")
+        self.assertEqual(run.status_code, 200, run.text)
+        input_package = run.json()["run"]["input"]
+        self.assertEqual(input_package["duration"], 14.0)
+        self.assertEqual(input_package["reference_duration"], 30)
+        self.assertEqual(input_package["duration_source"], "script_explicit")
+        self.assertEqual(input_package["script_duration"]["minimum"], 13.0)
+        self.assertEqual(input_package["script_duration"]["maximum"], 15.0)
+        self.assertEqual(input_package["shot_budget"]["automatic_shot_count_max"], 3)
+        story = self.client.get("/api/v2/projects/PRJ_V3/story")
+        self.assertEqual(story.status_code, 200, story.text)
+        self.assertEqual(story.json()["story"]["spec"]["duration"], 14)
+        self.assertEqual(story.json()["story"]["spec"]["duration_source"], "script_explicit")
+
+    def test_story_candidate_revision_carries_feedback_and_previous_candidate_context(self) -> None:
+        source = "视频时长：8秒。人物在雨夜按下开关。"
+        saved = self.client.put("/api/v2/projects/PRJ_V3/story", json={
+            "expected_revision": 1,
+            "spec": {"creative_goal": "候选修订", "duration": 30, "ratio": "16:9", "generator_profile": "seedance2.5"},
+            "script": source,
+            "scenes": [],
+            "shots": [],
+        })
+        self.assertEqual(saved.status_code, 200, saved.text)
+        first = self.client.post("/api/v2/projects/PRJ_V3/story/runs", json={"workflow_mode": "optimize_script_and_storyboard", "duration": 30, "generator_profile": "seedance2.5"})
+        self.assertEqual(first.status_code, 200, first.text)
+        first_id = first.json()["id"]
+        candidate = {
+            "proposedScript": "候选：人物更克制地按下开关。",
+            "feasibility": {"verdict": "可执行", "difficulty": "low"},
+            "productionElements": {},
+            "scenes": [scene_ledger("S001", "雨夜控制台", ["SH01"])],
+            "shots": [{"id": "SH01", "scene": "S001", "duration": 8, "purpose": "建立按键动作", "size": "近景", "camera": "缓慢推进", "action": "手指按下开关", "visibleEvent": "手指触碰开关", "eventConsequence": "开关指示灯亮起", "seedancePlan": {"model": "seedance2.5", "generationMode": "reference_to_video"}, "continuity": {"cutIn": "雨声先入", "cutOut": "指示灯保持亮起"}}],
+            "risks": [],
+            "assetHandoff": {"characters": [], "scenes": [], "props": []},
+        }
+        with mock.patch.object(server, "_run_storyboard_agent", new=mock.AsyncMock(return_value=candidate)):
+            started = self.client.post(f"/api/v2/story-runs/{first_id}/start")
+        self.assertEqual(started.status_code, 200, started.text)
+        revised = self.client.post("/api/v2/projects/PRJ_V3/story/runs", json={
+            "workflow_mode": "optimize_script_and_storyboard",
+            "duration": 30,
+            "generator_profile": "seedance2.5",
+            "revision_feedback": "保留一镜到底感觉，减少推进速度，并让指示灯的亮起更明确。",
+            "revision_of_run_id": first_id,
+        })
+        self.assertEqual(revised.status_code, 200, revised.text)
+        revision_input = self.client.get(f"/api/v2/story-runs/{revised.json()['id']}").json()["run"]["input"]
+        self.assertEqual(revision_input["revision_of_run_id"], first_id)
+        self.assertIn("减少推进速度", revision_input["revision_feedback"])
+        self.assertEqual(revision_input["revision_context"]["run_id"], first_id)
+        self.assertEqual(revision_input["revision_context"]["storyboard_output"]["shots"][0]["id"], "SH01")
+
     def test_storyboard_from_source_preserves_script_byte_for_byte_on_acceptance(self) -> None:
         source = "原文：雨落在玻璃上。\n\n角色说：不要替我改写这句话……"
         saved = self.client.put("/api/v2/projects/PRJ_V3/story", json={
             "expected_revision": 1,
             "spec": {"creative_goal": "锁定原文", "duration": 60, "ratio": "16:9", "generator_profile": "seedance2.5"},
             "script": source,
-            "scenes": [{"id": "C01", "name": "室内"}],
+            "scenes": [scene_ledger("C01", "室内", ["SH01"])],
             "shots": [],
         })
         self.assertEqual(saved.status_code, 200, saved.text)
@@ -466,7 +563,7 @@ class FrameflowV3Tests(unittest.TestCase):
             "proposedScript": "供应商不应有机会写入的改写版本",
             "feasibility": {"verdict": "可执行", "difficulty": "low"},
             "productionElements": {},
-            "scenes": [{"id": "C01", "name": "室内"}],
+            "scenes": [scene_ledger("C01", "室内", ["SH01"])],
             "shots": [{"id": "SH01", "scene": "C01", "duration": 8, "purpose": "建立", "size": "中景", "camera": "固定", "action": "雨滴滑落", "visibleEvent": "雨滴沿玻璃滑落", "eventConsequence": "玻璃表面的倒影被水痕切断", "seedancePlan": {"model": "seedance2.5", "generationMode": "reference_to_video", "targetDuration": 8}, "continuity": {"cutIn": "雨声先入", "cutOut": "倒影稳定"}}],
             "risks": [], "assetHandoff": {"characters": [], "scenes": [], "props": []},
         }
@@ -481,6 +578,9 @@ class FrameflowV3Tests(unittest.TestCase):
         self.assertEqual(current["script"], source)
         self.assertFalse(any(version.get("source") == "agent" for version in current.get("scriptVersions", [])))
         self.assertEqual(current["shots"][0]["seedancePlan"]["model"], "seedance2.5")
+        self.assertEqual(current["scenes"][0]["spatialGeography"], candidate["scenes"][0]["spatialGeography"])
+        story_after = self.client.get("/api/v2/projects/PRJ_V3/story").json()
+        self.assertNotIn("duration_mismatch", {issue["code"] for issue in story_after["checks"]["issues"]})
 
     def test_storyboard_handoff_merges_repeated_stable_asset_ids(self) -> None:
         source = "锁定原文：角色走上高架。"
@@ -499,7 +599,7 @@ class FrameflowV3Tests(unittest.TestCase):
             "proposedScript": "供应商返回的改写会被锁定原文覆盖",
             "feasibility": {"verdict": "可执行", "difficulty": "low"},
             "productionElements": {},
-            "scenes": [{"id": "S001", "name": "高架"}],
+            "scenes": [scene_ledger("S001", "高架", ["SH01"])],
             "shots": [{"id": "SH01", "scene": "S001", "duration": 8, "purpose": "建立", "size": "中景", "camera": "固定", "action": "抬头", "visibleEvent": "角色抬头", "eventConsequence": "雨水顺着护栏落下", "seedancePlan": {"model": "seedance2.5", "generationMode": "reference_to_video"}, "continuity": {"cutIn": "雨声先入"}}],
             "risks": [],
             "assetHandoff": {"characters": [{"id": "C001", "name": "主角", "relevantShots": ["SH01"]}, {"id": "C001", "generationReferenceAssets": [{"assetId": "STYLE01", "role": "视觉风格"}]}], "scenes": [{"id": "S001", "name": "高架"}], "props": [], "soundRequirements": []},
@@ -527,7 +627,7 @@ class FrameflowV3Tests(unittest.TestCase):
         self.assertEqual(created.status_code, 200, created.text)
         run_id = created.json()["id"]
         invalid = {"proposedScript": "错误改写", "feasibility": {"verdict": "可执行", "difficulty": "low"}, "productionElements": {}, "scenes": [], "risks": [], "assetHandoff": {"characters": [], "scenes": [], "props": []}}
-        valid = {"proposedScript": "错误改写", "feasibility": {"verdict": "可执行", "difficulty": "low"}, "productionElements": {}, "scenes": [{"id": "S001", "name": "平台"}], "shots": [{"id": "SH01", "scene": "S001", "duration": 8, "purpose": "建立", "size": "中景", "camera": "固定", "action": "抬头", "visibleEvent": "角色抬头", "eventConsequence": "雨水从护栏落下", "seedancePlan": {"model": "seedance2.5", "generationMode": "reference_to_video"}, "continuity": {"cutIn": "雨声先入"}}], "risks": [], "assetHandoff": {"characters": [], "scenes": [], "props": []}}
+        valid = {"proposedScript": "错误改写", "feasibility": {"verdict": "可执行", "difficulty": "low"}, "productionElements": {}, "scenes": [scene_ledger("S001", "平台", ["SH01"])], "shots": [{"id": "SH01", "scene": "S001", "duration": 8, "purpose": "建立", "size": "中景", "camera": "固定", "action": "抬头", "visibleEvent": "角色抬头", "eventConsequence": "雨水从护栏落下", "seedancePlan": {"model": "seedance2.5", "generationMode": "reference_to_video"}, "continuity": {"cutIn": "雨声先入"}}], "risks": [], "assetHandoff": {"characters": [], "scenes": [], "props": []}}
         agent = mock.AsyncMock(side_effect=[invalid, valid])
         with mock.patch.object(server, "_run_storyboard_agent", new=agent):
             started = self.client.post(f"/api/v2/story-runs/{run_id}/start")
@@ -541,7 +641,7 @@ class FrameflowV3Tests(unittest.TestCase):
         self.assertEqual(created.status_code, 200, created.text)
         run_id = created.json()["id"]
         shots = [{"id": f"SH{index:02d}", "scene": "C01", "duration": 7, "purpose": f"事件 {index}", "size": "中景", "camera": "固定", "action": "动作"} for index in range(1, 10)]
-        candidate = {"proposedScript": "候选", "feasibility": {"verdict": "可执行", "difficulty": "medium"}, "productionElements": {}, "scenes": [{"id": "C01", "name": "夜"}], "shots": shots, "risks": [], "assetHandoff": {"characters": [], "scenes": [], "props": []}}
+        candidate = {"proposedScript": "候选", "feasibility": {"verdict": "可执行", "difficulty": "medium"}, "productionElements": {}, "scenes": [scene_ledger("C01", "夜", [shot["id"] for shot in shots])], "shots": shots, "risks": [], "assetHandoff": {"characters": [], "scenes": [], "props": []}}
         with mock.patch.object(server, "_run_storyboard_agent", new=mock.AsyncMock(return_value=candidate)):
             started = self.client.post(f"/api/v2/story-runs/{run_id}/start")
         self.assertEqual(started.status_code, 422, started.text)
@@ -556,7 +656,7 @@ class FrameflowV3Tests(unittest.TestCase):
             "proposedScript": "资产交接测试",
             "feasibility": {"verdict": "可执行", "difficulty": "medium"},
             "productionElements": {},
-            "scenes": [{"id": "S001", "name": "雨夜平台"}],
+            "scenes": [scene_ledger("S001", "雨夜平台", ["SH01"])],
             "shots": [{"id": "SH01", "scene": "S001", "duration": 6, "purpose": "建立空间", "size": "中景", "camera": "固定", "action": "雨水落下", "visibleEvent": "雨水沿平台边缘落下", "eventConsequence": "积水表面产生连续波纹", "seedancePlan": {"model": "seedance2.5", "generationMode": "reference_to_video"}, "continuity": {"cutIn": "风声先入", "cutOut": "波纹保持"}}],
             "risks": [],
             "assetHandoff": {

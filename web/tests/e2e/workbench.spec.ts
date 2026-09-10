@@ -438,6 +438,11 @@ test.describe('FrameFlow V3 workbench', () => {
     await page.goto('/');
     await switchToProject(page, name, projectId);
     await page.locator('.studio-sidebar').getByRole('button', { name: /故事与分镜/ }).click();
+    await expect(page.getByLabel('参考时长（秒）')).toHaveCount(1);
+    await expect(page.getByText('不限制最终片长')).toHaveCount(1);
+    await expect(page.getByText('预算最小值', { exact: true })).toHaveCount(0);
+    await expect(page.getByText('预算目标值', { exact: true })).toHaveCount(0);
+    await expect(page.getByText('预算最大值', { exact: true })).toHaveCount(0);
     await page.getByRole('button', { name: '＋ 场景' }).click();
     const sceneCard = page.locator('[data-story-scene-id]').last();
     await sceneCard.getByLabel('场景名称').fill('人工场景 A');
@@ -452,6 +457,12 @@ test.describe('FrameFlow V3 workbench', () => {
     await shotRows.first().getByRole('button', { name: '复制' }).click();
     await shotRows.first().getByRole('button', { name: '拆分' }).click();
     await expect(shotRows).toHaveCount(4);
+    await expect(sceneCard.locator('.story-v2-scene-ledger-status')).toContainText('待 AI 补齐');
+    const summaryCollision = await shotRows.first().locator('.story-v2-shot-summary').evaluate((element) => {
+      const rects = Array.from(element.children).map((child) => child.getBoundingClientRect());
+      return rects.some((a, index) => rects.slice(index + 1).some((b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top));
+    });
+    expect(summaryCollision).toBeFalsy();
     await page.getByRole('button', { name: '保存更改' }).click();
     await expect(page.getByText(/故事与分镜已保存/)).toBeVisible();
     const story = await (await page.request.get(`/api/v2/projects/${projectId}/story`)).json() as { story: { scenes: Array<Record<string, unknown>>; shots: Array<{ id: string }> } };
@@ -473,5 +484,78 @@ test.describe('FrameFlow V3 workbench', () => {
     const project = await (await page.request.get(`/api/v2/projects/${projectId}`)).json() as { document: { assets: Array<{ assetClass: string }> } };
     expect(new Set(project.document.assets.map((asset) => asset.assetClass))).toEqual(new Set(classes));
     expect(forbiddenProviderPosts).toEqual([]);
+  });
+
+  test('direct storyboard import creates a complete two-shot scene ledger without replacing source script', async ({ page }) => {
+    const name = `LINK 导入验收-${Date.now()}`;
+    const created = await page.request.post('/api/v2/projects', { data: { name, ratio: '16:9', duration: 14, generator: 'seedance2.5', brief: 'Direct storyboard import fixture' } });
+    expect(created.ok()).toBeTruthy();
+    const projectId = (await created.json() as { document: { id: string } }).document.id;
+    const source = `标题：LINK / 同步\n总时长：约14秒\n【镜头01】\n时间：00:00–00:07.10\n景别：超近景 → 侧脸特写\n画面：白色驾驶手套触碰巨大机甲机械手，青蓝能源沿装甲向肩部点亮。\n摄影：缓慢 Push-In、Slide、Tilt Up。\n目的：建立尺度和人机关系。\n转场：大型肩甲完全遮挡，完成隐藏剪辑。\n【镜头02】\n时间：00:07.10–00:14.00\n景别：三分之二侧脸特写 → 英雄特写\n画面：少女位于前景，机甲头部在后景，光学系统亮起并形成逆光剪影。\n摄影：缓慢 Orbit、Rack Focus、Push-In。\n动作：少女抬眼，轻声“走吧”，机甲同步抬头。\n声音：SYSTEM SYNC COMPLETE；机甲核心重低频。\n目的：完成同步出击 Hero Shot。`;
+
+    await page.goto('/');
+    await switchToProject(page, name, projectId);
+    await page.locator('.studio-sidebar').getByRole('button', { name: /故事与分镜/ }).click();
+    await page.getByRole('button', { name: '＋ 直接导入' }).click();
+    const dialog = page.getByRole('dialog', { name: '直接导入现有分镜' });
+    await expect(dialog).toBeVisible();
+    await dialog.getByLabel('分镜导入内容').fill(source);
+    await dialog.getByRole('button', { name: '导入并替换当前分镜' }).click();
+    await expect(page.getByText(/故事与分镜已保存/)).toBeVisible();
+    await expect(page.locator('.story-v2-scene-card')).toHaveCount(1);
+    await expect(page.locator('.story-v2-shot-card')).toHaveCount(2);
+    await expect(page.locator('.story-v2-scene-ledger-status.complete')).toHaveCount(1);
+    const story = await (await page.request.get(`/api/v2/projects/${projectId}/story`)).json() as { story: { script: string; scenes: Array<Record<string, unknown>>; shots: Array<Record<string, unknown>> } };
+    expect(story.story.script).toBe('');
+    expect(story.story.scenes[0].relevantShots).toEqual(['SH001', 'SH002']);
+    expect(story.story.shots.map((shot) => shot.id)).toEqual(['SH001', 'SH002']);
+    expect(story.story.shots.map((shot) => shot.duration)).toEqual([7.1, 6.9]);
+  });
+
+  test('story candidate review can send feedback and regenerate without replacing the source', async ({ page }) => {
+    const name = `故事候选修订验收-${Date.now()}`;
+    const created = await page.request.post('/api/v2/projects', { data: { name, ratio: '16:9', duration: 30, generator: 'seedance2.5', brief: 'Candidate revision fixture' } });
+    expect(created.ok()).toBeTruthy();
+    const projectId = (await created.json() as { document: { id: string } }).document.id;
+    let createCount = 0;
+    let revisionPayload: Record<string, unknown> | null = null;
+    const candidateOutput = {
+      workflowMode: 'optimize_script_and_storyboard',
+      proposedScript: '候选拍摄剧本：保留一个核心事件。',
+      scenes: [{ id: 'S001', name: '雨夜控制台', description: '控制台与雨幕空间', interiorExterior: '内景', timeOfDay: '夜', location: '控制台', characterIds: [], propIds: [], narrativeFunction: '建立状态', emotion: '克制', visualAnchors: ['湿润金属'], spatialGeography: '前景控制台，背景雨幕', materialEvidence: '金属表面有水痕', lightingCausality: '冷光在水痕上形成反射', soundscape: '雨声', productionDifficulty: 'medium', relevantShots: ['SH001'] }],
+      shots: [{ id: 'SH001', scene: 'S001', duration: 7, purpose: '建立悬念', size: '近景', camera: '缓慢推进', action: '手指按下开关', visibleEvent: '手指按下开关', eventConsequence: '指示灯亮起', seedancePlan: { model: 'seedance2.5', generationMode: 'reference_to_video' }, continuity: { cutIn: '雨声先入', cutOut: '灯光保持' } }],
+      shotBudgetAssessment: { duration: 14, referenceDuration: 30, durationSource: 'script_explicit', targetGenerator: 'seedance2.5', minimum: 3, target: 3, maximum: 3, actual: 1, averageShotDuration: 7, status: 'normal' },
+    };
+    const makeRun = (id: string) => ({ id, project_id: projectId, status: 'storyboard_review_required', active_step: 'storyboard_review_required', input: { workflow_mode: 'optimize_script_and_storyboard', duration: 14, reference_duration: 30, duration_source: 'script_explicit', shot_budget: { shot_count_min: 3, shot_count_target: 3, shot_count_max: 3 }, target_generator: 'seedance2.5' }, storyboard_output: candidateOutput, regulator_output: null, error: null });
+    await page.route(`**/api/v2/projects/${projectId}/story/runs`, async (route) => {
+      if (route.request().method() !== 'POST') { await route.continue(); return; }
+      createCount += 1;
+      const body = route.request().postDataJSON() as Record<string, unknown>;
+      if (createCount === 2) revisionPayload = body;
+      const id = createCount === 1 ? 'STORYRUN_E2E_BASE' : 'STORYRUN_E2E_REVISION';
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id, project_id: projectId, status: 'draft', active_step: 'draft' }) });
+    });
+    await page.route('**/api/v2/story-runs/*/start', async (route) => {
+      if (route.request().method() !== 'POST') { await route.continue(); return; }
+      const id = route.request().url().includes('STORYRUN_E2E_REVISION') ? 'STORYRUN_E2E_REVISION' : 'STORYRUN_E2E_BASE';
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ run: makeRun(id) }) });
+    });
+
+    await openWorkbench(page, name, projectId);
+    await page.getByRole('button', { name: /故事与分镜/ }).click();
+    await page.getByLabel('初始想法或现有剧本').fill('视频时长：14秒。人物在雨夜按下开关。');
+    await page.getByRole('button', { name: /AI 整合并优化为拍摄剧本/ }).click();
+    await expect(page.getByText('不满意？告诉 AI 你希望怎么改')).toBeVisible();
+    await expect(page.locator('.story-v2-candidate-script-output')).toContainText('候选拍摄剧本');
+    await expect(page.locator('.story-v2-candidate-full-output')).toHaveCount(1);
+    await expect(page.locator('.story-v2-candidate-full-output').first()).toContainText('主可见事件');
+    const feedback = '保留一个核心事件；把推进速度放慢，强调指示灯亮起的物理后果。';
+    await page.getByLabel('AI 分镜修订意见').fill(feedback);
+    await page.getByRole('button', { name: '按我的想法重新生成' }).click();
+    await expect(page.getByText(/已按你的意见重新生成候选/)).toBeVisible();
+    expect(revisionPayload).toMatchObject({ revision_feedback: feedback, revision_of_run_id: 'STORYRUN_E2E_BASE' });
+    expect(createCount).toBe(2);
+    const source = await (await page.request.get(`/api/v2/projects/${projectId}/story`)).json() as { story: { script: string } };
+    expect(source.story.script).toBe('视频时长：14秒。人物在雨夜按下开关。');
   });
 });

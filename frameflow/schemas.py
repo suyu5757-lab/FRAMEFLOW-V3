@@ -220,6 +220,7 @@ class AssetPromptRunCreate(StrictModel):
     target_asset_id: str | None = Field(default=None, max_length=120)
     review_feedback: str = Field(default="", max_length=4000)
     source_qa_run_id: str | None = Field(default=None, max_length=120)
+    operator_idea: str = Field(default="", max_length=6000)
 
 
 class FusionPromptRunCreate(StrictModel):
@@ -590,7 +591,11 @@ class StoryOptimizationCreate(StrictModel):
     shot_count_max: int | None = Field(default=None, ge=1, le=240)
     automatic_shot_count_min: int | None = Field(default=None, ge=1, le=240)
     automatic_shot_count_max: int | None = Field(default=None, ge=1, le=240)
+    shot_budget_mode: Literal["controlled", "high_tempo"] | None = None
+    shot_budget_source: Literal["automatic", "manual"] | None = None
     generator_profile: str | None = Field(default=None, max_length=120)
+    revision_feedback: str = Field(default="", max_length=8000)
+    revision_of_run_id: str | None = Field(default=None, max_length=160)
 
 
 class StoryboardAcceptRequest(StrictModel):
@@ -604,6 +609,9 @@ class StorySpecV3(StrictModel):
     audience: str = Field(default="", max_length=500)
     platform: str = Field(default="", max_length=120)
     duration: int = Field(default=30, ge=1, le=3600)
+    duration_source: Literal["reference", "script_explicit", "storyboard_import"] = "reference"
+    script_duration: dict[str, Any] | None = None
+    reference_duration: int | None = Field(default=None, ge=1, le=3600)
     ratio: str = Field(default="9:16", max_length=20)
     language: str = Field(default="中文", max_length=80)
     brand_requirements: list[str] = Field(default_factory=list)

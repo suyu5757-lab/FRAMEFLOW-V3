@@ -795,6 +795,9 @@ export type StorySpec = {
   audience: string;
   platform: string;
   duration: number;
+  duration_source?: 'reference' | 'script_explicit' | 'storyboard_import' | string;
+  script_duration?: { source?: string; minimum?: number; maximum?: number; target?: number; raw?: string } | null;
+  reference_duration?: number | null;
   ratio: string;
   language: string;
   brand_requirements: string[];
@@ -836,7 +839,7 @@ export type StoryChecks = {
   errors: number;
   warnings: number;
   issues: Array<{ code: string; severity: string; message: string; shot_id?: string; details?: Record<string, unknown> }>;
-  metrics: { scene_count: number; shot_count: number; total_duration: number; target_duration: number; estimated_dialogue_duration?: number; shot_budget?: Record<string, unknown> };
+  metrics: { scene_count: number; shot_count: number; total_duration: number; target_duration: number; reference_duration?: number; duration_difference?: number; estimated_dialogue_duration?: number; shot_budget?: Record<string, unknown> };
 };
 
 export type StoryEnvelope = {

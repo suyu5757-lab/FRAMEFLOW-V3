@@ -113,6 +113,38 @@ class AssetBoardV3Tests(unittest.TestCase):
         character = next(asset for asset in payload["library"]["assets"] if asset["id"] == "CHAR_01")
         self.assertEqual(character.get("prompt"), "角色正面设定")
 
+    def test_targeted_prompt_generation_passes_operator_idea_to_both_ai_stages(self) -> None:
+        regulator = {
+            "assetExtraction": [{"id": "SCENE_01", "name": "祠堂", "assetClass": "scene", "grade": "B"}],
+            "assetRequirements": [{"shotId": "S001", "assetId": "SCENE_01", "assetClass": "scene", "required": True}],
+        }
+        prompt_output = {
+            "assets": [{"id": "SCENE_01", "name": "祠堂", "assetClass": "scene", "prompt": "压低雨水反射后的祠堂场景 Prompt", "promptPack": {}, "relevantShots": ["S001"]}],
+            "fusionPlans": [],
+        }
+        captured: dict[str, dict] = {}
+
+        async def fake_regulator(request, project_id, input_package):
+            captured["regulator"] = input_package
+            return regulator
+
+        async def fake_prompt(request, project_id, input_package):
+            captured["prompt"] = input_package
+            return prompt_output
+
+        operator_idea = "压低雨水反射，让右侧门缝的暖光更集中，但保持祠堂结构和 S001 连续性不变。"
+        with mock.patch.object(server, "_run_regulator_agent", new=mock.AsyncMock(side_effect=fake_regulator)), mock.patch.object(server, "_run_asset_prompt_agent", new=mock.AsyncMock(side_effect=fake_prompt)):
+            response = self.client.post("/api/v2/projects/PRJ_BOARD/asset-prompt-runs", json={"expected_revision": 1, "target_asset_id": "SCENE_01", "operator_idea": operator_idea})
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(captured["regulator"]["operator_idea"], operator_idea)
+        self.assertEqual(captured["prompt"]["operator_idea"], operator_idea)
+        self.assertEqual(captured["prompt"]["target_asset_id"], "SCENE_01")
+        self.assertEqual(response.json()["run"]["operatorIdea"], operator_idea)
+        self.assertIn("压低雨水反射后的祠堂场景 Prompt", response.json()["run"]["promptCards"][0]["prompt"])
+        scene = next(asset for asset in response.json()["library"]["assets"] if asset["id"] == "SCENE_01")
+        self.assertEqual(scene.get("prompt", ""), "")
+
     def test_provider_component_suffixes_fold_back_into_stable_asset_id(self) -> None:
         repaired = server._repair_prompt_card_ids(
             {

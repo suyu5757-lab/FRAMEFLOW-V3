@@ -45,7 +45,7 @@ export type AssetBoardNodeData = Omit<AssetBoardNode, 'node_type'> & {
   onApproveAsset?: (assetId: string, artifactId: string) => void;
   onRejectAsset?: (assetId: string, artifactId: string) => void;
   onRegisterAsset?: (assetId: string, artifactId: string) => void;
-  onGeneratePrompt?: (assetId: string) => void;
+  onGeneratePrompt?: (assetId: string, operatorIdea?: string) => void;
   onGenerateFusionPrompt?: (assetId: string, sourceAssetIds: string[], shotId: string) => void;
   onColumnResize?: (key: keyof AssetBoardColumnWidths, delta: number) => void;
   onOpenAssetProduction?: (assetId: string, target: AssetProductionTarget, nodeId?: string) => void;
@@ -215,6 +215,7 @@ function PromptTextScroller({ label, text, empty }: { label: string; text: strin
 }
 
 function AssetBoardCard({ data, selected, id, positionAbsoluteX, positionAbsoluteY, onNodeClick }: NodeProps<AssetFlowNode> & { onNodeClick: AssetBoardFlowProps['onNodeClick'] }) {
+  const [operatorIdea, setOperatorIdea] = useState('');
   if (data.node_type === 'table') {
     const rawColumns = Array.isArray(data.config.grid_columns) ? data.config.grid_columns as Array<{ key: string; label: string; english: string; description: string }> : [];
     const layoutMode = String(data.config.layout_mode || 'adaptive') as AssetBoardLayoutMode;
@@ -322,6 +323,7 @@ function AssetBoardCard({ data, selected, id, positionAbsoluteX, positionAbsolut
       String(data.asset_id || ''),
     );
     const canUploadAsset = fusionPromptActionable && !artifactId && prerequisiteGateAllowed;
+    const canUseOperatorIdea = !isFusionSlot && fusionPromptUsable && !artifactId;
     const handlePromptFileDrop = (event: DragEvent<HTMLElement>) => {
       if (!canUploadAsset) return;
       event.preventDefault();
@@ -337,6 +339,10 @@ function AssetBoardCard({ data, selected, id, positionAbsoluteX, positionAbsolut
       event.dataTransfer.dropEffect = 'copy';
     };
     const selectPromptCard = (event: MouseEvent) => {
+      if ((event.target as HTMLElement).closest('button, textarea, input, label, details, summary')) {
+        event.stopPropagation();
+        return;
+      }
       const selectionKey = assetBoardSelectionKey(data);
       if (!selectionKey) return;
       onNodeClick({ target: event.currentTarget, shiftKey: event.shiftKey, ctrlKey: event.ctrlKey, metaKey: event.metaKey } as unknown as MouseEvent, { id, type: 'asset-board', position: { x: positionAbsoluteX, y: positionAbsoluteY }, data } as AssetFlowNode);
@@ -355,6 +361,7 @@ function AssetBoardCard({ data, selected, id, positionAbsoluteX, positionAbsolut
           {canUploadAsset && <label className="asset-board-upload-button nodrag nopan">上传资产<input className="nodrag nopan" type="file" accept="image/png,image/jpeg,image/webp" onClick={(event) => event.stopPropagation()} onChange={(event) => { const file = event.target.files?.[0]; if (file) data.onUploadAsset?.(String(data.asset_id), file); event.currentTarget.value = ''; }} /></label>}
           {productionDraft && !isFusionSlot && !String(data.config.prompt || '').trim() && <button className="asset-board-prompt-primary" onClick={(event) => { event.stopPropagation(); data.onOpenAssetProduction?.(String(data.asset_id), 'prompt', data.id); }}>编辑 Prompt</button>}
           {productionDraft && !isFusionSlot && !String(data.config.prompt || '').trim() && <button onClick={(event) => { event.stopPropagation(); data.onGeneratePrompt?.(String(data.asset_id)); }}>AI 编写 Prompt</button>}
+          {canUseOperatorIdea && <details className="asset-board-operator-idea nodrag nopan" onClick={(event) => event.stopPropagation()} onClickCapture={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()} onPointerDownCapture={(event) => event.stopPropagation()} onMouseDown={(event) => event.stopPropagation()} onMouseDownCapture={(event) => event.stopPropagation()}><summary>补充想法</summary><div className="asset-board-operator-idea-form"><div className="asset-board-operator-idea-heading"><span>OPERATOR INPUT</span><strong>把我的想法整合进当前 Prompt</strong></div><small>AI 只生成新的 Prompt 草稿，保留资产 ID、身份锚点、必须保留/避免项与 QA 流程。</small><label><span>补充你的创作意图</span><textarea aria-label={`补充 ${data.label} 的创作意图`} data-asset-board-operator-idea value={operatorIdea} onChange={(event) => setOperatorIdea(event.target.value)} placeholder="例如：压低雨水反射，强化右侧护栏撞击火花，但保持唯一水纹和原始资产 ID。" rows={3} /></label><div className="asset-board-operator-idea-actions"><button type="button" onClick={(event) => { event.stopPropagation(); const value = operatorIdea.trim(); if (value) data.onGeneratePrompt?.(String(data.asset_id), value); }} disabled={!operatorIdea.trim() || !data.onGeneratePrompt}>AI 整合为 Prompt 草稿</button></div></div></details>}
           {isFusionSlot && fusionNeedsPrompt && <button className="asset-board-prompt-primary" disabled={!fusionGateAllowed || !fusionShotId || !fusionSourceIds.length || !data.onGenerateFusionPrompt} title={fusionGateDisplayReason} onClick={(event) => { event.stopPropagation(); data.onGenerateFusionPrompt?.(String(data.asset_id), fusionSourceIds, fusionShotId); }}>{fusionPromptStale ? '重新生成 Fusion Prompt' : '生成 Fusion Prompt'}</button>}
           {assetClass !== 'audio' && fusionPromptUsable && !artifactId && String(data.config.prompt || '').trim() && <button className="asset-board-prompt-rewrite" onClick={(event) => { event.stopPropagation(); data.onRejectAsset?.(String(data.asset_id), ''); }}>重写 Prompt</button>}
           {fusionPromptUsable && !artifactId && String(data.config.prompt || '').trim() && <button onClick={(event) => { event.stopPropagation(); data.onCopyPrompt?.(String(data.asset_id)); }}>{assetClass === 'audio' ? '复制 MiniMax Web 包' : '复制 Prompt'}</button>}
