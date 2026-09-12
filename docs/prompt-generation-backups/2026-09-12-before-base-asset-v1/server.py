@@ -24,7 +24,7 @@ from frameflow import asset_audit, audit_trail
 from frameflow.agent import AGENT_RESULT_SCHEMA, ASSISTANT_PROJECT_CONTEXT_DEFAULT_CHARS, apply_patch_to_graph, build_input_snapshot, compact_project_for_assistant, ensure_workspace_operations, normalize_agent_patch, patch_preview, redact
 from frameflow.assistant_attachments import MAX_ATTACHMENT_BYTES, MAX_EXTRACTED_CHARS, MAX_IMAGE_VISION_BYTES, MAX_MESSAGE_ATTACHMENTS, MAX_MESSAGE_BYTES, MAX_TOTAL_EXTRACTED_CHARS, SUPPORTED_EXTENSIONS, attachment_destination, attachment_file_is_safe, attachment_kind, delivery_mode_for_attachment, extract_document, image_data_url, mime_for_filename, safe_attachment_name, stage_attachment, validate_attachment_mime
 from frameflow.audio_assistant import AUDIO_ASSISTANT_MODE, AUDIO_ASSISTANT_SKILL_ID, SUPPORTED_AUDIO_ASSISTANT_OPERATIONS, AudioPreparationError, apply_audio_preparation_operations, audio_document_hash, audio_preparation_result_schema, build_audio_assistant_context, normalize_voice_preparation_result, validate_system_voice
-from frameflow.asset_geometry import asset_generation_profile, asset_layout_profile, normalize_aspect_ratio, provider_aspect_ratio_for_image_size
+from frameflow.asset_geometry import asset_generation_profile, normalize_aspect_ratio
 from frameflow.contracts import assistant_system_instructions, contract_bundle, contract_for, contract_snapshot
 from frameflow.database import Database, SCHEMA_VERSION, utcnow
 from frameflow.data_integrity import scan_data_integrity
@@ -37,19 +37,18 @@ from frameflow.opencode_client import DEFAULT_OPENCODE_DIRECTORY, opencode_struc
 from frameflow.provider_adapters import CAPABILITIES, adapter_for_profile, credential_state, provider_contract
 from frameflow.production_gate import ProductionArtifactGateError, production_artifact_gate
 from frameflow.prompt_authority import PromptAuthorityError, approve_prompt_version, canonical_approved_prompt, prompt_sha256
-from frameflow.prompt_design import BASE_ASSET_PROMPT_COMPILER_VERSION, PROMPT_CONTRACT_VERSION, PROMPT_WORKFLOW_ID, assess_prompt_pack, base_asset_geometry_prompt, canonical_asset_class, canonicalize_prompt_output, is_base_asset_class, prompt_composition_mode_for_asset, prompt_contract, prompt_contract_instructions, prompt_pack_has_generation_fields, render_prompt_value, validate_clean_prompt
+from frameflow.prompt_design import PROMPT_CONTRACT_VERSION, PROMPT_WORKFLOW_ID, assess_prompt_pack, canonical_asset_class, canonicalize_prompt_output, prompt_contract, prompt_contract_instructions, render_prompt_value
 from frameflow.project_storage import describe_project_storage, sync_all_project_files, sync_project_files
 from frameflow.reference_authority import normalize_reference_authority, ordered_reference_snapshot
 from frameflow.recovery import RecoveryError, apply_recovery_plan, create_recovery_preview, create_verified_backup, export_project, recovery_scan
-from frameflow.providers import ASSET_INTENT_OUTPUT_SCHEMA, ASSET_PROMPT_CONSISTENCY_OUTPUT_SCHEMA, ASSET_PROMPT_OUTPUT_SCHEMA, FUSION_PROMPT_OUTPUT_SCHEMA, MINIMAX_DEFAULT_REGION, MINIMAX_DEFAULT_TTS_MODEL, MINIMAX_DEFAULT_VOICE_ID, MINIMAX_REGION_BASE_URLS, MINIMAX_REGIONS, MINIMAX_TTS_FORMATS, MINIMAX_TTS_MODELS, MINIMAX_TTS_SPEED_MAX, MINIMAX_TTS_SPEED_MIN, PROJECT_PATCH_SCHEMA, REGULATOR_OUTPUT_SCHEMA, STORYBOARD_OUTPUT_SCHEMA, ProviderError, language_boost_for_locale, minimax_documented_voice_catalog, minimax_region, minimax_speech, minimax_tts_payload, minimax_voice_design, openai_assistant, openai_image, openai_image_edit, openai_speech, openai_structured, probe_profile, validate_minimax_tts_text
+from frameflow.providers import ASSET_INTENT_OUTPUT_SCHEMA, ASSET_PROMPT_OUTPUT_SCHEMA, FUSION_PROMPT_OUTPUT_SCHEMA, MINIMAX_DEFAULT_REGION, MINIMAX_DEFAULT_TTS_MODEL, MINIMAX_DEFAULT_VOICE_ID, MINIMAX_REGION_BASE_URLS, MINIMAX_REGIONS, MINIMAX_TTS_FORMATS, MINIMAX_TTS_MODELS, MINIMAX_TTS_SPEED_MAX, MINIMAX_TTS_SPEED_MIN, PROJECT_PATCH_SCHEMA, REGULATOR_OUTPUT_SCHEMA, STORYBOARD_OUTPUT_SCHEMA, ProviderError, language_boost_for_locale, minimax_documented_voice_catalog, minimax_region, minimax_speech, minimax_tts_payload, minimax_voice_design, openai_assistant, openai_image, openai_image_edit, openai_speech, openai_structured, probe_profile, validate_minimax_tts_text
 from frameflow.runtime import execute_v3_run
-from frameflow.schemas import AgentPatchPreviewV3, AgentPlanCreateV3, AgentPlanDecisionV3, AgentPatchV3, AgentWorkspaceOperationV3, ArtifactLineageCreateV3, ArtifactMapRequest, ArtifactRegisterRequest, AssetAssignmentV3, AssetBoardSyncV3, AssetBoardUpdateV3, AssetComparisonCreate, AssetComparisonReview, AssetCreateV3, AssetDuplicateV3, AssetImageGenerate, AssetIntentInterpretCreate, AssetIntentPrepareCreate, AssetManualProductionApproval, AssetMetadataUpdate, AssetPromptRunCreate, AssetReferenceRole, AssistantApplyV3, AssistantConversationCreateV3, AssistantConversationUpdateV3, AssistantExternalConfirmationV3, AssistantRejectV3, AssistantRunCreateV3, AssistantRequest, AudioAssistantDraftApplyV3, AudioTextConfirmationV3, BackupCreateV3, CapabilityBinding, CredentialImport, CredentialWrite, FusionPromptRunCreate, ImageEdit, ImageGenerate, ProjectCreateV3, ProjectImport, ProjectMetadataUpdate, PromptCreateRequest, PromptQADecision, PromptRebuildRequest, PromptReviseRequest, ProviderProfileCreate, ProviderProfileUpdate, ProviderRoutePreviewV3, ProxyCreateV3, QADecisionSubmit, QARunCreate, RecoveryApplyV3, RecoveryPreviewV3, RenderCreateV3, RenderDecisionV3, RenderEstimateV3, RenderRequest, ResolutionRequest, RunDecisionV3, SeedancePackageCreate, SpeechGenerate, StoryDocumentUpdateV3, StoryOptimizationCreate, StoryRollbackV3, StoryboardAcceptRequest, TaskCreate, TimelineAssemblyRequestV3, VoiceDesignGenerate, WorkflowGraphUpdateV3, WorkflowRunCreate, WorkflowRunCreateV3, WorkflowRunEstimateV3, WorkflowTemplateApplyV3, WorkflowTemplateCreateV3
+from frameflow.schemas import AgentPatchPreviewV3, AgentPlanCreateV3, AgentPlanDecisionV3, AgentPatchV3, AgentWorkspaceOperationV3, ArtifactLineageCreateV3, ArtifactMapRequest, ArtifactRegisterRequest, AssetAssignmentV3, AssetBoardSyncV3, AssetBoardUpdateV3, AssetComparisonCreate, AssetComparisonReview, AssetCreateV3, AssetDuplicateV3, AssetImageGenerate, AssetIntentInterpretCreate, AssetIntentPrepareCreate, AssetManualProductionApproval, AssetMetadataUpdate, AssetPromptRunCreate, AssetReferenceRole, AssistantApplyV3, AssistantConversationCreateV3, AssistantConversationUpdateV3, AssistantExternalConfirmationV3, AssistantRejectV3, AssistantRunCreateV3, AssistantRequest, AudioAssistantDraftApplyV3, AudioTextConfirmationV3, BackupCreateV3, CapabilityBinding, CredentialImport, CredentialWrite, FusionPromptRunCreate, ImageEdit, ImageGenerate, ProjectCreateV3, ProjectImport, ProjectMetadataUpdate, PromptCreateRequest, PromptQADecision, PromptRebuildRequest, PromptReviseRequest, ProviderProfileCreate, ProviderProfileUpdate, ProviderRoutePreviewV3, ProxyCreateV3, QADecisionSubmit, QARunCreate, RecoveryApplyV3, RecoveryPreviewV3, RenderCreateV3, RenderDecisionV3, RenderEstimateV3, RenderRequest, ResolutionRequest, RunDecisionV3, SeedancePackageCreate, SpeechGenerate, StoryDocumentUpdateV3, StoryOptimizationCreate, StoryRollbackV3, StoryboardAcceptRequest, TaskCreate, TimelineAssemblyRequestV3, TimelinePreviewRequestV3, VoiceDesignGenerate, WorkflowGraphUpdateV3, WorkflowRunCreate, WorkflowRunCreateV3, WorkflowRunEstimateV3, WorkflowTemplateApplyV3, WorkflowTemplateCreateV3
 from frameflow.schemas import TimelineUpdateV3
-from frameflow.schemas import TimelinePreviewRequestV3
 from frameflow.secrets_store import SecretStoreError, delete_secret, get_secret, mask_secret, set_secret
 from frameflow.v3 import assemble_approved_timeline, default_graph, ensure_graph, ensure_timeline, estimate_graph, save_graph, save_timeline, select_graph_node_ids, validate_graph, validate_timeline
 from frameflow.workflows import WORKFLOWS, evaluate_project_gates, workflow_manifest
-from frameflow.story import build_source_beat_ledger, extract_script_duration, shot_budget, storyboard_source_coverage, story_checks, story_document
+from frameflow.story import extract_script_duration, shot_budget, story_checks, story_document
 from frameflow.upload_storage import UploadTooLarge, cleanup_file, cleanup_staged_upload, finalize_staged_upload, stage_upload
 
 ROOT=Path(__file__).resolve().parent
@@ -2172,9 +2171,7 @@ def _assistant_normalize_operation_content(operation: dict[str, Any], doc: dict[
         raw_prompt = str(content.get("prompt") or "")
         pack = content.get("promptPack") if isinstance(content.get("promptPack"), dict) else content.get("prompt_pack") if isinstance(content.get("prompt_pack"), dict) else {}
         if raw_prompt or pack:
-            requested_mode = "base_asset" if is_base_asset_class(asset_class) else "legacy_supplement"
-            composition_mode = _stored_prompt_composition_mode(asset, requested_mode) if asset else prompt_composition_mode_for_asset(asset_class, requested_mode)  # type: ignore[arg-type]
-            canonical = canonicalize_prompt_output(asset_class, pack, raw_prompt, context={"shots": doc.get("shots") or []}, composition_mode=composition_mode)  # type: ignore[arg-type]
+            canonical = canonicalize_prompt_output(asset_class, pack, raw_prompt, context={"shots": doc.get("shots") or []})
             content = {**content, **canonical, "generationChoiceStatus": "user-confirmation-required", "promptQaDecision": "Pending"}
             result["content"] = content
             result["after"] = content
@@ -2989,10 +2986,7 @@ def _assistant_asset_prompt_candidate(database: Database, connection: sqlite3.Co
         raise HTTPException(422, f"资产 {target_id} 的 Prompt 候选内容为空。")
     if not prompt and not pack:
         raise HTTPException(422, f"资产 {target_id} 的 Prompt 候选内容为空。")
-    asset_class = _asset_class(asset)
-    requested_mode = "base_asset" if is_base_asset_class(asset_class) else "legacy_supplement"
-    composition_mode = _stored_prompt_composition_mode(asset, requested_mode)
-    canonical = canonicalize_prompt_output(asset_class, pack, prompt, context={"shots": doc.get("shots") or []}, composition_mode=composition_mode)  # type: ignore[arg-type]
+    canonical = canonicalize_prompt_output(_asset_class(asset), pack, prompt, context={"shots": doc.get("shots") or []})
     previous = asset_audit.get_prompt_version(database, str(asset.get("promptVersion") or ""), doc["id"], target_id)
     prompt_version = asset_audit.create_prompt_version(
         database,
@@ -3023,10 +3017,6 @@ def _assistant_asset_prompt_candidate(database: Database, connection: sqlite3.Co
         "mustPreserve": canonical["promptPack"].get("mustPreserve") or asset.get("mustPreserve") or [],
         "mustAvoid": canonical["promptPack"].get("mustAvoid") or asset.get("mustAvoid") or [],
     })
-    if canonical.get("promptCompositionMode"):
-        asset["promptCompositionMode"] = canonical["promptCompositionMode"]
-    if canonical.get("promptCompilerVersion"):
-        asset["promptCompilerVersion"] = canonical["promptCompilerVersion"]
     metadata.update({"assistant_contract_snapshot": contract_snapshot(bundle), "prompt_version": prompt_version["id"]})
     asset["assetMetadata"] = metadata
     return doc, prompt_version["id"]
@@ -4624,16 +4614,12 @@ def _storyboard_input_package(doc:dict[str,Any],body:StoryOptimizationCreate)->d
     }
     budget=shot_budget(int(math.ceil(duration)),spec_input)
     target_generator=body.generator_profile or body.generator or current_spec.get("generator_profile") or doc.get("generator") or "seedance2.5"
-    source_beat_ledger=build_source_beat_ledger(source_script)
-    source_script_hash=hashlib.sha256(source_script.encode("utf-8")).hexdigest()
     return {
         "project_id":doc.get("id"),
         "project_name":doc.get("name"),
         "source_script_version_id":body.source_script_version_id,
         "current_script":source_script,
-        "source_script_hash":source_script_hash,
         "source_script_origin":source_script_origin,
-        "source_beat_ledger":source_beat_ledger,
         "source_script_run_id":body.source_script_run_id,
         "project_brief":doc.get("brief",""),
         "duration":duration,
@@ -4753,37 +4739,6 @@ def _normalise_storyboard_handoff(result:dict[str,Any],input_package:dict[str,An
     """
     output=deepcopy(result if isinstance(result,dict) else {})
     notes:list[str]=[]
-    normalization_report:dict[str,Any]={
-        "status":"ok",
-        "droppedItems":[],
-        "recoveredItems":[],
-        "defaultedFields":[],
-        "renamedItems":[],
-    }
-
-    def preview(value:Any)->str:
-        try:
-            text=json.dumps(value,ensure_ascii=False,separators=(",",":")) if not isinstance(value,str) else value
-        except (TypeError,ValueError):
-            text=str(value)
-        return text[:500]
-
-    def coerce_record(value:Any,path:str)->dict[str,Any]|None:
-        if isinstance(value,dict):
-            return dict(value)
-        if isinstance(value,str):
-            try:
-                parsed=json.loads(value)
-            except (TypeError,ValueError):
-                parsed=None
-            if isinstance(parsed,dict):
-                normalization_report["recoveredItems"].append({"path":path,"sourceType":"string"})
-                return parsed
-        normalization_report["droppedItems"].append({"path":path,"reason":"not_an_object","rawType":type(value).__name__,"preview":preview(value)})
-        return None
-
-    def note_default(path:str,field:str)->None:
-        normalization_report["defaultedFields"].append({"path":path,"field":field})
     handoff=output.get("assetHandoff") if isinstance(output.get("assetHandoff"),dict) else {}
     warnings=[str(value) for value in output.get("warnings",[]) if value]
 
@@ -4835,11 +4790,11 @@ def _normalise_storyboard_handoff(result:dict[str,Any],input_package:dict[str,An
     scene_by_id:dict[str,dict[str,Any]]={}
     scene_name_to_id:dict[str,str]={}
     used_scene_ids:set[str]=set()
-    for index,raw in enumerate(scene_items):
-        scene=coerce_record(raw,f"scenes[{index}]")
-        if scene is None:
-            notes.append(f"场景条目 {index + 1} 无法解析，已保留诊断记录。")
+    for raw in scene_items:
+        if not isinstance(raw,dict):
+            notes.append("忽略了一个无法解析的场景条目。")
             continue
+        scene=dict(raw)
         scene_id=_storyboard_scalar(scene,scene_aliases["id"])
         if not scene_id:
             scene_id=_storyboard_generated_id("S",used_scene_ids)
@@ -4871,7 +4826,6 @@ def _normalise_storyboard_handoff(result:dict[str,Any],input_package:dict[str,An
             value=_storyboard_scalar(scene,scene_aliases[key],default)
             if not _storyboard_first_value(scene,scene_aliases[key]):
                 notes.append(f"{scene_id} 的 {key} 使用了待确认默认值。")
-                note_default(f"scenes[{index}]",key)
             scene[key]=value
         for key in ("characterIds","propIds","visualAnchors","relevantShots"):
             value=_storyboard_first_value(scene,scene_aliases[key])
@@ -4890,7 +4844,6 @@ def _normalise_storyboard_handoff(result:dict[str,Any],input_package:dict[str,An
         "action":("action","actionDescription","action_description","behavior","动作","行为"),
         "visibleEvent":("visibleEvent","visible_event","visualEvent","visual_event","event","image","画面","可见事件","主可见事件"),
         "eventConsequence":("eventConsequence","event_consequence","consequence","physicalConsequence","physical_consequence","result","后果","物理后果","结果"),
-        "sourceBeatIds":("sourceBeatIds","source_beat_ids","sourceBeats","source_beats","beatIds","beat_ids","原文节拍ID","节拍ID"),
     }
     raw_shots=output.get("shots") if isinstance(output.get("shots"),list) else []
     used_shot_ids:set[str]=set()
@@ -4941,10 +4894,10 @@ def _normalise_storyboard_handoff(result:dict[str,Any],input_package:dict[str,An
         return scene_id
 
     for index,raw in enumerate(raw_shots):
-        shot=coerce_record(raw,f"shots[{index}]")
-        if shot is None:
-            notes.append(f"镜头条目 {index + 1} 无法解析，已保留诊断记录。")
+        if not isinstance(raw,dict):
+            notes.append("忽略了一个无法解析的镜头条目。")
             continue
+        shot=dict(raw)
         shot_id=_storyboard_scalar(shot,shot_aliases["id"])
         if not shot_id:
             shot_id=_storyboard_generated_id("SH",used_shot_ids)
@@ -4952,7 +4905,6 @@ def _normalise_storyboard_handoff(result:dict[str,Any],input_package:dict[str,An
         elif shot_id in used_shot_ids:
             replacement=_storyboard_generated_id("SH",used_shot_ids)
             notes.append(f"镜头 {shot_id} 重复，第二个条目已改用 {replacement} 以保持候选可审阅。")
-            normalization_report["renamedItems"].append({"path":f"shots[{index}]","from":shot_id,"to":replacement,"reason":"duplicate_id"})
             shot_id=replacement
         used_shot_ids.add(shot_id)
         raw_scene=_storyboard_scalar(shot,shot_aliases["scene"])
@@ -4975,11 +4927,7 @@ def _normalise_storyboard_handoff(result:dict[str,Any],input_package:dict[str,An
         for key,value,raw_value in (("purpose",purpose,_storyboard_first_value(shot,shot_aliases["purpose"])),("size",size,_storyboard_first_value(shot,shot_aliases["size"])),("camera",camera,_storyboard_first_value(shot,shot_aliases["camera"])),("action",action,_storyboard_first_value(shot,shot_aliases["action"])),("visibleEvent",visible,_storyboard_first_value(shot,shot_aliases["visibleEvent"])),("eventConsequence",consequence,_storyboard_first_value(shot,shot_aliases["eventConsequence"]))):
             if raw_value in (None,"",[]):
                 notes.append(f"{shot_id} 的 {key} 使用了兼容层默认/推导值。")
-                note_default(f"shots[{index}]",key)
             shot[key]=value
-
-        raw_source_beats=_storyboard_first_value(shot,shot_aliases["sourceBeatIds"])
-        shot["sourceBeatIds"]=[str(value).strip() for value in _storyboard_list(raw_source_beats) if str(value).strip()]
 
         raw_plan=_storyboard_first_value(shot,("seedancePlan","seedance_plan","seedance"))
         plan=dict(raw_plan) if isinstance(raw_plan,dict) else {}
@@ -5061,48 +5009,12 @@ def _normalise_storyboard_handoff(result:dict[str,Any],input_package:dict[str,An
         warnings.extend(notes)
     if warnings:
         output["warnings"]=list(dict.fromkeys(warnings))
-    if normalization_report["droppedItems"]:
-        normalization_report["status"]="incomplete"
-    elif normalization_report["recoveredItems"] or normalization_report["defaultedFields"] or normalization_report["renamedItems"] or notes:
-        normalization_report["status"]="warning"
-    output["normalizationReport"]=normalization_report
     output["assetHandoff"]=handoff
     return output
-
-
-def _storyboard_content_issues(result:dict[str,Any],input_package:dict[str,Any]|None=None)->list[str]:
-    """Return blocking issues for source coverage and lossy normalization."""
-    if input_package is None:
-        return []
-    issues:list[str]=[]
-    report=result.get("normalizationReport") if isinstance(result.get("normalizationReport"),dict) else {}
-    for item in report.get("droppedItems") or []:
-        if not isinstance(item,dict):
-            continue
-        path=str(item.get("path") or "provider output")
-        issues.append(f"normalization_dropped_item: {path} 无法解析，候选内容可能不完整")
-    coverage=result.get("sourceBeatCoverage") if isinstance(result.get("sourceBeatCoverage"),dict) else {}
-    if coverage.get("status") not in {"complete","not_applicable"}:
-        items=coverage.get("items") if isinstance(coverage.get("items"),list) else []
-        for item in items:
-            if not isinstance(item,dict) or item.get("status") not in {"missing","partial"}:
-                continue
-            beat_id=str(item.get("beatId") or "未知节拍")
-            summary=str(item.get("summary") or item.get("reason") or "未说明的剧本内容").strip()
-            status="缺少" if item.get("status")=="missing" else "仅部分覆盖"
-            issues.append(f"storyboard_coverage_{item.get('status')}: {beat_id} {status}：{summary[:180]}")
-        for item in coverage.get("unknownMappings") or []:
-            if isinstance(item,dict):
-                issues.append(f"storyboard_coverage_unknown: {item.get('shotId') or '未知镜头'} 引用了不存在的原文节拍 {item.get('sourceBeatId')}")
-        if not items and not issues:
-            issues.append("storyboard_coverage_missing: 未生成原文节拍覆盖报告")
-    return list(dict.fromkeys(issues))
-
 
 def _validate_storyboard_output(result:dict[str,Any],input_package:dict[str,Any]|None=None)->list[str]:
     issues=[]
     if not isinstance(result.get("proposedScript"),str) or not result["proposedScript"].strip():issues.append("proposedScript 缺失或为空")
-    issues.extend(_storyboard_content_issues(result,input_package))
     scene_ledger_fields=(
         "id", "name", "description", "interiorExterior", "timeOfDay", "location",
         "characterIds", "propIds", "narrativeFunction", "emotion", "visualAnchors",
@@ -5285,11 +5197,6 @@ async def _run_storyboard_agent(request:Request,project_id:str,input_package:dic
     workflow_mode=str(input_package.get("workflow_mode") or "optimize_script_and_storyboard")
     source_rule=("当前是 storyboard_from_source：原始剧本文字是锁定来源。proposedScript 必须逐字返回 current_script，不得改写、润色、压缩或替换；只提出场景和镜头候选。"
                  if workflow_mode=="storyboard_from_source" else "当前是 optimize_script_and_storyboard：可产出可拍摄的剧本候选，但必须保留用户故事意图。")
-    source_beat_rule=(
-        "输入包中的 source_beat_ledger 是本次内容保真清单。每个镜头必须用 sourceBeatIds 标记它实际覆盖的原文节拍；不能只覆盖开场动作而省略后续动作、摄影机变化、角色反应、台词、声音、转场或结尾。多个节拍只有在同一连续可执行事件中才可绑定到同一镜头；独立的视觉事件必须拆成可单独审阅的镜头。返回 sourceBeatCoverage 供系统校验，但不要把内部校验字段写进自然语言镜头内容。"
-        if input_package.get("source_beat_ledger") else
-        "当前输入没有可提取的原文节拍清单；仍需完整覆盖输入剧本中的可见动作、声音、台词、转场和结尾。"
-    )
     duration_rule=(
         f"当前剧本明确给出了时长要求（{input_package.get('script_duration', {}).get('raw') if isinstance(input_package.get('script_duration'),dict) else input_package.get('duration')}）。"
         f"本次分镜规划必须以剧本时长目标 {input_package.get('duration')} 秒为准，不得使用页面参考时长 {input_package.get('reference_duration')} 秒覆盖它；参考时长只作为未明确时长时的兜底。"
@@ -5318,11 +5225,10 @@ async def _run_storyboard_agent(request:Request,project_id:str,input_package:dic
                   "为每个镜头输出完整 seedancePlan：model、generationMode、targetDuration、aspectRatio、clipUnit、promptTimeline、startState、playableChange、endState、continuityStrategy、referenceAssignments、audioStrategy、mustPreserve、mustAvoid、riskFlags、fallbackRoute 均必须出现；无内容时使用空数组或待确认文本，不能省略字段。"
                   "assetHandoff 中每个资产都要使用稳定 ID，并用 generationReferenceAssets 明确列出参考资产 ID、角色、是否必需和用途；声音资产不能要求视觉参考图。"
                   + source_rule
-                  + source_beat_rule
                   + duration_rule
                   + revision_rule
                   + feedback_rule
-                  + (f"这是一次合同与内容覆盖修复重试。上一候选的问题如下：{json.dumps(input_package.get('contract_repair_issues') or [],ensure_ascii=False)}。上一候选后台结果如下：{json.dumps(input_package.get('contract_repair_context') or {},ensure_ascii=False)}。请返回完整的新 JSON，不要只返回补丁或解释；必须补回所有缺失节拍，并逐个填写 sourceBeatIds。" if input_package.get("contract_repair") else "")
+                  + ("这是一次合同修复重试。上一候选缺少或错误填写结构化字段；请优先完整返回 schema 要求的 proposedScript、scenes、shots、continuity、seedancePlan 和 assetHandoff，不要只返回解释文字。" if input_package.get("contract_repair") else "")
                   + prompt_contract_instructions())
     text=f"请按完整前期包处理以下项目。\n\n输入包：{json.dumps(input_package,ensure_ascii=False)}"
     if profile["provider_type"]=="opencode":
@@ -5383,13 +5289,11 @@ async def _run_asset_prompt_agent(request:Request,project_id:str,input_package:d
     if not model:raise HTTPException(409,"尚未配置编排模型，无法生成资产 Prompt。")
     validate_orchestrator_model(profile,model)
     instructions=("你是 FRAMEFLOW 的 video-asset-regulator 下游资产 Prompt 编排器。根据已经完成的资产总控审计，"
-                  "项目 output_aspect_ratio 只表示最终视频、镜头和融合画布，不能覆盖基础资产参考图的画幅；必须按照 asset_generation_policy.targets 中每个 assetId 的 aspectRatio、imageSize 和 layoutProfile 规划对应资产，不能把所有基础资产统一生成成项目竖幅。基础资产的设计画幅和方向必须由系统编译器写入自然语言 Prompt；imageSize 是 provider 接口元数据，不要把接口尺寸写入 Prompt。"
+                  "项目 output_aspect_ratio 只表示最终视频、镜头和融合画布，不能覆盖基础资产参考图的画幅；必须按照 asset_generation_policy.targets 中每个 assetId 的 aspectRatio 和 imageSize 规划对应资产，不能把所有基础资产统一生成成项目竖幅。画幅属于生成元数据，不要写入自然语言 Prompt。"
                   "为每个需要制作的角色、场景、道具、产品或风格资产生成完整、可执行的中文视觉资产 Prompt 卡。"
-                  f"character、scene、prop、product 基础资产必须走 {BASE_ASSET_PROMPT_COMPILER_VERSION} 规则：最终生图正文按生产目标、主体身份/结构、镜头可见细节、材质、布局/摄影机、设计画幅、渲染、连续性、Must avoid 编译为一份连贯执行稿；每个稳定属性只出现一次，不能把旧 Prompt、资产 ID、Prompt Contract、QA、版本、provider 接口尺寸或供应商字段写进正文。参考图 ID 只留在结构化字段，正文使用‘参考图 1/2…’及其控制范围；基础角色板不输出‘允许变化’或‘未见正脸细节’，identityAnchor 只写紧凑的核心身份，不重复脸部、服装和材质全文。"
                   "角色首轮只生成一张角色设定参考板，不要拆成多张图片或为每个镜头重复生成角色图；参考板应在一张合成图中同时包含一张面部/上半身身份特写，以及同一角色的正面、侧面、背面全身结构视图，使用中性棚拍背景、稳定光线、无动作姿态，确保脸部、发型、服装、材质、比例和装备关系清晰可复用。"
-                  "角色基础参考板必须明确‘四个区域是同一名角色，不是四名相似角色’；上方约 38% 为正面头部与上半身身份特写，下方约 62% 为三个等宽栏，依次是正面全身、严格 90° 左侧面全身、严格 180° 背面全身；三张全身视图等高、同尺度、脚底同一水平基线、头顶高度一致。年龄使用单一明确的成年年龄印象，不使用年龄范围；发型在基础板中锁定，不写‘可变’或‘未见正脸细节’。"
-                  "角色基础 Prompt 必须覆盖身份锁定、具体脸部与表情、发型轮廓、身体比例与重心、从头到脚的服装材质、固定配件、静态中性姿态、构图镜头、光线渲染、参考板和负向约束；镜头动作节拍只留作 shot-specific metadata，不得混入基础结构参考板。"
-                  "场景基础 Prompt 必须覆盖地点功能、前景/中景/背景空间布局、固定陈设与地标、材质表面和接触证据、光源与空气、动作空间、机位和跨镜头连续性；只生成空环境，动作区和道具预留区不能放入角色、道具或接触阴影。道具基础 Prompt 必须覆盖对象类别、轮廓比例、结构、材质、尺度、使用状态、"
+                  "角色 Prompt 必须覆盖身份锁定、具体脸部与表情、发型轮廓、身体比例与重心、从头到脚的服装材质、固定配件、动作节拍、构图镜头、光线渲染、参考板和负向约束；"
+                  "场景 Prompt 必须覆盖地点功能、前景/中景/背景空间布局、固定陈设与地标、材质表面和接触证据、光源与空气、动作空间、机位和跨镜头连续性；道具必须覆盖结构、材质、尺度、使用状态、"
                   "参考图角色和负面约束。融合资产不得在本阶段生成最终可执行 Prompt，只能写入 fusionPlans，说明对应镜头、候选输入资产、"
                   "镜头目标、角色/环境角色和连续性约束；正式融合 Prompt 会在系统根据分镜需求自动建立并确认基础资产关系后，等待前置资产就绪再生成。"
                   "每张非融合资产卡必须路由到对应 domain skill，并完整填写 Prompt Contract v2.0 的 promptPack 和自然语言 prompt。"
@@ -5401,7 +5305,7 @@ async def _run_asset_prompt_agent(request:Request,project_id:str,input_package:d
                   "若输入包含 confirmed_asset_intents，按每个资产的 assetId 使用其中的 normalizedIntent 和 userText 作为首次 Prompt 的创作约束；必须保持现有资产 ID、分类、稳定锚点、必须保留/避免项和镜头关系，未匹配提示只记录在警告中，绝不创建新的逻辑资产。"
                   "当输入包含 target_asset_id 且包含 operator_idea 或 review_feedback 时，本次任务是完整重写，不是补充说明：必须从稳定锚点和新的用户意图重新组织一份完整 promptPack 与自然语言 prompt。禁止复制旧 Prompt 的完整段落，禁止把旧 Prompt 放在新 Prompt 前面，禁止在末尾追加用户原文，禁止输出‘同时满足以下补充制作要求’或其他双版本 Prompt。"
                   "完整重写的自然语言 Prompt 必须按生产目标、主体与稳定身份、外貌/服装/材质、唯一主事件或静态状态、构图与摄影机、光线/背景/渲染、连续性、必须避免项的顺序组织；每个属性只出现一次，必须消除冲突值。"
-                  "自然语言 Prompt 不得包含 FRAMEFLOW、Prompt Contract、suyu-skill-v2、资产 ID、Prompt QA、Pending、user-confirmation-required、generationStatus、promptPack、promptQuality、JSON 字段名、版本记录或供应商/工作台内部流程。模型参数、provider 接口尺寸、质量、背景参数和输出格式属于请求元数据，不写入生图 Prompt；基础资产设计画幅和方向是唯一允许写入正文的画布规格，并由系统编译器统一注入。"
+                  "自然语言 Prompt 不得包含 FRAMEFLOW、Prompt Contract、suyu-skill-v2、资产 ID、Prompt QA、Pending、user-confirmation-required、generationStatus、promptPack、promptQuality、JSON 字段名、版本记录或供应商/工作台内部流程。模型参数、尺寸、质量、背景和输出格式属于请求元数据，不写入生图 Prompt。"
                   "对于角色结构参考板，区分稳定角色身份与镜头特定表演：结构板只保留静态身份、服装、发型、比例、手部和中性设计姿态；接触机甲、抬眼、嘴角上扬、对白、剧情光和散热气流等镜头行为必须作为 shot-specific detail，不得与无动作结构板要求同时写入。"
                   "对于 assetClass=audio，切换到 voice-controller 和 MiniMax Speech Web 格式：不要套用视觉资产 Prompt，不要把空间、材质、光线、摄影机、画幅或建议尺寸写进声音描述。"
                   "audio 资产必须在 promptPack.audioDetails 中填写 schemaVersion=minimax-speech-audio-v2、sourceText、providerText、textStatus、voiceSource、voiceIdentity、language、locale、dialect、performanceDirection、emotion、intensity、pace、pausePlan、pronunciation、provider、model、voiceId、providerVoiceId、providerRegion、speed、pitch、volume、languageBoost、targetDuration、relevantShots、continuityChecklist、mustPreserve 和 mustAvoid。"
@@ -5410,40 +5314,10 @@ async def _run_asset_prompt_agent(request:Request,project_id:str,input_package:d
                   "你不生成图片、不调用图片服务、不宣称 Prompt QA 或图片 QA 已通过；所有卡片的 promptQaDecision 必须保持 Pending，"
                   "generationChoiceStatus 必须是 user-confirmation-required，等待用户确认后才允许图片生成。"
                   + prompt_contract_instructions())
-    if isinstance(input_package.get("consistency_repair"),dict):
-        instructions += (
-            " 本次是系统内部的基础资产 Prompt 一致性自动修订，不是用户主动重写。"
-            "必须读取 consistency_repair 中的 currentPrompt、currentPromptPack、issueCodes 和 issues，"
-            "结合 confirmed_asset_intents 与 asset_generation_policy 对当前资产进行完整重写；"
-            "只能返回指定 target_asset_id，必须保持资产 ID、资产类别、稳定锚点、基础画幅、布局和输出字段完整，"
-            "不得把审核意见原文追加进 Prompt，不得把旧 Prompt 原文放在新 Prompt 前面。"
-        )
     text=f"请根据以下故事分镜、资产总控审计和交接约束生成 Prompt 卡。\n\n输入包：{json.dumps(input_package,ensure_ascii=False)}"
     if profile["provider_type"]=="opencode":
         return await opencode_structured(profile,get_profile_secret(profile),model,instructions,text,ASSET_PROMPT_OUTPUT_SCHEMA,"FRAMEFLOW · Asset Prompts")
     return await openai_structured(profile,get_profile_secret(profile),model,instructions,text,ASSET_PROMPT_OUTPUT_SCHEMA,"frameflow_asset_prompts")
-
-
-async def _run_asset_prompt_consistency_agent(request:Request,project_id:str,input_package:dict[str,Any])->dict[str,Any]:
-    """Audit compiled base-asset prompts without invoking image generation."""
-    database=db(request); profile,bound=resolve_profile(database,"orchestrator"); model=bound or profile["model_config"].get("orchestrator_model")
-    if not model:raise HTTPException(409,"尚未配置编排模型，无法进行资产 Prompt 一致性审核。")
-    validate_orchestrator_model(profile,model)
-    instructions=("你是 FRAMEFLOW 的基础资产 Prompt 一致性审核器。你只审核结构化输入中的最终编译 Prompt 和 promptPack，"
-                  "不生成图片、不调用图片服务、不执行图片 QA、不批准 Prompt QA、不授权生成，也不修改项目。"
-                  "逐个资产核对用户确认的创作意图、稳定身份锚点、资产分类、基础静态状态、独立资产边界、资产设计画幅/布局和 Prompt Contract。"
-                  "geometry 检查必须区分逻辑设计画幅与图片接口尺寸：当 geometry.ratioMode 为 semantic_design_ratio 时，designAspectRatio 是布局语义要求，providerImageSize/providerAspectRatio 只是接口元数据；16:9 与 1536x1024/3:2 的组合是预期分层，不得仅因为两者不同而返回 GEOMETRY_ASPECT_MISMATCH。此时只检查设计画幅是否与资产规格、Prompt 正文、promptPack 和布局一致，以及项目最终画幅是否错误覆盖基础资产。"
-                  "asset_scope 检查只判断最终画面/正向结构是否真的加入角色、道具、动作或融合关系；mustAvoid、negativePrompt、generationNotes 中明确禁止这些内容的文字属于约束，不是实际加入，不得据此判定环境或物品发生融合。"
-                  "scene 基础资产必须提供空的 actionBlockingZones、行走轴、视线轴、站立区和 propPlacementZones；‘后续人物行动空间’、‘空行走路径’、‘道具预留区’、‘为后续融合保留’等未来规划语句不代表当前画面加入角色或道具，只有正向内容实际描述角色/人体/道具/接触正在画面中出现时才判定 asset_scope_scene_fusion。"
-                  "character、scene、prop、product 是可审核的基础资产；fusion、audio、music、sfx 和 style 不应被当作基础视觉资产审核。"
-                  "必须把镜头级动作、对白、接触、融合关系与基础资产静态结构区分开。"
-                  "若任何一个检查项未满足，decision 必须为 needs_repair，并返回简短、可执行的 issueCodes 和 issues；全部满足时才返回 pass。"
-                  "审核结论只针对 Prompt 一致性，不得使用 Approved、production-ready、image QA passed 等越权状态。"
-                  "只输出符合结构化 schema 的 JSON。")
-    text=f"请审核以下已经编译完成的基础资产 Prompt。\n\n输入包：{json.dumps(input_package,ensure_ascii=False)}"
-    if profile["provider_type"]=="opencode":
-        return await opencode_structured(profile,get_profile_secret(profile),model,instructions,text,ASSET_PROMPT_CONSISTENCY_OUTPUT_SCHEMA,"FRAMEFLOW · Prompt Consistency")
-    return await openai_structured(profile,get_profile_secret(profile),model,instructions,text,ASSET_PROMPT_CONSISTENCY_OUTPUT_SCHEMA,"frameflow_asset_prompt_consistency")
 
 async def _run_fusion_prompt_agent(request:Request,project_id:str,input_package:dict[str,Any],provider_profile_id:str|None=None,requested_model:str|None=None)->dict[str,Any]:
     database=db(request); profile,bound=resolve_profile(database,"orchestrator",provider_profile_id); model=requested_model or bound or profile["model_config"].get("orchestrator_model")
@@ -5677,41 +5551,22 @@ def _prompt_context(doc:dict[str,Any],asset:dict[str,Any]|None=None,relevant_sho
         # consumers, but it now means the selected asset reference canvas.
         "aspect_ratio":generation_profile.get("aspect_ratio") or normalize_aspect_ratio(doc.get("ratio") or "16:9","16:9"),
         "output_aspect_ratio":normalize_aspect_ratio(doc.get("ratio") or "9:16","9:16"),
-        "asset_generation_profile":{
-            **generation_profile,
-            "layout_profile":asset_layout_profile(_asset_class(asset)),
-            "provider_aspect_ratio":provider_aspect_ratio_for_image_size(generation_profile.get("image_size")),
-        },
-        "asset_layout_profile":asset_layout_profile(_asset_class(asset)),
         "target_generator":doc.get("generator") or "Seedance 2.5",
     }
 
 
 def _stored_prompt_composition_mode(asset:dict[str,Any]|None, requested:str="legacy_supplement")->str:
-    """Keep saved base-asset drafts on the same compiler on read paths.
+    """Keep a saved asset-prompt draft in clean mode on read paths.
 
-    New drafts persist ``promptCompositionMode``. The older ``source`` marker
-    remains a compatibility fallback for records written before that field
-    existed. Fusion is always pinned to its connection-driven legacy path.
+    The existing ``source`` field already identifies the current editor save
+    path. Reusing it avoids adding a public schema field while preventing the
+    library and asset-board projections from recompiling a clean draft with
+    the legacy supplement behavior.
     """
 
-    if not isinstance(asset,dict):
-        return prompt_composition_mode_for_asset(None, requested)  # type: ignore[arg-type]
-    asset_class=_asset_class(asset)
-    # Fusion has its own connection-driven compiler. Never let a base-asset
-    # rewrite mode or an old source marker change its generation path.
-    if canonical_asset_class(asset_class)=="fusion":
-        return "legacy_supplement"
-    stored=str(
-        asset.get("promptCompositionMode")
-        or _asset_metadata(asset).get("prompt_composition_mode")
-        or ""
-    ).strip()
-    if stored in {"legacy_supplement","clean_replace","base_asset"}:
-        return prompt_composition_mode_for_asset(asset_class, stored)  # type: ignore[arg-type]
-    if requested == "legacy_supplement" and str(asset.get("source") or "").strip()=="asset-prompt-generator":
-        return "base_asset" if is_base_asset_class(asset_class) else "clean_replace"
-    return prompt_composition_mode_for_asset(asset_class, requested)  # type: ignore[arg-type]
+    if requested == "legacy_supplement" and isinstance(asset,dict) and str(asset.get("source") or "").strip()=="asset-prompt-generator":
+        return "clean_replace"
+    return requested
 
 def _canonical_prompt_card(
     card:dict[str,Any],
@@ -5724,14 +5579,13 @@ def _canonical_prompt_card(
 )->dict[str,Any]:
     source_asset=asset if isinstance(asset,dict) else {}
     asset_class=canonical_asset_class(card.get("assetClass") or card.get("asset_class") or _asset_class(source_asset) or "unknown")
-    effective_mode=prompt_composition_mode_for_asset(asset_class, composition_mode)  # type: ignore[arg-type]
     provider_prompt_pack=card.get("promptPack") if isinstance(card.get("promptPack"),dict) else card.get("prompt_pack") if isinstance(card.get("prompt_pack"),dict) else {}
     # A clean rewrite must not silently fall back to the previous full pack.
     # Stable identity/must-preserve/must-avoid values are still injected via
     # canonicalize_prompt_output's explicit arguments below.
     source_prompt_pack=(
         provider_prompt_pack
-        if effective_mode in {"clean_replace","base_asset"}
+        if composition_mode == "clean_replace"
         else provider_prompt_pack or source_asset.get("promptPack") or _asset_metadata(source_asset).get("prompt_pack") or {}
     )
     previous_prompt=str(source_asset.get("prompt") or "")
@@ -5743,7 +5597,7 @@ def _canonical_prompt_card(
         must_preserve=card.get("mustPreserve") or source_asset.get("mustPreserve") or _asset_metadata(source_asset).get("must_preserve") or [],
         must_avoid=card.get("mustAvoid") or source_asset.get("mustAvoid") or _asset_metadata(source_asset).get("must_avoid") or [],
         context=_prompt_context(doc,source_asset or card,shots or card.get("relevantShots")),
-        composition_mode=effective_mode,
+        composition_mode=composition_mode,
         previous_prompt=previous_prompt,
         strict_clean=strict_clean,
     )
@@ -5754,80 +5608,6 @@ def _canonical_prompt_card(
         **canonical,
         "mustPreserve":card.get("mustPreserve") or pack.get("mustPreserve") or [],
         "mustAvoid":card.get("mustAvoid") or pack.get("mustAvoid") or [],
-    }
-
-
-def _persist_asset_prompt_card(
-    database:Database,
-    project_id:str,
-    asset:dict[str,Any],
-    canonical:dict[str,Any],
-    doc:dict[str,Any],
-    project_output_aspect_ratio:Any,
-    *,
-    target_skill:str,
-    change_reason:str,
-) -> dict[str,Any]:
-    """Persist one canonical base-asset Prompt and return its card projection."""
-    asset_id=str(canonical.get("id") or asset.get("id") or "")
-    cls=canonical_asset_class(canonical.get("assetClass") or _asset_class(asset) or "unknown")
-    prompt=str(canonical.get("prompt") or "").strip()
-    shots_for_card=[str(value) for value in canonical.get("relevantShots",[]) if value]
-    prompt_version=asset_audit.create_prompt_version(
-        database,
-        project_id,
-        asset_id,
-        cls,
-        prompt,
-        "asset-prompt-generator",
-        target_skill,
-        parent_version=None,
-        change_reason=change_reason,
-    )
-    prompt_pack=canonical.get("promptPack") if isinstance(canonical.get("promptPack"),dict) else {}
-    prompt_quality=canonical.get("promptQuality") if isinstance(canonical.get("promptQuality"),dict) else {}
-    preserve=[str(value) for value in canonical.get("mustPreserve",[]) if value]
-    avoid=[str(value) for value in canonical.get("mustAvoid",[]) if value]
-    image_generation_eligible=bool(canonical.get("imageGenerationEligible",cls in {"character","scene","prop","product","fusion","style"}))
-    asset.update({
-        "assetClass":cls,
-        "assetRole":asset.get("assetRole") or canonical.get("role") or cls,
-        "prompt":prompt,
-        "promptVersion":prompt_version["id"],
-        "promptPack":prompt_pack,
-        "promptQuality":prompt_quality,
-        "promptContractVersion":canonical.get("promptContractVersion") or PROMPT_CONTRACT_VERSION,
-        "promptWorkflow":canonical.get("promptWorkflow") or PROMPT_WORKFLOW_ID,
-        "promptFieldOrder":canonical.get("promptFieldOrder") or [],
-        "promptTargetSkill":target_skill,
-        "promptQaDecision":"Pending",
-        "generationChoice":"user-confirmation-required",
-        "generationChoiceStatus":"user-confirmation-required",
-        "generationStatus":"planned",
-        "promptStatus":"prompt-draft",
-        "promptRelevantShots":shots_for_card,
-        "mustPreserve":preserve,
-        "mustAvoid":avoid,
-        "imageGenerationEligible":image_generation_eligible,
-    })
-    if canonical.get("promptCompositionMode"):
-        asset["promptCompositionMode"]=canonical["promptCompositionMode"]
-    if canonical.get("promptCompilerVersion"):
-        asset["promptCompilerVersion"]=canonical["promptCompilerVersion"]
-    generation_profile=_apply_asset_generation_profile(asset,project_output_aspect_ratio)
-    return {
-        **canonical,
-        "assetClass":cls,
-        "targetSkill":target_skill,
-        "promptVersion":prompt_version["id"],
-        "promptQaDecision":"Pending",
-        "generationChoiceStatus":"user-confirmation-required",
-        "generationStatus":"planned",
-        "imageGenerationEligible":image_generation_eligible,
-        "assetAspectRatio":generation_profile["aspect_ratio"],
-        "assetGenerationSize":generation_profile["image_size"],
-        "assetLayoutProfile":asset.get("assetLayoutProfile"),
-        "assetProviderAspectRatio":asset.get("assetProviderAspectRatio"),
     }
 
 
@@ -6185,358 +5965,6 @@ def _validate_asset_prompt_output(result:dict[str,Any],allowed_ids:set[str],expe
     if missing:issues.append(f"资产 Prompt 卡不完整，缺少：{'、'.join(missing)}")
     return issues
 
-
-PROMPT_CONSISTENCY_MAX_AUTO_REPAIRS=2
-PROMPT_CONSISTENCY_CHECK_FIELDS=("identity_anchor","asset_scope","base_state","geometry","prompt_contract")
-
-
-def _prompt_consistency_issue(code:str,message:str)->dict[str,str]:
-    return {"code":code,"message":message}
-
-
-def _prompt_consistency_checks(issue_codes:list[str],provided:Any=None)->dict[str,bool]:
-    provided=provided if isinstance(provided,dict) else {}
-    checks={field:bool(provided.get(field,True)) for field in PROMPT_CONSISTENCY_CHECK_FIELDS}
-    for code in issue_codes:
-        lowered=str(code).lower()
-        for field in PROMPT_CONSISTENCY_CHECK_FIELDS:
-            if lowered==field or lowered.startswith(f"{field}_") or lowered.endswith(f"_{field}"):
-                checks[field]=False
-    return checks
-
-
-def _prompt_consistency_review(
-    asset_id:str,
-    status:str,
-    attempt:int,
-    issues:Any=None,
-    *,
-    checks:Any=None,
-    requires_intent_revision:bool=False,
-)->dict[str,Any]:
-    normalized_issues=[]
-    issue_codes=[]
-    for item in issues if isinstance(issues,list) else []:
-        if isinstance(item,dict):
-            code=str(item.get("code") or item.get("issueCode") or "prompt_consistency_issue").strip()
-            message=str(item.get("message") or item.get("reason") or code).strip()
-        else:
-            code="prompt_consistency_issue"
-            message=str(item).strip()
-        if not message:continue
-        normalized_issues.append({"code":code,"message":message[:300]})
-        if code not in issue_codes:issue_codes.append(code)
-    normalized_issues=normalized_issues[:3]
-    checks_payload=_prompt_consistency_checks(issue_codes,checks)
-    reason=normalized_issues[0]["message"] if normalized_issues else "未返回具体原因"
-    if status=="passed":
-        message="Prompt 一致性审核通过" if attempt<=0 else f"Prompt 一致性审核通过（已自动修订 {attempt} 次）"
-    elif status=="needs_intent_revision":
-        message=f"Prompt 一致性审核未通过：{reason}；已自动修订 {attempt} 次，请修改资产创作意图后重新生成。"
-    elif status=="blocked":
-        message=f"Prompt 一致性审核暂未完成：{reason}；请稍后重试。"
-    elif status=="needs_repair":
-        message=f"Prompt 一致性审核发现问题，准备进行第 {min(attempt+1,PROMPT_CONSISTENCY_MAX_AUTO_REPAIRS)} 次自动修订。"
-    else:
-        message=f"Prompt 一致性审核：{reason}"
-    return {
-        "status":status,
-        "attempt":max(0,min(int(attempt),PROMPT_CONSISTENCY_MAX_AUTO_REPAIRS)),
-        "maxAttempts":PROMPT_CONSISTENCY_MAX_AUTO_REPAIRS,
-        "message":message,
-        "issueCodes":issue_codes,
-        "issues":normalized_issues,
-        "checks":checks_payload,
-        "requiresIntentRevision":bool(requires_intent_revision),
-        "checkedAt":utcnow(),
-    }
-
-
-def _local_base_asset_prompt_issues(asset:dict[str,Any],card:dict[str,Any],doc:dict[str,Any])->list[dict[str,str]]:
-    """Run cheap, deterministic checks before spending an AI audit call."""
-    cls=canonical_asset_class(card.get("assetClass") or _asset_class(asset) or "")
-    if not is_base_asset_class(cls):return []
-    prompt=str(card.get("prompt") or "").strip()
-    pack=card.get("promptPack") if isinstance(card.get("promptPack"),dict) else {}
-    issues=[]
-    if not prompt:
-        issues.append(_prompt_consistency_issue("prompt_contract_missing","最终 Prompt 为空。"))
-    if not prompt_pack_has_generation_fields(cls,pack):
-        issues.append(_prompt_consistency_issue("prompt_contract_incomplete","Prompt Pack 没有形成完整的基础资产执行稿。"))
-    profile=_asset_generation_profile(asset,doc.get("ratio") or "9:16")
-    geometry_prompt=base_asset_geometry_prompt(cls,{"asset_generation_profile":profile})
-    if geometry_prompt and geometry_prompt not in prompt:
-        issues.append(_prompt_consistency_issue("geometry_missing","基础资产 Prompt 没有包含系统要求的设计画幅和布局说明。"))
-    provider_size=str(profile.get("image_size") or "")
-    if provider_size and provider_size in prompt:
-        issues.append(_prompt_consistency_issue("provider_size_leak","Prompt 正文泄露了图片接口内部尺寸。"))
-    for boundary_issue in validate_clean_prompt(prompt,base_asset=True):
-        issues.append(_prompt_consistency_issue("prompt_contract_boundary",boundary_issue))
-    if cls=="character":
-        missing=[label for label,token in (("四个区域","四个区域"),("90°侧面","90°"),("180°背面","180°")) if token not in prompt]
-        if missing:
-            issues.append(_prompt_consistency_issue("base_state_character_layout",f"角色参考板缺少{'、'.join(missing)}布局要求。"))
-    elif cls=="scene":
-        leaked_markers=("角色进入画面","人物进入画面","角色握住","人物手持","角色穿戴","物品与角色融合","角色-道具-环境融合")
-        def positive_marker(marker:str)->bool:
-            for match in re.finditer(re.escape(marker),prompt):
-                prefix=prompt[max(0,match.start()-8):match.start()]
-                if re.search(r"(?:不|无|禁止|避免|不得|不要|未|没有)[^。；，,]{0,6}$",prefix):
-                    continue
-                return True
-            return False
-        if any(positive_marker(marker) for marker in leaked_markers):
-            issues.append(_prompt_consistency_issue("asset_scope_scene_fusion","环境基础资产混入了角色动作或融合关系。"))
-    elif cls in {"prop","product"}:
-        leaked_markers=("角色握住","人物手持","角色穿戴","放置在场景中","物品与角色融合","角色-道具-环境融合")
-        def positive_marker(marker:str)->bool:
-            for match in re.finditer(re.escape(marker),prompt):
-                prefix=prompt[max(0,match.start()-8):match.start()]
-                if re.search(r"(?:不|无|禁止|避免|不得|不要|未|没有)[^。；，,]{0,6}$",prefix):
-                    continue
-                return True
-            return False
-        if any(positive_marker(marker) for marker in leaked_markers):
-            issues.append(_prompt_consistency_issue("asset_scope_prop_fusion","物品基础资产混入了人物、场景或融合动作。"))
-    unique=[]; seen=set()
-    for item in issues:
-        code=item["code"]
-        if code in seen:continue
-        seen.add(code); unique.append(item)
-    return unique[:8]
-
-
-def _prompt_consistency_audit_package(
-    doc:dict[str,Any],
-    assets_by_id:dict[str,dict[str,Any]],
-    cards:list[dict[str,Any]],
-    input_package:dict[str,Any],
-    attempt:int,
-    clean_only:bool=True,
-)->dict[str,Any]:
-    intents={str(item.get("assetId")):item for item in input_package.get("confirmed_asset_intents",[]) if isinstance(item,dict) and item.get("assetId")}
-    items=[]
-    for card in cards:
-        if not isinstance(card,dict):continue
-        asset_id=str(card.get("id") or "")
-        asset=assets_by_id.get(asset_id)
-        if not asset or not is_base_asset_class(canonical_asset_class(card.get("assetClass") or _asset_class(asset))):continue
-        local_issues=_local_base_asset_prompt_issues(asset,card,doc)
-        if clean_only and local_issues:continue
-        profile=_asset_generation_profile(asset,doc.get("ratio") or "9:16")
-        relevant_shots=[shot for shot in doc.get("shots",[]) if isinstance(shot,dict) and str(shot.get("id")) in {str(value) for value in card.get("relevantShots",[]) if value}]
-        items.append({
-            "assetId":asset_id,
-            "assetClass":canonical_asset_class(card.get("assetClass") or _asset_class(asset)),
-            "assetName":str(asset.get("name") or asset_id),
-            "assetRole":str(asset.get("assetRole") or asset.get("note") or ""),
-            "relevantShots":relevant_shots,
-            "confirmedIntent":intents.get(asset_id) or {},
-            "identityAnchors":asset.get("identityAnchors") or _asset_metadata(asset).get("identity_anchors") or {},
-            "mustPreserve":card.get("mustPreserve") or asset.get("mustPreserve") or [],
-            "mustAvoid":card.get("mustAvoid") or asset.get("mustAvoid") or [],
-            "geometry":{
-                "designAspectRatio":profile.get("aspect_ratio"),
-                "providerImageSize":profile.get("image_size"),
-                "providerAspectRatio":provider_aspect_ratio_for_image_size(profile.get("image_size")),
-                "ratioMode":"semantic_design_ratio" if provider_aspect_ratio_for_image_size(profile.get("image_size")) not in {None,profile.get("aspect_ratio")} else "native",
-                "layoutProfile":asset_layout_profile(_asset_class(asset)),
-                "source":profile.get("source"),
-            },
-            "prompt":str(card.get("prompt") or ""),
-            "promptPack":card.get("promptPack") if isinstance(card.get("promptPack"),dict) else {},
-        })
-    return {
-        "repairAttempt":attempt,
-        "projectOutputAspectRatio":normalize_aspect_ratio(doc.get("ratio") or "9:16","9:16"),
-        "storySpec":doc.get("storySpec") or {},
-        "assets":items,
-    }
-
-
-async def _audit_base_asset_prompt_cards(
-    request:Request,
-    project_id:str,
-    doc:dict[str,Any],
-    assets_by_id:dict[str,dict[str,Any]],
-    cards:list[dict[str,Any]],
-    input_package:dict[str,Any],
-    attempt:int,
-)->tuple[dict[str,dict[str,Any]],bool]:
-    reviews={}
-    clean_cards=[]
-    for card in cards:
-        asset_id=str(card.get("id") or "")
-        asset=assets_by_id.get(asset_id)
-        if not asset or not is_base_asset_class(canonical_asset_class(card.get("assetClass") or _asset_class(asset))):continue
-        local_issues=_local_base_asset_prompt_issues(asset,card,doc)
-        if local_issues:
-            reviews[asset_id]=_prompt_consistency_review(asset_id,"needs_repair",attempt,local_issues)
-        else:
-            clean_cards.append(card)
-    if not clean_cards:return reviews,False
-    audit_input=_prompt_consistency_audit_package(doc,assets_by_id,clean_cards,input_package,attempt)
-    try:
-        raw_result=await _run_asset_prompt_consistency_agent(request,project_id,audit_input)
-    except Exception:
-        for card in clean_cards:
-            asset_id=str(card.get("id") or "")
-            reviews[asset_id]=_prompt_consistency_review(asset_id,"blocked",attempt,[{"code":"review_unavailable","message":"审核模型未返回有效的一致性审核结果。"}])
-        return reviews,True
-    raw_reviews={str(item.get("assetId")):item for item in raw_result.get("reviews",[]) if isinstance(item,dict) and item.get("assetId")} if isinstance(raw_result,dict) else {}
-    blocked=False
-    for card in clean_cards:
-        asset_id=str(card.get("id") or "")
-        item=raw_reviews.get(asset_id)
-        if not item:
-            reviews[asset_id]=_prompt_consistency_review(asset_id,"blocked",attempt,[{"code":"review_missing","message":"审核模型未返回该资产的审核结果。"}])
-            blocked=True
-            continue
-        decision=str(item.get("decision") or "needs_repair").strip().lower()
-        raw_checks=item.get("checks") if isinstance(item.get("checks"),dict) else {}
-        status="passed" if decision=="pass" and all(bool(raw_checks.get(field,True)) for field in PROMPT_CONSISTENCY_CHECK_FIELDS) else "needs_repair"
-        issues=[]
-        raw_codes=item.get("issueCodes") if isinstance(item.get("issueCodes"),list) else []
-        raw_messages=item.get("issues") if isinstance(item.get("issues"),list) else []
-        for index,code in enumerate(raw_codes):
-            issues.append({"code":str(code),"message":str(raw_messages[index] if index<len(raw_messages) else code)})
-        for message in raw_messages[len(raw_codes):]:
-            issues.append({"code":"prompt_consistency_issue","message":str(message)})
-        if status!="passed":
-            for field in PROMPT_CONSISTENCY_CHECK_FIELDS:
-                if raw_checks.get(field) is False and not any(str(issue.get("code"))==field for issue in issues):
-                    issues.append({"code":field,"message":f"一致性审核的 {field} 检查未通过。"})
-        if status!="passed" and not issues:
-            issues=[{"code":"prompt_consistency_issue","message":str(item.get("conciseReason") or "审核模型指出 Prompt 与资产意图不一致。")}]
-        reviews[asset_id]=_prompt_consistency_review(asset_id,status,attempt,issues,checks=raw_checks)
-    return reviews,blocked
-
-
-def _prompt_consistency_summary(reviews:dict[str,dict[str,Any]])->dict[str,Any]:
-    values=list(reviews.values())
-    if any(item.get("status")=="blocked" for item in values):status="blocked"
-    elif any(item.get("status")!="passed" for item in values):status="needs_intent_revision"
-    else:status="passed"
-    return {
-        "status":status,
-        "maxAutoRepairAttempts":PROMPT_CONSISTENCY_MAX_AUTO_REPAIRS,
-        "passed":sum(1 for item in values if item.get("status")=="passed"),
-        "failed":sum(1 for item in values if item.get("status")!="passed"),
-        "assets":[{"assetId":asset_id,"status":item.get("status"),"repairAttempts":item.get("attempt",0),"issueCodes":item.get("issueCodes",[]),"message":item.get("message","")} for asset_id,item in sorted(reviews.items())],
-    }
-
-
-async def _run_initial_prompt_consistency_loop(
-    request:Request,
-    project_id:str,
-    database:Database,
-    doc:dict[str,Any],
-    assets_by_id:dict[str,dict[str,Any]],
-    prompt_cards:list[dict[str,Any]],
-    enriched_cards:list[dict[str,Any]],
-    prompt_input:dict[str,Any],
-    prompt_source_assets:dict[str,dict[str,Any]],
-    project_output_aspect_ratio:Any,
-    previous_approved:dict[str,dict[str,Any]]|None=None,
-)->tuple[list[dict[str,Any]],list[dict[str,Any]],dict[str,Any]]:
-    """Audit only the initial base-asset Prompt set and repair it at most twice."""
-    prompt_by_id={str(card.get("id")):card for card in prompt_cards if isinstance(card,dict) and card.get("id")}
-    enriched_by_id={str(card.get("id")):card for card in enriched_cards if isinstance(card,dict) and card.get("id")}
-    previous_approved=previous_approved or {}
-    reviews={}
-    blocked_ids:set[str]=set()
-    for audit_round in range(PROMPT_CONSISTENCY_MAX_AUTO_REPAIRS+1):
-        current_cards=[card for asset_id,card in prompt_by_id.items() if asset_id not in blocked_ids]
-        if not current_cards:break
-        round_reviews,audit_blocked=await _audit_base_asset_prompt_cards(request,project_id,doc,assets_by_id,current_cards,prompt_input,audit_round)
-        reviews.update(round_reviews)
-        # An unavailable or incomplete audit is isolated to the assets for
-        # which no usable review was returned. Other assets must still finish
-        # their own two-attempt consistency flow.
-        round_blocked={asset_id for asset_id,item in round_reviews.items() if item.get("status")=="blocked"}
-        blocked_ids.update(round_blocked)
-        failed_ids=[asset_id for asset_id,item in round_reviews.items() if item.get("status")!="passed" and asset_id not in blocked_ids]
-        if not failed_ids or audit_round>=PROMPT_CONSISTENCY_MAX_AUTO_REPAIRS:break
-        for asset_id in failed_ids:
-            review=reviews.get(asset_id) or {}
-            if review.get("status")=="blocked":
-                continue
-            asset=assets_by_id.get(asset_id)
-            current_card=prompt_by_id.get(asset_id)
-            if not asset or not current_card:continue
-            repair_attempt=audit_round+1
-            repair_input={
-                **prompt_input,
-                "target_asset_id":asset_id,
-                "allowed_asset_ids":[asset_id],
-                "consistency_repair":{
-                    "attempt":repair_attempt,
-                    "issueCodes":review.get("issueCodes") or [],
-                    "issues":review.get("issues") or [],
-                    "currentPrompt":current_card.get("prompt") or "",
-                    "currentPromptPack":current_card.get("promptPack") if isinstance(current_card.get("promptPack"),dict) else {},
-                },
-            }
-            try:
-                repair_result=await _run_asset_prompt_agent(request,project_id,repair_input)
-                repair_cards=[item for item in repair_result.get("assets",[]) if isinstance(item,dict) and str(item.get("id") or "")==asset_id]
-                if not repair_cards:raise ValueError("自动修订未返回目标资产的完整 Prompt 卡。")
-                repaired_card=repair_cards[0]
-                canonical=_canonical_prompt_card(
-                    repaired_card,
-                    asset,
-                    doc,
-                    repaired_card.get("relevantShots"),
-                    composition_mode="base_asset",
-                    strict_clean=True,
-                )
-                target_skill=str(canonical.get("targetSkill") or asset.get("promptTargetSkill") or _asset_prompt_skill(_asset_class(asset)))
-                enriched=_persist_asset_prompt_card(
-                    database,
-                    project_id,
-                    asset,
-                    {**canonical,"assetClass":canonical.get("assetClass") or _asset_class(asset),"targetSkill":target_skill},
-                    doc,
-                    project_output_aspect_ratio,
-                    target_skill=target_skill,
-                    change_reason=f"基础资产 Prompt 一致性自动修订第 {repair_attempt} 次",
-                )
-                prompt_by_id[asset_id]={**canonical,"assetClass":canonical.get("assetClass") or _asset_class(asset),"targetSkill":target_skill,"assetAspectRatio":asset.get("assetAspectRatio"),"assetGenerationSize":asset.get("assetGenerationSize"),"assetLayoutProfile":asset.get("assetLayoutProfile"),"assetProviderAspectRatio":asset.get("assetProviderAspectRatio")}
-                enriched_by_id[asset_id]=enriched
-            except Exception as exc:
-                reviews[asset_id]=_prompt_consistency_review(asset_id,"blocked",repair_attempt,[{"code":"repair_agent_error","message":f"自动修订未完成：{str(exc)[:180]}"}])
-                blocked_ids.add(asset_id)
-
-    final_reviews={}
-    for asset_id,review in reviews.items():
-        status=str(review.get("status") or "needs_repair")
-        attempt=int(review.get("attempt") or 0)
-        if status=="needs_repair":
-            status="needs_intent_revision"
-        final_reviews[asset_id]=_prompt_consistency_review(
-            asset_id,
-            status,
-            attempt,
-            review.get("issues") or [],
-            checks=review.get("checks"),
-            requires_intent_revision=status=="needs_intent_revision",
-        )
-        asset=assets_by_id.get(asset_id)
-        if not asset:continue
-        asset["promptConsistencyReview"]=final_reviews[asset_id]
-        asset["promptGenerationBlocked"]=status!="passed"
-        if status!="passed" and asset_id in previous_approved:
-            for key,value in previous_approved[asset_id].items():
-                asset[key]=deepcopy(value)
-            asset["promptConsistencyReview"]=final_reviews[asset_id]
-            asset["promptGenerationBlocked"]=True
-        if asset_id in prompt_by_id:
-            prompt_by_id[asset_id]={**prompt_by_id[asset_id],"promptConsistencyReview":final_reviews[asset_id]}
-        if asset_id in enriched_by_id:
-            enriched_by_id[asset_id]={**enriched_by_id[asset_id],"promptConsistencyReview":final_reviews[asset_id]}
-
-    return list(prompt_by_id.values()),list(enriched_by_id.values()),_prompt_consistency_summary(final_reviews)
-
 def _sync_asset_board_after_document(database:Database,project_id:str,doc:dict[str,Any],project_revision:int)->dict[str,Any]:
     current=_ensure_asset_board(database,project_id)
     board=_validate_asset_board(_asset_board_from_document(database,project_id,doc,project_revision,current.get("board") or {}))
@@ -6680,9 +6108,8 @@ async def rebase_asset_intents(project_id:str,body:AssetIntentPrepareCreate,requ
     state=_asset_intent_state(doc); now=utcnow(); previous={str(item.get("assetId")):item for item in state.get("entries",[]) if isinstance(item,dict) and item.get("assetId")}
     entries=[]
     for asset in assets:
-        if not _asset_intent_is_base_asset(asset):continue
+        if _asset_class(asset)=="fusion":continue
         asset_id=str(asset.get("id")); prior=previous.get(asset_id) or {}; user_text=str(prior.get("userText") or "")
-        asset.pop("promptConsistencyReview",None); asset.pop("promptGenerationBlocked",None)
         entries.append({"assetId":asset_id,"assetClass":_asset_class(asset),"assetName":str(asset.get("name") or asset_id),"userText":user_text,"mode":"draft" if user_text else None,"status":"empty","normalizedIntent":None,"warningSummary":[],"rawInterpretation":None,"updatedAt":now})
     doc["assetIntent"]={"assetIntentVersion":state["assetIntentVersion"]+1,"sourceStoryRevision":_asset_intent_story_revision(doc),"sourceAssetManifestFingerprint":_asset_intent_manifest_fingerprint(doc),"entries":entries,"updatedAt":now}
     next_revision=save_project_document(request,doc,revision,audit_event={"action":"asset_intent_rebased","target_type":"asset_intent","target_id":project_id,"reason":"story_or_asset_manifest_changed","metadata":{"preserved_user_text_count":sum(1 for item in entries if item.get("userText"))}})
@@ -6697,9 +6124,7 @@ async def interpret_asset_intent(project_id:str,asset_id:str,body:AssetIntentInt
     normalized_asset_id=str(asset_id).strip()
     asset=next((item for item in doc.get("assets",[]) if isinstance(item,dict) and str(item.get("id") or "")==normalized_asset_id),None)
     if asset is None:raise HTTPException(404,"目标资产不存在于当前 AI 资产清单。")
-    if not _asset_intent_is_base_asset(asset):
-        _,plan_label=_asset_intent_system_plan_kind(asset)
-        raise HTTPException(409,f"{plan_label}由系统自动处理，不接受独立资产创作意图。")
+    if _asset_class(asset)=="fusion":raise HTTPException(409,"融合资产由系统自动规划，不接受独立资产创作意图。")
     user_text=body.user_text
     previous_state=_asset_intent_state(doc)
     current_fingerprint=_asset_intent_manifest_fingerprint(doc)
@@ -6732,7 +6157,6 @@ async def interpret_asset_intent(project_id:str,asset_id:str,body:AssetIntentInt
         "updatedAt":now,
     }
     entry_by_id[normalized_asset_id]=base_entry
-    asset.pop("promptConsistencyReview",None); asset.pop("promptGenerationBlocked",None)
     doc["assetIntent"]={
         "assetIntentVersion":next_version,
         "sourceStoryRevision":source_story_revision,
@@ -6836,17 +6260,9 @@ async def generate_asset_prompts(project_id:str,body:AssetPromptRunCreate,reques
         progress=_asset_intent_progress(doc,intent_state)
         if not progress["allHandled"]:
             raise HTTPException(409,{"message":f"还有 {progress['total']-progress['handled']} 项资产未明确处理，暂不能生成 Prompt。","progress":progress})
-        prompt_runs=doc.get("assetPromptRuns") if isinstance(doc.get("assetPromptRuns"),list) else []
-        last_prompt_run=prompt_runs[-1] if prompt_runs and isinstance(prompt_runs[-1],dict) else {}
-        last_consistency=last_prompt_run.get("promptConsistency") if isinstance(last_prompt_run.get("promptConsistency"),dict) else {}
-        if (
-            str(last_consistency.get("status") or "") == "needs_intent_revision"
-            and last_prompt_run.get("assetIntentVersion") == asset_intent_version
-        ):
-            raise HTTPException(409,"上一次基础资产 Prompt 已完成两次自动修订仍未通过，请先修改并重新提交资产创作意图后再生成。")
         entries_by_id={str(item.get("assetId")):item for item in intent_state.get("entries",[]) if isinstance(item,dict) and item.get("assetId")}
         for asset in existing_assets:
-            if not _asset_intent_is_base_asset(asset):continue
+            if _asset_class(asset)=="fusion":continue
             entry=entries_by_id.get(str(asset.get("id")))
             if not entry:continue
             confirmed_asset_intents.append({
@@ -6886,10 +6302,7 @@ async def generate_asset_prompts(project_id:str,body:AssetPromptRunCreate,reques
     operator_idea=body.operator_idea.strip()
     review_feedback=body.review_feedback.strip()
     rewrite_requested=bool(target_asset_id)
-    # Base character/scene/prop prompts use the new compiler. The resolver
-    # maps non-base visual classes to the previous clean path and pins fusion
-    # to legacy_supplement, so this flag cannot alter fusion generation.
-    prompt_composition_mode="base_asset"
+    prompt_composition_mode="clean_replace"
     if operator_idea:
         input_package["operator_idea"] = operator_idea
         input_package["workflow_constraint"] += " 本次包含用户补充想法：将其整合进当前资产 Prompt 草稿，但不得覆盖稳定身份锚点、必须保留/避免项、参考图职责、镜头连续性或 Prompt QA/生成确认门。"
@@ -6993,15 +6406,6 @@ async def generate_asset_prompts(project_id:str,body:AssetPromptRunCreate,reques
     assets_by_id={str(item.get("id")):item for item in doc.get("assets",[]) if isinstance(item,dict) and item.get("id")}
     for asset in assets_by_id.values():
         _apply_asset_generation_profile(asset,project_output_aspect_ratio)
-    previous_approved_prompt_states={}
-    approved_restore_keys=(
-        "prompt","promptVersion","promptPack","promptQuality","promptContractVersion","promptWorkflow",
-        "promptFieldOrder","promptCompositionMode","promptCompilerVersion","promptTargetSkill","promptQaDecision",
-        "promptStatus","mustPreserve","mustAvoid","generationChoiceStatus","generationStatus","imageGenerationEligible",
-    )
-    for asset_id,asset in assets_by_id.items():
-        if is_base_asset_class(_asset_class(asset)) and str(asset.get("promptQaDecision") or "")=="Approved":
-            previous_approved_prompt_states[asset_id]={key:deepcopy(asset[key]) for key in approved_restore_keys if key in asset}
     enriched_cards=[]
     visual_classes={"character","scene","prop","fusion","product","style"}
     for card in prompt_output.get("assets",[]):
@@ -7016,10 +6420,10 @@ async def generate_asset_prompts(project_id:str,body:AssetPromptRunCreate,reques
             # generated text in the run payload so the client can place it in
             # the right-side editor; the user must explicitly save it before a
             # Prompt version or QA state is created.
-            enriched_cards.append({**card,"assetClass":cls,"targetSkill":target_skill,"promptVersion":asset.get("promptVersion"),"promptQaDecision":asset.get("promptQaDecision") or "Pending","generationChoiceStatus":"user-confirmation-required","generationStatus":asset.get("generationStatus") or "planned","imageGenerationEligible":bool(card.get("imageGenerationEligible",cls in visual_classes)),"assetAspectRatio":generation_profile["aspect_ratio"],"assetGenerationSize":generation_profile["image_size"],"assetLayoutProfile":asset.get("assetLayoutProfile"),"assetProviderAspectRatio":asset.get("assetProviderAspectRatio")})
+            enriched_cards.append({**card,"assetClass":cls,"targetSkill":target_skill,"promptVersion":asset.get("promptVersion"),"promptQaDecision":asset.get("promptQaDecision") or "Pending","generationChoiceStatus":"user-confirmation-required","generationStatus":asset.get("generationStatus") or "planned","imageGenerationEligible":bool(card.get("imageGenerationEligible",cls in visual_classes)),"assetAspectRatio":generation_profile["aspect_ratio"],"assetGenerationSize":generation_profile["image_size"]})
             continue
         shots_for_card=[str(value) for value in card.get("relevantShots",[]) if value]
-        canonical=_canonical_prompt_card(card,asset,doc,shots_for_card,composition_mode=prompt_composition_mode)
+        canonical=_canonical_prompt_card(card,asset,doc,shots_for_card)
         prompt=str(canonical["prompt"] or "").strip()
         prompt_version=asset_audit.create_prompt_version(database,project_id,asset_id,cls,prompt,"asset-prompt-generator",target_skill,parent_version=None,change_reason="故事分镜就绪后由资产总控生成 Prompt 卡")
         prompt_pack=canonical["promptPack"]
@@ -7027,38 +6431,8 @@ async def generate_asset_prompts(project_id:str,body:AssetPromptRunCreate,reques
         preserve=[str(value) for value in canonical.get("mustPreserve",[]) if value]
         avoid=[str(value) for value in canonical.get("mustAvoid",[]) if value]
         asset.update({"assetClass":cls,"assetRole":asset.get("assetRole") or card.get("role") or cls,"prompt":prompt,"promptVersion":prompt_version["id"],"promptPack":prompt_pack,"promptQuality":prompt_quality,"promptContractVersion":canonical["promptContractVersion"],"promptWorkflow":canonical["promptWorkflow"],"promptFieldOrder":canonical["promptFieldOrder"],"promptTargetSkill":target_skill,"promptQaDecision":"Pending","generationChoice":"user-confirmation-required","generationChoiceStatus":"user-confirmation-required","generationStatus":"planned","promptStatus":"prompt-draft","promptRelevantShots":shots_for_card,"mustPreserve":preserve,"mustAvoid":avoid,"imageGenerationEligible":bool(card.get("imageGenerationEligible",cls in visual_classes))})
-        if canonical.get("promptCompositionMode"):
-            asset["promptCompositionMode"]=canonical["promptCompositionMode"]
-        if canonical.get("promptCompilerVersion"):
-            asset["promptCompilerVersion"]=canonical["promptCompilerVersion"]
         generation_profile=_apply_asset_generation_profile(asset,project_output_aspect_ratio)
-        enriched_cards.append({**canonical,"assetClass":cls,"targetSkill":target_skill,"promptVersion":prompt_version["id"],"promptQaDecision":"Pending","generationChoiceStatus":"user-confirmation-required","generationStatus":"planned","imageGenerationEligible":asset["imageGenerationEligible"],"assetAspectRatio":generation_profile["aspect_ratio"],"assetGenerationSize":generation_profile["image_size"],"assetLayoutProfile":asset.get("assetLayoutProfile"),"assetProviderAspectRatio":asset.get("assetProviderAspectRatio")})
-    prompt_cards=[
-        {
-            **card,
-            "assetAspectRatio":_asset_generation_profile(assets_by_id.get(str(card.get("id") or "")),project_output_aspect_ratio).get("aspect_ratio") if assets_by_id.get(str(card.get("id") or "")) else None,
-            "assetGenerationSize":_asset_generation_profile(assets_by_id.get(str(card.get("id") or "")),project_output_aspect_ratio).get("image_size") if assets_by_id.get(str(card.get("id") or "")) else None,
-            "assetLayoutProfile":assets_by_id.get(str(card.get("id") or ""),{}).get("assetLayoutProfile"),
-            "assetProviderAspectRatio":assets_by_id.get(str(card.get("id") or ""),{}).get("assetProviderAspectRatio"),
-        }
-        for card in prompt_cards
-    ]
-    prompt_consistency_summary={"status":"not_started","maxAutoRepairAttempts":PROMPT_CONSISTENCY_MAX_AUTO_REPAIRS,"passed":0,"failed":0,"assets":[]}
-    if not target_asset_id:
-        prompt_cards,enriched_cards,prompt_consistency_summary=await _run_initial_prompt_consistency_loop(
-            request,
-            project_id,
-            database,
-            doc,
-            assets_by_id,
-            prompt_cards,
-            enriched_cards,
-            prompt_input,
-            prompt_source_assets,
-            project_output_aspect_ratio,
-            previous_approved_prompt_states,
-        )
-        prompt_output={**prompt_output,"assets":prompt_cards,"promptConsistency":prompt_consistency_summary}
+        enriched_cards.append({**canonical,"assetClass":cls,"targetSkill":target_skill,"promptVersion":prompt_version["id"],"promptQaDecision":"Pending","generationChoiceStatus":"user-confirmation-required","generationStatus":"planned","imageGenerationEligible":asset["imageGenerationEligible"],"assetAspectRatio":generation_profile["aspect_ratio"],"assetGenerationSize":generation_profile["image_size"]})
     fusion_plans=[]
     prompt_plan_hints={str(item.get("fusionAssetId") or item.get("fusion_asset_id")):item for item in prompt_output.get("fusionPlans",[]) if isinstance(item,dict) and (item.get("fusionAssetId") or item.get("fusion_asset_id"))}
     for asset in ([] if target_asset_id else assets_by_id.values()):
@@ -7077,13 +6451,11 @@ async def generate_asset_prompts(project_id:str,body:AssetPromptRunCreate,reques
     doc["assets"]=list(assets_by_id.values())
     missing_a=[str(asset["id"]) for asset in doc["assets"] if str(asset.get("grade","")) in {"A","A+"} and not asset_audit.asset_readiness(asset).get("ready")]
     run_id=asset_audit.new_id("ASSETPROMPT")
-    prompt_consistency_status=str(prompt_consistency_summary.get("status") or "not_started")
-    run_status="prompt_drafts_ready" if target_asset_id or prompt_consistency_status=="passed" else "prompt_consistency_failed" if prompt_consistency_status=="needs_intent_revision" else "prompt_consistency_blocked"
-    now=utcnow(); doc.setdefault("assetPromptRuns",[]).append({"id":run_id,"status":run_status,"createdAt":now,"regulatorOutput":regulator_output,"promptOutput":prompt_output,"promptCards":enriched_cards,"fusionPlans":fusion_plans,"promptConsistency":prompt_consistency_summary,"missingAssetRegister":prompt_output.get("missingAssetRegister",[]),"dependencyTable":prompt_output.get("dependencyTable",[]),"routingPlan":prompt_output.get("routingPlan",[]),"nextActions":prompt_output.get("nextActions",[]),"reviewFeedback":review_feedback or None,"sourceQaRunId":body.source_qa_run_id,"operatorIdea":operator_idea or None,"assetIntentVersion":asset_intent_version})
-    doc["assetRegulator"]={**(doc.get("assetRegulator") if isinstance(doc.get("assetRegulator"),dict) else {}),"version":3,"status":run_status,"promptRunId":run_id,"auditedAt":now,"missingA":missing_a,"promptQaRequired":True,"generationConfirmationRequired":True,"promptConsistencyStatus":prompt_consistency_status,"promptGenerationBlocked":prompt_consistency_status not in {"passed","not_started"},"fusionPlans":fusion_plans,"missingAssetRegister":prompt_output.get("missingAssetRegister",[]),"dependencyTable":prompt_output.get("dependencyTable",[]),"routingPlan":prompt_output.get("routingPlan",[]),"assetIntentVersion":asset_intent_version}
+    now=utcnow(); doc.setdefault("assetPromptRuns",[]).append({"id":run_id,"status":"prompt_drafts_ready","createdAt":now,"regulatorOutput":regulator_output,"promptOutput":prompt_output,"promptCards":enriched_cards,"fusionPlans":fusion_plans,"missingAssetRegister":prompt_output.get("missingAssetRegister",[]),"dependencyTable":prompt_output.get("dependencyTable",[]),"routingPlan":prompt_output.get("routingPlan",[]),"nextActions":prompt_output.get("nextActions",[]),"reviewFeedback":review_feedback or None,"sourceQaRunId":body.source_qa_run_id,"operatorIdea":operator_idea or None,"assetIntentVersion":asset_intent_version})
+    doc["assetRegulator"]={**(doc.get("assetRegulator") if isinstance(doc.get("assetRegulator"),dict) else {}),"version":3,"status":"prompt_drafts_ready","promptRunId":run_id,"auditedAt":now,"missingA":missing_a,"promptQaRequired":True,"generationConfirmationRequired":True,"fusionPlans":fusion_plans,"missingAssetRegister":prompt_output.get("missingAssetRegister",[]),"dependencyTable":prompt_output.get("dependencyTable",[]),"routingPlan":prompt_output.get("routingPlan",[]),"assetIntentVersion":asset_intent_version}
     new_revision=save_project_document(request,doc,revision)
     board=_sync_asset_board_after_document(database,project_id,doc,new_revision)
-    return {"project_id":project_id,"revision":new_revision,"run":{"id":run_id,"status":run_status,"regulatorOutput":regulator_output,"promptOutput":prompt_output,"promptCards":enriched_cards,"fusionPlans":fusion_plans,"promptConsistency":prompt_consistency_summary,"missingA":missing_a,"operatorIdea":operator_idea or None,"assetIntentVersion":asset_intent_version},"story": {"project_id":project_id,"revision":new_revision,"story":story_document(doc),"checks":story_checks(doc)},"library":_library_payload(database,project_id,doc),"asset_board":board}
+    return {"project_id":project_id,"revision":new_revision,"run":{"id":run_id,"status":"prompt_drafts_ready","regulatorOutput":regulator_output,"promptOutput":prompt_output,"promptCards":enriched_cards,"fusionPlans":fusion_plans,"missingA":missing_a,"operatorIdea":operator_idea or None,"assetIntentVersion":asset_intent_version},"story": {"project_id":project_id,"revision":new_revision,"story":story_document(doc),"checks":story_checks(doc)},"library":_library_payload(database,project_id,doc),"asset_board":board}
 
 @app.post("/api/v2/projects/{project_id}/fusion-prompt-runs")
 async def generate_fusion_prompt(project_id:str,body:FusionPromptRunCreate,request:Request):
@@ -7316,64 +6688,21 @@ async def start_story_run(run_id:str,request:Request):
                 prepared={**prepared,"workflowMode":"storyboard_from_source","proposedScript":str(input_package.get("current_script") or ""),"sourceScript":str(input_package.get("current_script") or ""),"sourceScriptVersionId":input_package.get("source_script_version_id")}
             prepared=_normalise_storyboard_handoff(prepared,input_package)
             prepared.setdefault("workflowMode",input_package.get("workflow_mode"))
-            source_script=str(input_package.get("current_script") or "")
-            prepared["sourceScriptHash"]=str(input_package.get("source_script_hash") or hashlib.sha256(source_script.encode("utf-8")).hexdigest())
-            prepared["sourceBeatLedger"]=list(input_package.get("source_beat_ledger") or build_source_beat_ledger(source_script))
-            prepared["sourceBeatCoverage"]=storyboard_source_coverage(source_script,prepared,prepared.get("normalizationReport"),prepared["sourceBeatLedger"])
             prepared["shotBudgetAssessment"]=_storyboard_budget_assessment(prepared,input_package)
             prepared.setdefault("assetHandoff",{})
             prepared["assetHandoff"]={**(prepared.get("assetHandoff") if isinstance(prepared.get("assetHandoff"),dict) else {}),"handoffVersion":"storyboard-handoff-v1","sourceStoryboardVersionId":input_package.get("source_script_version_id"),"projectId":project_id,"targetGenerator":input_package.get("target_generator"),"returnExpected":"video-asset-regulator"}
             return prepared
 
-        repair_attempted=False
-        try:
-            result=prepare_storyboard_result(await _run_storyboard_agent(request,project_id,input_package))
-            issues=_validate_storyboard_output(result,input_package)
-        except ProviderError:
-            # Provider failures are transport/account/configuration failures,
-            # not candidate-contract failures.  Do not spend a second model
-            # request on contract repair (especially when the upstream account
-            # is out of quota or rate-limited); let the outer handler persist a
-            # failed run with the original provider category and message.
-            raise
+        result=prepare_storyboard_result(await _run_storyboard_agent(request,project_id,input_package))
+        issues=_validate_storyboard_output(result,input_package)
         retryable_contract_issues=bool(issues) and not any(issue.startswith(("shot_budget_exceeded", "generator_duration_limit")) for issue in issues)
         if retryable_contract_issues and not input_package.get("contract_repair"):
-            repair_attempted=True
-            repair_input={
-                **input_package,
-                "contract_repair":True,
-                "contract_repair_issues":issues,
-                "contract_repair_context":{
-                    "sourceBeatCoverage":result.get("sourceBeatCoverage") if isinstance(result,dict) else {},
-                    "normalizationReport":result.get("normalizationReport") if isinstance(result,dict) else {},
-                    "shots":result.get("shots",[]) if isinstance(result,dict) else [],
-                },
-            }
-            try:
-                result=prepare_storyboard_result(await _run_storyboard_agent(request,project_id,repair_input))
-                issues=_validate_storyboard_output(result,input_package)
-            except ProviderError as repair_error:
-                result={}
-                issues=[*issues,f"provider_repair_failed: {repair_error}"]
-        if issues and any(issue.startswith(("shot_budget_exceeded", "generator_duration_limit")) for issue in issues):
-            raise ProviderError("结构化输出不合法："+"; ".join(issues),"validation",422)
+            retry_input={**input_package,"contract_repair":True}
+            result=prepare_storyboard_result(await _run_storyboard_agent(request,project_id,retry_input))
+            issues=_validate_storyboard_output(result,input_package)
+            if not issues:result["contractRepairRetry"]=True
         if issues:
-            result["handoffStatus"]="handoff_not_ready"
-            result["acceptanceAllowed"]=False
-            result["scriptAcceptanceAllowed"]=(
-                str(input_package.get("workflow_mode") or "") != "storyboard_from_source"
-                and isinstance(result.get("proposedScript"),str)
-                and bool(result.get("proposedScript","").strip())
-                and not any(issue.startswith(("proposedScript", "source_script_mutation")) for issue in issues)
-            )
-            result["blockingIssues"]=[{"code":issue.split(":",1)[0],"message":issue} for issue in issues]
-        else:
-            result["handoffStatus"]="ready"
-            result["acceptanceAllowed"]=True
-            result["scriptAcceptanceAllowed"]=str(input_package.get("workflow_mode") or "") != "storyboard_from_source"
-        if repair_attempted:
-            result["contractRepairRetry"]=True
-            result["contractRepairSucceeded"]=not bool(issues)
+            raise ProviderError("结构化输出不合法："+"; ".join(issues),"validation",422)
         _set_chain(database,run_id,active_step="storyboard_review_required",status="storyboard_review_required",storyboard_output_json=database.encode(result),storyboard_run_id=asset_audit.new_id("RUN"),provider_profile_id=result.get("model"))
     except Exception as exc:
         client_status,kind,retryable,error_json=classify_failure(exc)
@@ -7391,15 +6720,9 @@ async def accept_storyboard(run_id:str,body:StoryboardAcceptRequest,request:Requ
     database=db(request); row=_chain_row(database,run_id)
     if not row:raise HTTPException(404,"脚本优化运行不存在。")
     if row["status"]!="storyboard_review_required":raise HTTPException(409,"运行不处于待审阅状态。")
-    output=database.decode(row["storyboard_output_json"]) or {}; project_id=row["project_id"]
+    output=database.decode(row["storyboard_output_json"]); project_id=row["project_id"]; doc,rev=await read_project_doc(request,project_id)
     input_package=database.decode(row["input_json"],{})
     workflow_mode=str(input_package.get("workflow_mode") or output.get("workflowMode") or "optimize_script_and_storyboard")
-    if body.scope == "script_only":
-        if workflow_mode == "storyboard_from_source" or output.get("scriptAcceptanceAllowed") is False:
-            raise HTTPException(409,{"code":"storyboard_not_ready","message":"当前候选的拍摄剧本尚未通过完整性检查，不能单独接受剧本。","issues":output.get("blockingIssues") or []})
-    elif output.get("acceptanceAllowed") is not True:
-        raise HTTPException(409,{"code":"storyboard_not_ready","message":"当前分镜候选尚未通过剧本覆盖检查，不能接受镜头。","issues":output.get("blockingIssues") or []})
-    doc,rev=await read_project_doc(request,project_id)
     direct_source=str(input_package.get("current_script") or output.get("sourceScript") or "")
     proposed=direct_source if workflow_mode=="storyboard_from_source" else str(output.get("proposedScript") or "")
     proposed_shots=[_canonical_story_shot(item) for item in output.get("shots",[]) if isinstance(item,dict)]
@@ -7490,7 +6813,7 @@ async def accept_regulator(run_id:str,request:Request):
     handoff_by_id={str(item.get("assetId") or item.get("id")):item for item in handoff_items if item.get("assetId") or item.get("id")}
     existing={a.get("id"):a for a in doc.get("assets",[])}
     existing_ids={str(asset_id) for asset_id in existing if asset_id}
-    extracted_ids={str(item.get("id") or item.get("assetId") or item.get("asset_id")) for item in output.get("assetExtraction",[]) if isinstance(item,dict) and (item.get("id") or item.get("assetId") or item.get("asset_id"))}
+    extracted_ids={str(item.get("id")) for item in output.get("assetExtraction",[]) if isinstance(item,dict) and item.get("id")}
     known_ids={str(asset_id) for asset_id in existing if asset_id} | extracted_ids | set(handoff_by_id)
     handoff_issues=[]; reference_edge_count=0; reference_ids=[]
     for asset_id,item in handoff_by_id.items():
@@ -7507,27 +6830,9 @@ async def accept_regulator(run_id:str,request:Request):
             elif ref_id==asset_id:handoff_issues.append({"code":"reference_self_reference","asset_id":asset_id,"reference_id":ref_id,"message":"资产不得引用自身。"})
             elif ref_id not in known_ids:handoff_issues.append({"code":"reference_id_unknown","asset_id":asset_id,"reference_id":ref_id,"message":f"参考资产 {ref_id} 不存在于当前交接包。"})
             if not role:handoff_issues.append({"code":"reference_role_missing","asset_id":asset_id,"reference_id":ref_id,"message":"每张参考图必须声明控制职责。"})
-    allowed_audio_text_statuses={
-        "pending","awaiting-confirmation","user-confirmation-required",
-        "not-applicable","not_applicable","not-applicable-no-dialogue",
-        "not_applicable_no_dialogue","candidate","confirmed","approved",
-        "locked","final",
-    }
-    non_voice_sound_modes={"sound-design-planning","sound-design","foley","sfx","music"}
-    no_voice_markers=("无语音","无对白","无旁白","no dialogue","no narration","no voice")
     for index,sound in enumerate(handoff.get("soundRequirements") or []):
-        if not isinstance(sound,dict):
-            continue
-        audio_details=sound.get("audioDetails") if isinstance(sound.get("audioDetails"),dict) else {}
-        source_text=sound.get("sourceText") or sound.get("source_text") or audio_details.get("sourceText") or audio_details.get("source_text")
-        text_status=str(sound.get("textStatus") or sound.get("text_status") or audio_details.get("textStatus") or audio_details.get("text_status") or "").strip().lower().replace("_","-")
-        required=sound.get("required") is not False
-        generation_mode=str(sound.get("generationMode") or sound.get("generation_mode") or "").strip().lower().replace("_","-")
-        voice_identity=str(sound.get("voiceIdentity") or audio_details.get("voiceIdentity") or "").strip().lower()
-        is_non_voice_plan=(generation_mode in non_voice_sound_modes or any(marker in voice_identity for marker in no_voice_markers))
-        has_explicit_status=text_status in allowed_audio_text_statuses
-        if not source_text and not has_explicit_status and not is_non_voice_plan:
-            handoff_issues.append({"code":"audio_source_text_missing","path":f"assetHandoff.soundRequirements[{index}]","message":"需要语音文本的声音资产必须提供朗读文本或明确待确认状态。"})
+        if isinstance(sound,dict) and not (sound.get("sourceText") or sound.get("source_text") or sound.get("textStatus")):
+            handoff_issues.append({"code":"audio_source_text_missing","path":f"assetHandoff.soundRequirements[{index}]","message":"声音资产必须提供朗读文本或明确待确认状态。"})
     for requirement in output.get("assetRequirements",[]):
         if isinstance(requirement,dict) and requirement.get("assetId") and str(requirement.get("assetId")) not in known_ids:
             handoff_issues.append({"code":"asset_id_unknown","shot_id":requirement.get("shotId"),"asset_id":requirement.get("assetId"),"message":f"镜头引用的资产 {requirement.get('assetId')} 未在交接包或项目资产中登记。"})
@@ -7535,19 +6840,17 @@ async def accept_regulator(run_id:str,request:Request):
         raise HTTPException(422,{"code":"handoff_not_ready","message":"故事到资产交接校验失败。","issues":handoff_issues})
     # Apply extracted assets (create missing logical assets, keep stable IDs).
     for item in output.get("assetExtraction",[]):
-        if not isinstance(item,dict):continue
-        item_id=str(item.get("id") or item.get("assetId") or item.get("asset_id") or "").strip()
-        if not item_id:continue
-        handoff_item=handoff_by_id.get(item_id,{})
+        if not isinstance(item,dict) or not item.get("id"):continue
+        handoff_item=handoff_by_id.get(str(item["id"]),{})
         cls=item.get("assetClass") or item.get("class") or "unknown"
         skill={cls:"character","scene":"scene","prop":"prop","fusion":"fusion","audio":"audio"}.get(cls,"regulator")
         refs=handoff_item.get("generationReferenceAssets") or handoff_item.get("generation_reference_assets") or handoff_item.get("references") or []
         assignments=handoff_item.get("referenceAssignments") or handoff_item.get("referenceRoles") or []
         metadata={"asset_class":cls,"production_role":handoff_item.get("productionRole") or item.get("role") or "","required_readiness":handoff_item.get("requiredReadiness") or "production","relevant_shots":handoff_item.get("relevantShots") or [],"depends_on_asset_ids":handoff_item.get("dependsOnAssetIds") or [],"generationReferenceAssets":refs,"generation_reference_assets":refs,"referenceRoles":assignments,"reference_roles":assignments,"prompt_context":handoff_item.get("promptContext") or item.get("promptContext") or "","seedanceCompatibility":handoff_item.get("seedanceCompatibility") or {},"base_asset":handoff_item.get("productionRole") == "base_asset" or item.get("productionRole") == "base_asset"}
-        if item_id in existing:
-            existing[item_id]["assetMetadata"]={**(_asset_metadata(existing[item_id]) or {}),**metadata}
+        if item["id"] in existing:
+            existing[item["id"]]["assetMetadata"]={**(_asset_metadata(existing[item["id"]]) or {}),**metadata}
             continue
-        existing[item_id]={"id":item_id,"name":item.get("name") or handoff_item.get("name") or item_id,"type":asset_audit.CLASS_TYPE_LABEL.get(cls,cls),"assetClass":cls,"grade":item.get("priority") or item.get("grade") or handoff_item.get("priority") or "B","status":"missing","note":item.get("role") or handoff_item.get("productionRole") or "","skill":skill,"assetMetadata":metadata}
+        existing[item["id"]]={"id":item["id"],"name":item.get("name") or handoff_item.get("name") or item["id"],"type":asset_audit.CLASS_TYPE_LABEL.get(cls,cls),"assetClass":cls,"grade":item.get("priority") or item.get("grade") or handoff_item.get("priority") or "B","status":"missing","note":item.get("role") or handoff_item.get("productionRole") or "","skill":skill,"assetMetadata":metadata}
     doc["assets"]=list(existing.values())
     # Apply per-shot asset requirements.
     req_map={}
@@ -7609,7 +6912,7 @@ async def accept_regulator(run_id:str,request:Request):
         metadata=_asset_metadata(asset)
         production_preview.append({"assetId":asset_id,"position":len(production_preview)+1,"dependsOnAssetIds":metadata.get("depends_on_asset_ids") or []})
         preview_seen.add(asset_id)
-    handoff_receipt={"createdAssets":[str(item.get("id") or item.get("assetId") or item.get("asset_id")) for item in output.get("assetExtraction",[]) if isinstance(item,dict) and (item.get("id") or item.get("assetId") or item.get("asset_id")) and str(item.get("id") or item.get("assetId") or item.get("asset_id")) not in existing_ids],"updatedAssets":[str(item.get("id") or item.get("assetId") or item.get("asset_id")) for item in output.get("assetExtraction",[]) if isinstance(item,dict) and (item.get("id") or item.get("assetId") or item.get("asset_id")) and str(item.get("id") or item.get("assetId") or item.get("asset_id")) in existing_ids],"shotAssetEdges":sum(len(value) for value in req_map.values()),"referenceAssetEdges":reference_edge_count,"resolvedAssetIds":sorted(all_asset_ids & (set(reference_ids)|extracted_ids)),"unresolvedAssetIds":unresolved_refs,"awaitingReferenceAssets":awaiting_refs,"productionOrderPreview":production_preview,"fusionSlotStates":[{"shotId":shot.get("id"),"status":"awaiting_assets" if shot.get("assetRequirements") else "not_required"} for shot in doc.get("shots",[])],"status":"ready"}
+    handoff_receipt={"createdAssets":[str(item.get("id")) for item in output.get("assetExtraction",[]) if isinstance(item,dict) and item.get("id") and str(item.get("id")) not in existing_ids],"updatedAssets":[str(item.get("id")) for item in output.get("assetExtraction",[]) if isinstance(item,dict) and item.get("id") and str(item.get("id")) in existing_ids],"shotAssetEdges":sum(len(value) for value in req_map.values()),"referenceAssetEdges":reference_edge_count,"resolvedAssetIds":sorted(all_asset_ids & (set(reference_ids)|extracted_ids)),"unresolvedAssetIds":unresolved_refs,"awaitingReferenceAssets":awaiting_refs,"productionOrderPreview":production_preview,"fusionSlotStates":[{"shotId":shot.get("id"),"status":"awaiting_assets" if shot.get("assetRequirements") else "not_required"} for shot in doc.get("shots",[])],"status":"ready"}
     doc["assetHandoffReceipt"]=handoff_receipt
     doc["assetRegulator"]={"version":2,"status":"approved" if not missingA else "draft","auditedAt":utcnow(),"missingA":missingA,"dependencyVersion":"v02","handoffReceipt":handoff_receipt}
     doc.setdefault("storyWorkflowRuns",[]).append({"runId":run_id,"acceptedAt":utcnow(),"step":"regulator"})
@@ -7804,10 +7107,6 @@ async def generate_asset_image_v3(project_id:str,logical_asset_id:str,body:Asset
     if _asset_class(asset) not in ASSET_BOARD_VISUAL_CLASSES:raise HTTPException(409,"当前资产不是视觉图像资产，不能走图片生成流程。")
     if _asset_class(asset)=="fusion" and asset.get("fusionPromptSource")!="fusion-connection-agent":raise HTTPException(409,"融合资产必须先完成实际连线并生成正式融合 Prompt。")
     if asset.get("promptQaDecision")!="Approved":raise HTTPException(409,"请先完成 Prompt QA，Prompt 通过后才能进入图片生成。")
-    if is_base_asset_class(_asset_class(asset)):
-        consistency_review=asset.get("promptConsistencyReview") if isinstance(asset.get("promptConsistencyReview"),dict) else None
-        if asset.get("promptGenerationBlocked") or (consistency_review and consistency_review.get("status")!="passed"):
-            raise HTTPException(409,"基础资产尚未通过 Prompt 一致性审核，不能进入图片生成。请返回资产创作意图界面处理审核反馈。")
     current_prompt_version=str(asset.get("promptVersion") or "")
     requested_prompt_version=str(body.prompt_version or current_prompt_version or "")
     if not requested_prompt_version:raise HTTPException(409,"必须指定当前 Approved Prompt 版本。")
@@ -8843,66 +8142,6 @@ def _asset_class(asset:dict[str,Any])->str:
     return asset_audit.asset_class_for_skill(asset.get("skill")) or asset_audit.classify_by_role(asset.get("assetRole") or asset.get("type"))
 
 
-# The pre-prompt gate is intentionally narrower than the complete asset
-# manifest.  Fusion, shot-continuity and audio records remain in the project
-# and downstream production graph, but they do not ask the operator to define
-# a second "asset" at this stage.
-ASSET_INTENT_BASE_CLASSES=frozenset({"character","scene","prop","product","style"})
-ASSET_INTENT_AUDIO_CLASSES=frozenset({"audio","music","sfx"})
-
-
-def _asset_intent_is_base_asset(asset:dict[str,Any])->bool:
-    return _asset_class(asset) in ASSET_INTENT_BASE_CLASSES
-
-
-def _asset_intent_system_plan_kind(asset:dict[str,Any])->tuple[str,str]:
-    """Classify non-base records for a compact, read-only follow-up summary."""
-    asset_class=_asset_class(asset)
-    if asset_class in ASSET_INTENT_AUDIO_CLASSES:
-        return "audio","声音资产规划"
-    metadata=_asset_metadata(asset)
-    tokens=" ".join(
-        str(value or "")
-        for value in (
-            asset.get("id"), asset.get("name"), asset_class, asset.get("assetRole"),
-            asset.get("type"), asset.get("skill"), metadata.get("asset_role"),
-            metadata.get("assetRole"), metadata.get("production_role"), metadata.get("productionRole"),
-        )
-    ).lower()
-    shot_markers=(
-        "shot_reference", "shot-reference", "first_frame", "first-frame", "last_frame", "last-frame",
-        "keyframe", "tail", "首帧", "尾帧", "关键帧", "镜头参考", "continuity", "seedance",
-    )
-    if any(marker in tokens for marker in shot_markers):
-        return "shot_continuity","镜头首尾帧 / 连续性规划"
-    if asset_class=="fusion" or any(marker in tokens for marker in ("fusion","blend","融合")):
-        return "fusion","融合资产规划"
-    return "system_other","系统后续规划"
-
-
-def _asset_intent_system_plan_payload(asset:dict[str,Any],doc:dict[str,Any])->dict[str,Any]:
-    kind,label=_asset_intent_system_plan_kind(asset)
-    messages={
-        "fusion":"基础资产准备完成后，系统根据镜头关系自动规划融合，不需要单独填写。",
-        "shot_continuity":"基础资产与必要融合完成后，OpenCode API 自动生成首帧、尾帧和镜头连续性方案。",
-        "audio":"该内容由声音资产工坊管理，不属于视觉资产创作意图。",
-        "system_other":"该内容由后续专业流程管理，不需要在本轮填写。",
-    }
-    return {
-        "assetId":str(asset.get("id") or ""),
-        "assetClass":_asset_class(asset),
-        "assetName":str(asset.get("name") or asset.get("id") or ""),
-        "assetRole":str(asset.get("assetRole") or asset.get("note") or ""),
-        "relevantShots":_asset_intent_relevant_shots(doc,asset),
-        "grade":str(asset.get("grade") or "B"),
-        "kind":kind,
-        "label":label,
-        "status":"system_planned",
-        "message":messages[kind],
-        "readOnly":True,
-    }
-
-
 def _asset_aspect_ratio_override(asset:dict[str,Any]|None)->str|None:
     """Read an intentional per-asset override without treating system output as one."""
     if not isinstance(asset,dict):return None
@@ -8930,8 +8169,6 @@ def _apply_asset_generation_profile(asset:dict[str,Any],project_output_aspect_ra
     asset["assetAspectRatio"]=profile["aspect_ratio"]
     asset["assetGenerationSize"]=profile["image_size"]
     asset["assetAspectRatioSource"]=profile["source"]
-    asset["assetLayoutProfile"]=asset_layout_profile(_asset_class(asset))
-    asset["assetProviderAspectRatio"]=provider_aspect_ratio_for_image_size(profile.get("image_size"))
     return profile
 
 
@@ -8951,9 +8188,6 @@ def _asset_generation_policy(assets:Any,project_output_aspect_ratio:Any="9:16")-
             "aspectRatio":profile["aspect_ratio"],
             "imageSize":profile["image_size"],
             "source":profile["source"],
-            "layoutProfile":asset_layout_profile(_asset_class(asset)),
-            "providerAspectRatio":provider_aspect_ratio_for_image_size(profile.get("image_size")),
-            "ratioMode":"semantic_design_ratio" if provider_aspect_ratio_for_image_size(profile.get("image_size")) not in {None,profile.get("aspect_ratio")} else "native",
         })
     return {
         "projectOutputAspectRatio":project_ratio,
@@ -9006,7 +8240,7 @@ def _asset_intent_relevant_shots(doc:dict[str,Any],asset:dict[str,Any])->list[st
 def _asset_intent_manifest_fingerprint(doc:dict[str,Any])->str:
     manifest=[]
     for asset in doc.get("assets",[]):
-        if not isinstance(asset,dict) or not asset.get("id") or not _asset_intent_is_base_asset(asset):continue
+        if not isinstance(asset,dict) or not asset.get("id"):continue
         manifest.append({
             "id":str(asset.get("id")),
             "name":str(asset.get("name") or asset.get("id")),
@@ -9038,7 +8272,6 @@ def _asset_intent_entry_payload(asset:dict[str,Any],entry:dict[str,Any]|None,doc
     asset_id=str(asset.get("id") or "")
     asset_class=_asset_class(asset)
     is_fusion=asset_class=="fusion"
-    generation_profile=_asset_generation_profile(asset,doc.get("ratio") or "9:16")
     entry=entry if isinstance(entry,dict) else {}
     if is_fusion:
         mode="script_only"; status="submitted"; user_text=""
@@ -9060,12 +8293,6 @@ def _asset_intent_entry_payload(asset:dict[str,Any],entry:dict[str,Any]|None,doc
         "mode":mode,
         "status":status,
         "warningSummary":warning_summary,
-        "assetAspectRatio":generation_profile.get("aspect_ratio"),
-        "assetGenerationSize":generation_profile.get("image_size"),
-        "assetAspectRatioSource":generation_profile.get("source"),
-        "assetLayoutProfile":asset_layout_profile(asset_class),
-        "assetProviderAspectRatio":provider_aspect_ratio_for_image_size(generation_profile.get("image_size")),
-        "promptConsistencyReview":deepcopy(asset.get("promptConsistencyReview")) if isinstance(asset.get("promptConsistencyReview"),dict) else None,
         "updatedAt":entry.get("updatedAt"),
         "readOnly":is_fusion,
     }
@@ -9073,7 +8300,7 @@ def _asset_intent_entry_payload(asset:dict[str,Any],entry:dict[str,Any]|None,doc
 
 def _asset_intent_progress(doc:dict[str,Any],state:dict[str,Any])->dict[str,Any]:
     entries={str(item.get("assetId")):item for item in state.get("entries",[]) if isinstance(item,dict) and item.get("assetId")}
-    assets=[asset for asset in doc.get("assets",[]) if isinstance(asset,dict) and asset.get("id") and _asset_intent_is_base_asset(asset)]
+    assets=[asset for asset in doc.get("assets",[]) if isinstance(asset,dict) and asset.get("id") and _asset_class(asset)!="fusion"]
     handled=0
     for asset in assets:
         entry=entries.get(str(asset.get("id"))) or {}
@@ -9090,16 +8317,13 @@ def _asset_intent_envelope(project_id:str,revision:int,doc:dict[str,Any])->dict[
     current_fingerprint=_asset_intent_manifest_fingerprint(doc)
     current_story_revision=_asset_intent_story_revision(doc)
     entries={str(item.get("assetId")):item for item in state.get("entries",[]) if isinstance(item,dict) and item.get("assetId")}
-    current_assets=[asset for asset in doc.get("assets",[]) if isinstance(asset,dict) and asset.get("id")]
-    base_assets=[asset for asset in current_assets if _asset_intent_is_base_asset(asset)]
-    system_plans=[_asset_intent_system_plan_payload(asset,doc) for asset in current_assets if not _asset_intent_is_base_asset(asset)]
-    assets=[_asset_intent_entry_payload(asset,entries.get(str(asset.get("id"))),doc) for asset in base_assets]
+    assets=[_asset_intent_entry_payload(asset,entries.get(str(asset.get("id"))),doc) for asset in doc.get("assets",[]) if isinstance(asset,dict) and asset.get("id")]
     manifest_stale=bool(state.get("sourceAssetManifestFingerprint") and state.get("sourceAssetManifestFingerprint")!=current_fingerprint)
     story_stale=bool(state.get("sourceStoryRevision") and state.get("sourceStoryRevision")!=current_story_revision)
     stale=manifest_stale or story_stale
     progress=_asset_intent_progress(doc,state)
     warnings=[]
-    if not assets and not system_plans:
+    if not assets:
         warnings.append("当前项目还没有已登记的 AI 资产清单，请先完成资产总控交接。")
     if manifest_stale:
         warnings.append("资产清单已经变化，当前意图草稿需要重新确认。")
@@ -9115,11 +8339,9 @@ def _asset_intent_envelope(project_id:str,revision:int,doc:dict[str,Any])->dict[
         "currentAssetManifestFingerprint":current_fingerprint,
         "manifestStale":stale,
         "assets":assets,
-        "systemPlans":system_plans,
-        "summary":{"baseAssetCount":len(assets),"systemPlanCount":len(system_plans)},
         "progress":progress,
         "warnings":warnings,
-        "assetManifestReady":bool(assets or system_plans),
+        "assetManifestReady":bool(assets),
     }
 
 
@@ -9517,7 +8739,7 @@ def _library_payload(database:Database,project_id:str,doc:dict[str,Any])->dict[s
         )
         prompt_value=canonical_prompt["prompt"] if prompt_value else ""
         prompt_quality=canonical_prompt["promptQuality"] if prompt_value else asset.get("promptQuality")
-        item={**asset,"assetClass":asset_class,"assetAspectRatio":generation_profile["aspect_ratio"],"assetGenerationSize":generation_profile["image_size"],"assetAspectRatioSource":generation_profile["source"],"assetLayoutProfile":asset.get("assetLayoutProfile") or asset_layout_profile(asset_class),"assetProviderAspectRatio":asset.get("assetProviderAspectRatio") or provider_aspect_ratio_for_image_size(generation_profile.get("image_size")),"promptConsistencyReview":asset.get("promptConsistencyReview"),"prompt":prompt_value,"promptPack":canonical_prompt["promptPack"],"promptQuality":prompt_quality,"promptContractVersion":canonical_prompt["promptContractVersion"],"promptWorkflow":canonical_prompt["promptWorkflow"],"promptFieldOrder":canonical_prompt["promptFieldOrder"],"assetMetadata":_asset_metadata(asset),"readiness":readiness,"registered_ready":readiness.get("registered_ready",False),"production_ready":readiness.get("production_ready",False),"next_action":readiness.get("next_action"),"artifacts":linked_artifacts,"artifact_count":len(linked_artifacts),"active_artifact_count":len(live_linked_artifacts),"archived_artifact_count":len(linked_artifacts)-len(live_linked_artifacts),"versions":versions_by_logical.get(logical_id,[]),"promptVersions":prompts_by_logical.get(logical_id,[]),"references":references,"dependencies":dependencies,"comparisons":comparisons}
+        item={**asset,"assetClass":asset_class,"assetAspectRatio":generation_profile["aspect_ratio"],"assetGenerationSize":generation_profile["image_size"],"assetAspectRatioSource":generation_profile["source"],"prompt":prompt_value,"promptPack":canonical_prompt["promptPack"],"promptQuality":prompt_quality,"promptContractVersion":canonical_prompt["promptContractVersion"],"promptWorkflow":canonical_prompt["promptWorkflow"],"promptFieldOrder":canonical_prompt["promptFieldOrder"],"assetMetadata":_asset_metadata(asset),"readiness":readiness,"registered_ready":readiness.get("registered_ready",False),"production_ready":readiness.get("production_ready",False),"next_action":readiness.get("next_action"),"artifacts":linked_artifacts,"artifact_count":len(linked_artifacts),"active_artifact_count":len(live_linked_artifacts),"archived_artifact_count":len(linked_artifacts)-len(live_linked_artifacts),"versions":versions_by_logical.get(logical_id,[]),"promptVersions":prompts_by_logical.get(logical_id,[]),"references":references,"dependencies":dependencies,"comparisons":comparisons}
         item["workflow"]=_asset_workflow(item,linked_artifacts,versions_by_logical.get(logical_id,[]),readiness)
         if asset_class=="fusion":
             item.update(_fusion_prompt_state(database,project_id,doc,asset))
@@ -9526,15 +8748,7 @@ def _library_payload(database:Database,project_id:str,doc:dict[str,Any])->dict[s
             item["fusionSlot"]=_is_fusion_slot(asset)
             item["fusionSourceAssetIds"]=auto_gate["source_asset_ids"]
             item["fusionSourceStatuses"]=auto_gate["source_statuses"]
-            # Preserve an explicit lifecycle block written on the fusion
-            # asset itself (for example the initial awaiting-connection
-            # state).  The readiness gate is still used for legacy records
-            # that do not carry this field, but it must not turn a persisted
-            # false into true while projecting the library payload.
-            if asset.get("fusionPromptGenerationAllowed") is False:
-                item["fusionPromptGenerationAllowed"]=False
-            else:
-                item["fusionPromptGenerationAllowed"]=auto_gate["allowed"]
+            item["fusionPromptGenerationAllowed"]=auto_gate["allowed"]
             item["fusionPromptBlockedReason"]=auto_gate["reason"]
             item["fusionPromptMissingSourceIds"]=auto_gate["missing_source_ids"]
             item["fusionPromptBlockedSourceIds"]=auto_gate["blocked_source_ids"]
@@ -10652,10 +9866,6 @@ def _auto_approve_prompt_after_registration(database: Database, artifact: Any, a
     attached to the approved artifact, and only when neither the asset nor the
     Prompt version carries an explicit negative decision.
     """
-    if is_base_asset_class(_asset_class(asset)):
-        consistency_review=asset.get("promptConsistencyReview") if isinstance(asset.get("promptConsistencyReview"),dict) else None
-        if asset.get("promptGenerationBlocked") or (consistency_review and consistency_review.get("status")!="passed"):
-            return None
     prompt_version_id = str(artifact["prompt_version"] or "").strip()
     current_prompt_version_id = str(asset.get("promptVersion") or "").strip()
     if not prompt_version_id or prompt_version_id != current_prompt_version_id:
@@ -10832,8 +10042,7 @@ async def resolve_artifact(artifact_id:str,body:ResolutionRequest,request:Reques
         doc,rev=await read_project_doc(request,project_id); asset=_project_asset(doc,logical)
         base_prompt=asset.get("prompt") or ""
         source="revision" if body.action=="revise_prompt" else "rebuild"
-        requested_mode="base_asset" if is_base_asset_class(_asset_class(asset)) else "legacy_supplement"
-        canonical=_canonical_prompt_for_asset(doc,asset,base_prompt,composition_mode=requested_mode)
+        canonical=_canonical_prompt_for_asset(doc,asset,base_prompt)
         prompt=str(canonical["prompt"] or "").strip()
         pv=asset_audit.create_prompt_version(database,project_id,logical,cls,prompt,source,asset_audit.QA_OWNER_BY_CLASS.get(cls),parent_version=None,change_reason=body.reason or ("修订 Prompt" if source=="revision" else "完全重建 Prompt"),source_qa_run_id=getattr(body,"source_qa_run_id",None),rebuilt_from_failure_ids=[])
         # Record a domain-skill workflow run for the prompt work.
@@ -10843,10 +10052,6 @@ async def resolve_artifact(artifact_id:str,body:ResolutionRequest,request:Reques
             c.execute("INSERT INTO workflow_runs(id,project_id,skill_id,skill_version,status,input_json,gate_result_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",(wrid,project_id,skill,manifest["skill_version"],"validated",database.encode({"purpose":source,"logical_asset_id":logical,"prompt_version":pv["id"],"source_qa_run_id":row["qa_run"] if False else None}),"{}",utcnow(),utcnow()))
         def _up(a):
             a.update({"prompt":prompt,"promptVersion":pv["id"],"promptQaDecision":"Pending","generationChoice":"user-confirmation-required","promptPack":canonical["promptPack"],"promptQuality":canonical["promptQuality"],"promptContractVersion":canonical["promptContractVersion"],"promptWorkflow":canonical["promptWorkflow"],"promptFieldOrder":canonical["promptFieldOrder"],"mustPreserve":canonical["promptPack"].get("mustPreserve") or a.get("mustPreserve") or [],"mustAvoid":canonical["promptPack"].get("mustAvoid") or a.get("mustAvoid") or []})
-            if canonical.get("promptCompositionMode"):
-                a["promptCompositionMode"] = canonical["promptCompositionMode"]
-            if canonical.get("promptCompilerVersion"):
-                a["promptCompilerVersion"] = canonical["promptCompilerVersion"]
         await _update_project_asset(request,project_id,logical,_up)
         asset_audit.record_event(database,project_id,artifact_id,logical,row["status"],"prompt_revision" if source=="revision" else "prompt_rebuild",{"prompt_version":pv["id"],"workflow_run_id":wrid})
         return {"ok":True,"action":body.action,"prompt_version":pv,"workflow_run_id":wrid,"next":"prompt_qa_required"}
@@ -10871,15 +10076,10 @@ async def create_prompt_version(project_id:str,logical_asset_id:str,body:PromptC
     database=db(request); doc,_=await read_project_doc(request,project_id); asset=_project_asset(doc,logical_asset_id)
     cls=asset_audit.asset_class_for_skill(asset.get("skill")) or asset_audit.classify_by_role(asset.get("type"))
     if cls=="fusion" and body.source!="fusion-connection-agent":raise HTTPException(409,"融合资产的正式 Prompt 只能由确认连线后的定向融合流程生成。")
-    requested_mode="base_asset" if is_base_asset_class(cls) else "legacy_supplement"
-    canonical=_canonical_prompt_for_asset(doc,asset,body.prompt,composition_mode=requested_mode)
+    canonical=_canonical_prompt_for_asset(doc,asset,body.prompt)
     prompt=str(canonical["prompt"] or "").strip()
     pv=asset_audit.create_prompt_version(database,project_id,logical_asset_id,cls,prompt,body.source,body.skill_id or asset_audit.QA_OWNER_BY_CLASS.get(cls),parent_version=None,change_reason=body.change_reason,source_qa_run_id=body.source_qa_run_id,rebuilt_from_failure_ids=body.rebuilt_from_failure_ids)
     asset.update({"prompt":prompt,"promptVersion":pv["id"],"promptQaDecision":"Pending","generationChoice":"user-confirmation-required","promptPack":canonical["promptPack"],"promptQuality":canonical["promptQuality"],"promptContractVersion":canonical["promptContractVersion"],"promptWorkflow":canonical["promptWorkflow"],"promptFieldOrder":canonical["promptFieldOrder"],"mustPreserve":canonical["promptPack"].get("mustPreserve") or asset.get("mustPreserve") or [],"mustAvoid":canonical["promptPack"].get("mustAvoid") or asset.get("mustAvoid") or []})
-    if canonical.get("promptCompositionMode"):
-        asset["promptCompositionMode"] = canonical["promptCompositionMode"]
-    if canonical.get("promptCompilerVersion"):
-        asset["promptCompilerVersion"] = canonical["promptCompilerVersion"]
     next_revision=save_project_document(request,doc,_get_rev(db(request),project_id))
     board=_sync_asset_board_after_document(database,project_id,doc,next_revision)
     library=_library_payload(database,project_id,doc)
@@ -10897,10 +10097,6 @@ async def prompt_qa_decision(prompt_version_id:str,body:PromptQADecision,request
     doc,rev=await read_project_doc(request,row["project_id"]); asset=_project_asset(doc,row["logical_asset_id"])
     before_asset=json.loads(json.dumps(asset,ensure_ascii=False))
     if _asset_class(asset)=="fusion" and asset.get("fusionPromptSource")!="fusion-connection-agent":raise HTTPException(409,"融合资产必须先完成实际连线并生成正式融合 Prompt。")
-    if body.decision=="Approved" and is_base_asset_class(_asset_class(asset)):
-        consistency_review=asset.get("promptConsistencyReview") if isinstance(asset.get("promptConsistencyReview"),dict) else None
-        if asset.get("promptGenerationBlocked") or (consistency_review and consistency_review.get("status")!="passed"):
-            raise HTTPException(409,"基础资产尚未通过 Prompt 一致性审核，暂不能批准该 Prompt；请返回资产创作意图界面处理审核反馈。")
     status={"Approved":"prompt_qa_approved","Needs revision":"prompt_qa_needs_revision","Blocked":"prompt_qa_blocked"}[body.decision]
     if body.decision=="Approved":
         report=body.report if isinstance(body.report,dict) else {}
@@ -11031,17 +10227,12 @@ async def create_prompt_version_v3(project_id:str,logical_asset_id:str,body:Prom
     before_asset=json.loads(json.dumps(asset,ensure_ascii=False))
     cls=_asset_class(asset)
     if cls=="fusion" and body.source!="fusion-connection-agent":raise HTTPException(409,"融合资产的正式 Prompt 只能由确认连线后的定向融合流程生成。")
-    requested_mode="base_asset" if is_base_asset_class(cls) else "legacy_supplement"
-    canonical=_canonical_prompt_for_asset(doc,asset,body.prompt,composition_mode=requested_mode)
+    canonical=_canonical_prompt_for_asset(doc,asset,body.prompt)
     prompt=str(canonical["prompt"] or "").strip()
     latest=asset_audit.get_prompt_version(database,None,project_id,logical_asset_id)
     with database.connect() as connection:
         pv=asset_audit.create_prompt_version(database,project_id,logical_asset_id,cls,prompt,body.source,body.skill_id or asset_audit.QA_OWNER_BY_CLASS.get(cls),parent_version=int(latest["version"]) if latest else None,change_reason=body.change_reason,source_qa_run_id=body.source_qa_run_id,rebuilt_from_failure_ids=body.rebuilt_from_failure_ids,connection=connection)
         asset.update({"prompt":prompt,"promptVersion":pv["id"],"promptQaDecision":"Pending","generationChoice":"user-confirmation-required","promptPack":canonical["promptPack"],"promptQuality":canonical["promptQuality"],"promptContractVersion":canonical["promptContractVersion"],"promptWorkflow":canonical["promptWorkflow"],"promptFieldOrder":canonical["promptFieldOrder"],"mustPreserve":canonical["promptPack"].get("mustPreserve") or asset.get("mustPreserve") or [],"mustAvoid":canonical["promptPack"].get("mustAvoid") or asset.get("mustAvoid") or []})
-        if canonical.get("promptCompositionMode"):
-            asset["promptCompositionMode"] = canonical["promptCompositionMode"]
-        if canonical.get("promptCompilerVersion"):
-            asset["promptCompilerVersion"] = canonical["promptCompilerVersion"]
         next_revision=save_project_document(
             request,doc,revision,connection=connection,
             audit_event={
@@ -11276,8 +10467,7 @@ async def update_asset_metadata(project_id:str,logical_asset_id:str,body:AssetMe
     prompt_fields_changed=any(value is not None for value in (body.prompt,body.prompt_pack,body.identity_anchors,body.must_preserve,body.must_avoid,body.shot_dependencies,body.references))
     canonical_prompt=None
     if prompt_fields_changed:
-        requested_mode="base_asset" if is_base_asset_class(asset_class) else ("clean_replace" if str(body.source or "").strip()=="asset-prompt-generator" else "legacy_supplement")
-        composition_mode=prompt_composition_mode_for_asset(asset_class, requested_mode)  # type: ignore[arg-type]
+        composition_mode="clean_replace" if str(body.source or "").strip()=="asset-prompt-generator" else "legacy_supplement"
         try:
             canonical_prompt=_canonical_prompt_for_asset(
                 doc,
@@ -11288,11 +10478,7 @@ async def update_asset_metadata(project_id:str,logical_asset_id:str,body:AssetMe
                 must_avoid=body.must_avoid if body.must_avoid is not None else asset.get("mustAvoid") or metadata.get("must_avoid") or [],
                 relevant_shots=asset.get("promptRelevantShots"),
                 composition_mode=composition_mode,
-                # The AI asset-prompt-generator path must provide a complete
-                # structured pack. A human asset-library edit may intentionally
-                # be prompt-only; in that case base mode preserves the manual
-                # text instead of rejecting the save for missing compiler input.
-                strict_clean=composition_mode=="clean_replace" or (composition_mode=="base_asset" and str(body.source or "").strip()=="asset-prompt-generator"),
+                strict_clean=composition_mode=="clean_replace",
             )
         except ValueError as exc:
             raise HTTPException(422,{"message":"Prompt 重写未形成完整的新稿，未保存当前修改。","issues":[str(exc)]}) from exc
@@ -11316,10 +10502,6 @@ async def update_asset_metadata(project_id:str,logical_asset_id:str,body:AssetMe
             asset["promptFieldOrder"]=canonical_prompt["promptFieldOrder"]
             asset["mustPreserve"]=canonical_prompt["promptPack"].get("mustPreserve") or asset.get("mustPreserve") or []
             asset["mustAvoid"]=canonical_prompt["promptPack"].get("mustAvoid") or asset.get("mustAvoid") or []
-            if canonical_prompt.get("promptCompositionMode"):
-                asset["promptCompositionMode"]=canonical_prompt["promptCompositionMode"]
-            if canonical_prompt.get("promptCompilerVersion"):
-                asset["promptCompilerVersion"]=canonical_prompt["promptCompilerVersion"]
         elif body.prompt_version is not None and body.prompt_version==asset.get("promptVersion"):
             asset["promptVersion"]=body.prompt_version
         elif canonical_prompt is not None:

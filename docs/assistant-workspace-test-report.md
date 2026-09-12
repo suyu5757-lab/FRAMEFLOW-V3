@@ -106,7 +106,7 @@ PATH="$PWD/.venv/bin:$PATH" npm --prefix web run test:e2e
 - `database=/Users/yusu/Desktop/framflow v3 resource/data/frameflow.db`
 - `keyring_available=true`
 
-`/api/v2/settings` 返回 `feature_flags.assistant_workspace_v2=true`；当前 orchestrator 绑定为本机 OpenCode 且健康，MiniMax TTS 当前就绪，OpenAI 图片/vision、即梦视频等能力仍按独立状态显示未就绪；最终 `/api/health` 为 `ready`（`ok=true`、`ready=true`），未就绪媒体能力不会被助手伪造为已分析或已生成。本轮没有使用真实用户资源执行 Provider 生成，也没有把用户文件外发，Provider 付费/外部调用路径由隔离测试和桌面 mock E2E 覆盖。
+`/api/v2/settings` 返回 `feature_flags.assistant_workspace_v2=true`；当前 orchestrator 绑定为本机 OpenCode 且健康，MiniMax TTS 当前就绪，其他媒体能力仍按独立状态显示未就绪；最终 `/api/health` 为 `ready`（`ok=true`、`ready=true`），未就绪媒体能力不会被助手伪造为已分析或已生成。本轮没有使用真实用户资源执行 Provider 生成，也没有把用户文件外发，Provider 付费/外部调用路径由隔离测试和桌面 mock E2E 覆盖。
 
 ## 仍需用户确认的事项
 

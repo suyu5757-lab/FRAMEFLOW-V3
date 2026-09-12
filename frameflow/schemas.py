@@ -34,6 +34,7 @@ class ProjectDocument(StrictModel):
     shots: list[dict[str, Any]] = Field(default_factory=list)
     audio: dict[str, Any] = Field(default_factory=dict)
     assetRegulator: dict[str, Any] = Field(default_factory=dict)
+    assetIntent: dict[str, Any] = Field(default_factory=dict)
     generations: list[dict[str, Any]] = Field(default_factory=list)
     imagePrompt: str | None = None
     seedancePackages: list[dict[str, Any]] = Field(default_factory=list)
@@ -221,6 +222,17 @@ class AssetPromptRunCreate(StrictModel):
     review_feedback: str = Field(default="", max_length=4000)
     source_qa_run_id: str | None = Field(default=None, max_length=120)
     operator_idea: str = Field(default="", max_length=6000)
+    asset_intent_version: int | None = Field(default=None, ge=0)
+
+
+class AssetIntentInterpretCreate(StrictModel):
+    expected_revision: int | None = Field(default=None, ge=1)
+    user_text: str = Field(default="", max_length=50000)
+    mode: Literal["user_input", "script_only", "deferred", "draft"] = "user_input"
+
+
+class AssetIntentPrepareCreate(StrictModel):
+    expected_revision: int | None = Field(default=None, ge=1)
 
 
 class FusionPromptRunCreate(StrictModel):
@@ -237,7 +249,10 @@ class FusionPromptRunCreate(StrictModel):
 class AssetImageGenerate(StrictModel):
     prompt: str | None = Field(default=None, min_length=1, max_length=32000)
     prompt_version: str | None = Field(default=None, max_length=120)
-    size: Literal["1024x1024", "1024x1536", "1536x1024"] = "1024x1024"
+    # When omitted, the server selects the size from the logical asset's
+    # aspect-ratio policy. An explicit size remains available for a deliberate
+    # one-off override.
+    size: Literal["1024x1024", "1024x1536", "1536x1024"] | None = None
     quality: Literal["low", "medium", "high"] = "medium"
     confirmed: bool = False
     provider_profile_id: str | None = None
@@ -596,6 +611,8 @@ class StoryOptimizationCreate(StrictModel):
     generator_profile: str | None = Field(default=None, max_length=120)
     revision_feedback: str = Field(default="", max_length=8000)
     revision_of_run_id: str | None = Field(default=None, max_length=160)
+    source_script_override: str | None = Field(default=None, max_length=200000)
+    source_script_run_id: str | None = Field(default=None, max_length=160)
 
 
 class StoryboardAcceptRequest(StrictModel):

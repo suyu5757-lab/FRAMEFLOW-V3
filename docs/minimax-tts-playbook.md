@@ -120,7 +120,6 @@ format           → audio_setting.format
 GitHub 资料只提炼为规则，不复制代码或安装外部 Skill：
 
 - [MiniMax-AI/skills](https://github.com/MiniMax-AI/skills)：官方默认模型、区域参数、字符限制和结构化执行方式。
-- [openai/skills Speech](https://github.com/openai/skills/tree/main/skills/.curated/speech)：保留原文、短表演说明、单变量试听和生成后检查的方法；该仓库已标记 deprecated，因此不作为依赖。
 - [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS)：将 Custom Voice、Voice Design 和 Voice Clone 分层的思想。
 - [CosyVoice](https://github.com/QwenAudio/CosyVoice)：多语言、文本规范化、发音与节奏 QA 思路。
 - [Chatterbox](https://github.com/resemble-ai/chatterbox)、[ChatTTS](https://github.com/2noise/ChatTTS)、[Coqui TTS](https://github.com/coqui-ai/TTS)：只借鉴试听、口语节奏和工具链经验，不进入本地运行路径。

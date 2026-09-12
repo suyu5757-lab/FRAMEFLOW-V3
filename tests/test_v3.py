@@ -14,7 +14,7 @@ import server
 import frameflow.database as database_module
 from frameflow import asset_audit
 from frameflow.database import Database
-from frameflow.providers import STORYBOARD_OUTPUT_SCHEMA
+from frameflow.providers import ProviderError, STORYBOARD_OUTPUT_SCHEMA
 
 
 def project_document() -> dict:
@@ -51,6 +51,24 @@ def scene_ledger(scene_id: str, name: str, relevant_shots: list[str] | None = No
     }
 
 
+def storyboard_shot(shot_id: str, scene_id: str, purpose: str, action: str, beat_ids: list[str] | None = None, dialogue: str = "") -> dict:
+    return {
+        "id": shot_id,
+        "scene": scene_id,
+        "duration": 3,
+        "purpose": purpose,
+        "size": "中景",
+        "camera": "缓慢推进",
+        "action": action,
+        "visibleEvent": action,
+        "eventConsequence": "画面状态出现明确变化",
+        "dialogue": dialogue,
+        "sourceBeatIds": beat_ids or [],
+        "seedancePlan": {"model": "seedance2.5", "generationMode": "reference_to_video", "targetDuration": 3},
+        "continuity": {"cutIn": "前镜头状态延续", "cutOut": "后镜头状态延续"},
+    }
+
+
 class FrameflowV3Tests(unittest.TestCase):
     def setUp(self) -> None:
         self.db_path = Path(__file__).parent / f"test-v3-{uuid.uuid4().hex}.db"
@@ -81,6 +99,8 @@ class FrameflowV3Tests(unittest.TestCase):
         self.assertIn("promptTimeline", seedance["required"])
         self.assertIn("referenceAssignments", seedance["required"])
         self.assertIn("fallbackRoute", seedance["required"])
+        self.assertEqual(STORYBOARD_OUTPUT_SCHEMA["properties"]["sourceBeatCoverage"]["type"], "object")
+        self.assertEqual(STORYBOARD_OUTPUT_SCHEMA["properties"]["shots"]["items"]["properties"]["sourceBeatIds"]["items"]["type"], "string")
         scene_schema = STORYBOARD_OUTPUT_SCHEMA["properties"]["scenes"]["items"]
         self.assertIn("relevantShots", scene_schema["required"])
         self.assertIn("lightingCausality", scene_schema["required"])
@@ -544,6 +564,59 @@ class FrameflowV3Tests(unittest.TestCase):
         self.assertEqual(revision_input["revision_context"]["run_id"], first_id)
         self.assertEqual(revision_input["revision_context"]["storyboard_output"]["shots"][0]["id"], "SH01")
 
+    def test_optimized_script_can_be_routed_into_locked_storyboard_without_overwriting_source(self) -> None:
+        original = "原始剧本：少女走进机库。"
+        saved = self.client.put("/api/v2/projects/PRJ_V3/story", json={
+            "expected_revision": 1,
+            "spec": {"creative_goal": "优化剧本转分镜", "duration": 20, "ratio": "16:9", "generator_profile": "seedance2.5"},
+            "script": original,
+            "scenes": [],
+            "shots": [],
+        })
+        self.assertEqual(saved.status_code, 200, saved.text)
+        first = self.client.post("/api/v2/projects/PRJ_V3/story/runs", json={"workflow_mode": "optimize_script_and_storyboard", "duration": 20, "generator_profile": "seedance2.5"})
+        self.assertEqual(first.status_code, 200, first.text)
+        first_id = first.json()["id"]
+        optimized_script = "优化拍摄剧本：少女在机库中触碰机甲，蓝光沿机械手点亮。"
+        candidate = {
+            "proposedScript": optimized_script,
+            "feasibility": {"verdict": "可执行", "difficulty": "low"},
+            "productionElements": {},
+            "scenes": [scene_ledger("S001", "机库", ["SH01"])],
+            "shots": [{"id": "SH01", "scene": "S001", "duration": 8, "purpose": "建立人机关系", "size": "近景", "camera": "缓慢推进", "action": "手指触碰机械手", "visibleEvent": "少女手指触碰机械手", "eventConsequence": "蓝色接口灯亮起", "seedancePlan": {"model": "seedance2.5", "generationMode": "reference_to_video"}, "continuity": {"cutIn": "机库低频先入", "cutOut": "蓝光保持"}}],
+            "risks": [],
+            "assetHandoff": {"characters": [], "scenes": [], "props": []},
+        }
+        with mock.patch.object(server, "_run_storyboard_agent", new=mock.AsyncMock(return_value=candidate)):
+            started = self.client.post(f"/api/v2/story-runs/{first_id}/start")
+        self.assertEqual(started.status_code, 200, started.text)
+        routed = self.client.post("/api/v2/projects/PRJ_V3/story/runs", json={
+            "workflow_mode": "storyboard_from_source",
+            "duration": 20,
+            "generator_profile": "seedance2.5",
+            "source_script_override": optimized_script,
+            "source_script_run_id": first_id,
+        })
+        self.assertEqual(routed.status_code, 200, routed.text)
+        routed_id = routed.json()["id"]
+        routed_run = self.client.get(f"/api/v2/story-runs/{routed_id}").json()["run"]
+        self.assertEqual(routed_run["input"]["workflow_mode"], "storyboard_from_source")
+        self.assertEqual(routed_run["input"]["source_script_origin"], "optimized_candidate")
+        self.assertEqual(routed_run["input"]["current_script"], optimized_script)
+        self.assertNotEqual(routed_run["input"]["current_script"], original)
+
+        direct_candidate = {**candidate, "proposedScript": "供应商返回的内容也不能覆盖锁定的优化剧本。"}
+        regulator = {"assetExtraction": [], "assetRequirements": [], "nextActions": []}
+        with mock.patch.object(server, "_run_storyboard_agent", new=mock.AsyncMock(return_value=direct_candidate)), mock.patch.object(server, "_run_regulator_agent", new=mock.AsyncMock(return_value=regulator)):
+            direct_started = self.client.post(f"/api/v2/story-runs/{routed_id}/start")
+            self.assertEqual(direct_started.status_code, 200, direct_started.text)
+            self.assertEqual(direct_started.json()["run"]["storyboard_output"]["proposedScript"], optimized_script)
+            accepted = self.client.post(f"/api/v2/story-runs/{routed_id}/accept-storyboard", json={"scope": "all"})
+            self.assertEqual(accepted.status_code, 200, accepted.text)
+        current = self.client.get("/api/v2/projects/PRJ_V3").json()["document"]
+        self.assertEqual(current["script"], original)
+        self.assertEqual(current["shots"][0]["id"], "SH01")
+
     def test_storyboard_from_source_preserves_script_byte_for_byte_on_acceptance(self) -> None:
         source = "原文：雨落在玻璃上。\n\n角色说：不要替我改写这句话……"
         saved = self.client.put("/api/v2/projects/PRJ_V3/story", json={
@@ -564,7 +637,7 @@ class FrameflowV3Tests(unittest.TestCase):
             "feasibility": {"verdict": "可执行", "difficulty": "low"},
             "productionElements": {},
             "scenes": [scene_ledger("C01", "室内", ["SH01"])],
-            "shots": [{"id": "SH01", "scene": "C01", "duration": 8, "purpose": "建立", "size": "中景", "camera": "固定", "action": "雨滴滑落", "visibleEvent": "雨滴沿玻璃滑落", "eventConsequence": "玻璃表面的倒影被水痕切断", "seedancePlan": {"model": "seedance2.5", "generationMode": "reference_to_video", "targetDuration": 8}, "continuity": {"cutIn": "雨声先入", "cutOut": "倒影稳定"}}],
+            "shots": [{"id": "SH01", "scene": "C01", "duration": 8, "purpose": "建立", "size": "中景", "camera": "固定", "action": "雨滴滑落", "visibleEvent": "雨滴沿玻璃滑落", "eventConsequence": "玻璃表面的倒影被水痕切断", "dialogue": "不要替我改写这句话……", "sourceBeatIds": ["B001", "B002"], "seedancePlan": {"model": "seedance2.5", "generationMode": "reference_to_video", "targetDuration": 8}, "continuity": {"cutIn": "雨声先入", "cutOut": "倒影稳定"}}],
             "risks": [], "assetHandoff": {"characters": [], "scenes": [], "props": []},
         }
         regulator = {"assetExtraction": [], "assetRequirements": [], "nextActions": []}
@@ -636,8 +709,129 @@ class FrameflowV3Tests(unittest.TestCase):
         self.assertEqual(agent.await_count, 2)
         self.assertTrue(started.json()["run"]["storyboard_output"].get("contractRepairRetry"))
 
-    def test_storyboard_candidate_over_budget_is_rejected_before_acceptance(self) -> None:
-        created = self.client.post("/api/v2/projects/PRJ_V3/story/runs", json={"goal": "full", "workflow_mode": "optimize_script_and_storyboard", "duration": 60, "generator_profile": "seedance2.0"})
+    def test_storyboard_provider_failure_is_not_retried_as_contract_repair(self) -> None:
+        created = self.client.post("/api/v2/projects/PRJ_V3/story/runs", json={"workflow_mode": "storyboard_from_source", "duration": 12, "generator_profile": "seedance2.5"})
+        self.assertEqual(created.status_code, 200, created.text)
+        run_id = created.json()["id"]
+        agent = mock.AsyncMock(side_effect=ProviderError("Monthly usage limit reached. Resets in 3 days.", "billing", 402))
+        with mock.patch.object(server, "_run_storyboard_agent", new=agent):
+            started = self.client.post(f"/api/v2/story-runs/{run_id}/start")
+        self.assertEqual(started.status_code, 402, started.text)
+        self.assertEqual(started.json()["category"], "billing")
+        self.assertIn("Monthly usage limit reached", started.json()["message"])
+        self.assertEqual(agent.await_count, 1)
+        persisted = self.client.get(f"/api/v2/story-runs/{run_id}").json()["run"]
+        self.assertEqual(persisted["status"], "failed")
+        self.assertEqual(persisted["error"]["kind"], "billing")
+
+    def test_storyboard_content_gap_retries_once_then_blocks_acceptance(self) -> None:
+        source = "视频时长：12秒。\n角色触碰机械手。\n机甲头部亮起。\n角色说：走吧。\n画面切黑并出现 LINK 标志。"
+        saved = self.client.put("/api/v2/projects/PRJ_V3/story", json={
+            "expected_revision": 1,
+            "spec": {"creative_goal": "内容覆盖门禁", "duration": 12, "ratio": "16:9", "generator_profile": "seedance2.5"},
+            "script": source,
+            "scenes": [],
+            "shots": [],
+        })
+        self.assertEqual(saved.status_code, 200, saved.text)
+        created = self.client.post("/api/v2/projects/PRJ_V3/story/runs", json={"workflow_mode": "storyboard_from_source", "duration": 12, "generator_profile": "seedance2.5"})
+        self.assertEqual(created.status_code, 200, created.text)
+        run_id = created.json()["id"]
+        incomplete = {
+            "proposedScript": "供应商返回的改写不应覆盖原文",
+            "feasibility": {"verdict": "可执行", "difficulty": "low"},
+            "productionElements": {},
+            "scenes": [scene_ledger("S001", "机库", ["SH01"])],
+            "shots": [storyboard_shot("SH01", "S001", "建立接触", "角色触碰机械手", ["B001"])],
+            "risks": [],
+            "assetHandoff": {"characters": [], "scenes": [], "props": []},
+        }
+        agent = mock.AsyncMock(side_effect=[incomplete, incomplete])
+        with mock.patch.object(server, "_run_storyboard_agent", new=agent):
+            started = self.client.post(f"/api/v2/story-runs/{run_id}/start")
+        self.assertEqual(started.status_code, 200, started.text)
+        output = started.json()["run"]["storyboard_output"]
+        self.assertEqual(agent.await_count, 2)
+        self.assertTrue(output["contractRepairRetry"])
+        self.assertFalse(output["contractRepairSucceeded"])
+        self.assertEqual(output["handoffStatus"], "handoff_not_ready")
+        self.assertFalse(output["acceptanceAllowed"])
+        self.assertGreater(output["sourceBeatCoverage"]["missing"], 0)
+        self.assertTrue(any(issue["code"] == "storyboard_coverage_missing" for issue in output["blockingIssues"]))
+        rejected = self.client.post(f"/api/v2/story-runs/{run_id}/accept-storyboard", json={"scope": "all"})
+        self.assertEqual(rejected.status_code, 409, rejected.text)
+        current = self.client.get("/api/v2/projects/PRJ_V3").json()["document"]
+        self.assertEqual(current["shots"], [])
+
+    def test_storyboard_normalization_report_keeps_dropped_shot_and_blocks_candidate(self) -> None:
+        source = "角色在机库中抬眼，然后机甲启动。"
+        saved = self.client.put("/api/v2/projects/PRJ_V3/story", json={
+            "expected_revision": 1,
+            "spec": {"creative_goal": "标准化诊断", "duration": 8, "ratio": "16:9", "generator_profile": "seedance2.5"},
+            "script": source,
+            "scenes": [],
+            "shots": [],
+        })
+        self.assertEqual(saved.status_code, 200, saved.text)
+        created = self.client.post("/api/v2/projects/PRJ_V3/story/runs", json={"workflow_mode": "storyboard_from_source", "duration": 8, "generator_profile": "seedance2.5"})
+        self.assertEqual(created.status_code, 200, created.text)
+        run_id = created.json()["id"]
+        candidate = {
+            "proposedScript": "不应替换原文",
+            "feasibility": {"verdict": "可执行", "difficulty": "low"},
+            "productionElements": {},
+            "scenes": [scene_ledger("S001", "机库", ["SH01"])],
+            "shots": [storyboard_shot("SH01", "S001", "建立状态", "角色抬眼", ["B001"]), "无法解析的镜头"],
+            "risks": [],
+            "assetHandoff": {"characters": [], "scenes": [], "props": []},
+        }
+        agent = mock.AsyncMock(side_effect=[candidate, candidate])
+        with mock.patch.object(server, "_run_storyboard_agent", new=agent):
+            started = self.client.post(f"/api/v2/story-runs/{run_id}/start")
+        self.assertEqual(started.status_code, 200, started.text)
+        output = started.json()["run"]["storyboard_output"]
+        dropped = output["normalizationReport"]["droppedItems"]
+        self.assertEqual(dropped[0]["path"], "shots[1]")
+        self.assertEqual(output["handoffStatus"], "handoff_not_ready")
+        self.assertFalse(output["acceptanceAllowed"])
+        self.assertIn("normalization_dropped_item", str(output["blockingIssues"]))
+
+    def test_storyboard_complete_coverage_can_use_fewer_than_automatic_target_shots(self) -> None:
+        source = "角色触碰机械手。机甲头部亮起。"
+        saved = self.client.put("/api/v2/projects/PRJ_V3/story", json={
+            "expected_revision": 1,
+            "spec": {"creative_goal": "覆盖优先", "duration": 12, "ratio": "16:9", "generator_profile": "seedance2.5"},
+            "script": source,
+            "scenes": [],
+            "shots": [],
+        })
+        self.assertEqual(saved.status_code, 200, saved.text)
+        created = self.client.post("/api/v2/projects/PRJ_V3/story/runs", json={"workflow_mode": "storyboard_from_source", "duration": 12, "generator_profile": "seedance2.5"})
+        self.assertEqual(created.status_code, 200, created.text)
+        run_id = created.json()["id"]
+        candidate = {
+            "proposedScript": source,
+            "feasibility": {"verdict": "可执行", "difficulty": "low"},
+            "productionElements": {},
+            "scenes": [scene_ledger("S001", "机库", ["SH01", "SH02"])],
+            "shots": [
+                storyboard_shot("SH01", "S001", "建立接触", "角色触碰机械手", ["B001"]),
+                storyboard_shot("SH02", "S001", "揭示启动", "机甲头部亮起", ["B002"]),
+            ],
+            "risks": [],
+            "assetHandoff": {"characters": [], "scenes": [], "props": []},
+        }
+        with mock.patch.object(server, "_run_storyboard_agent", new=mock.AsyncMock(return_value=candidate)):
+            started = self.client.post(f"/api/v2/story-runs/{run_id}/start")
+        self.assertEqual(started.status_code, 200, started.text)
+        output = started.json()["run"]["storyboard_output"]
+        self.assertEqual(output["sourceBeatCoverage"]["status"], "complete")
+        self.assertTrue(output["acceptanceAllowed"])
+        self.assertEqual(output["shotBudgetAssessment"]["actual"], 2)
+        self.assertNotIn("shot_budget_exceeded", str(output.get("blockingIssues") or []))
+
+    def test_storyboard_candidate_over_explicit_manual_budget_is_rejected_before_acceptance(self) -> None:
+        created = self.client.post("/api/v2/projects/PRJ_V3/story/runs", json={"goal": "full", "workflow_mode": "optimize_script_and_storyboard", "duration": 60, "generator_profile": "seedance2.0", "shot_budget_source": "manual", "shot_count_min": 3, "shot_count_target": 3, "shot_count_max": 3})
         self.assertEqual(created.status_code, 200, created.text)
         run_id = created.json()["id"]
         shots = [{"id": f"SH{index:02d}", "scene": "C01", "duration": 7, "purpose": f"事件 {index}", "size": "中景", "camera": "固定", "action": "动作"} for index in range(1, 10)]
@@ -647,6 +841,45 @@ class FrameflowV3Tests(unittest.TestCase):
         self.assertEqual(started.status_code, 422, started.text)
         self.assertIn("shot_budget_exceeded", str(started.json()))
         self.assertEqual(self.client.get(f"/api/v2/story-runs/{run_id}").json()["run"]["status"], "failed")
+
+    def test_automatic_shot_range_is_advisory_and_does_not_block_candidate(self) -> None:
+        saved = self.client.put("/api/v2/projects/PRJ_V3/story", json={"expected_revision": 1, "spec": {"creative_goal": "参考范围", "duration": 20, "ratio": "16:9", "generator_profile": "seedance2.5"}, "script": "四个独立事件组成一段连续分镜。", "scenes": [], "shots": []})
+        self.assertEqual(saved.status_code, 200, saved.text)
+        created = self.client.post("/api/v2/projects/PRJ_V3/story/runs", json={"goal": "full", "workflow_mode": "storyboard_from_source", "duration": 20, "generator_profile": "seedance2.5"})
+        self.assertEqual(created.status_code, 200, created.text)
+        run_id = created.json()["id"]
+        shots = [{"id": f"SH{index:02d}", "scene": "S001", "duration": 5, "purpose": f"事件 {index}", "size": "中景", "camera": "固定", "action": "动作", "visibleEvent": "动作发生", "eventConsequence": "状态发生可见变化", "seedancePlan": {"model": "seedance2.5", "generationMode": "reference_to_video"}, "continuity": {"cutIn": "前镜头衔接", "cutOut": "后镜头衔接"}} for index in range(1, 5)]
+        candidate = {"proposedScript": "错误改写", "feasibility": {"verdict": "可执行", "difficulty": "medium"}, "productionElements": {}, "scenes": [scene_ledger("S001", "连续空间", [shot["id"] for shot in shots])], "shots": shots, "risks": [], "assetHandoff": {"characters": [], "scenes": [], "props": []}}
+        with mock.patch.object(server, "_run_storyboard_agent", new=mock.AsyncMock(return_value=candidate)):
+            started = self.client.post(f"/api/v2/story-runs/{run_id}/start")
+        self.assertEqual(started.status_code, 200, started.text)
+        output = started.json()["run"]["storyboard_output"]
+        self.assertEqual(started.json()["run"]["status"], "storyboard_review_required")
+        self.assertEqual(output["shotBudgetAssessment"]["status"], "reference_above")
+        self.assertFalse(output["shotBudgetAssessment"]["limitEnforced"])
+        self.assertNotIn("shot_budget_exceeded", str(started.json()))
+
+    def test_direct_storyboard_normalises_common_provider_aliases_before_contract_validation(self) -> None:
+        source = "少女在机库中触碰机甲，随后抬眼。"
+        saved = self.client.put("/api/v2/projects/PRJ_V3/story", json={"expected_revision": 1, "spec": {"creative_goal": "直转容错", "duration": 14, "ratio": "16:9", "generator_profile": "seedance2.5"}, "script": source, "scenes": [], "shots": []})
+        self.assertEqual(saved.status_code, 200, saved.text)
+        created = self.client.post("/api/v2/projects/PRJ_V3/story/runs", json={"workflow_mode": "storyboard_from_source", "duration": 14, "generator_profile": "seedance2.5"})
+        self.assertEqual(created.status_code, 200, created.text)
+        run_id = created.json()["id"]
+        candidate = {"proposedScript": "供应商不应替换原文", "feasibility": {"verdict": "可执行", "difficulty": "low"}, "productionElements": {}, "scenes": [scene_ledger("S001", "机库", [])], "shots": [{"shotId": "SH01", "sceneId": "S001", "durationSeconds": "00:00–00:07.00", "goal": "建立人机关系", "framing": "近景", "cameraMovement": "缓慢推进", "visualEvent": "白色手套触碰机械手", "consequence": "青蓝接口灯亮起"}], "risks": [], "assetHandoff": {"characters": [], "scenes": [], "props": []}}
+        with mock.patch.object(server, "_run_storyboard_agent", new=mock.AsyncMock(return_value=candidate)):
+            started = self.client.post(f"/api/v2/story-runs/{run_id}/start")
+        self.assertEqual(started.status_code, 200, started.text)
+        output = started.json()["run"]["storyboard_output"]
+        self.assertEqual(output["proposedScript"], source)
+        self.assertEqual(output["shots"][0]["id"], "SH01")
+        self.assertEqual(output["shots"][0]["scene"], "S001")
+        self.assertEqual(output["shots"][0]["duration"], 7.0)
+        self.assertEqual(output["shots"][0]["purpose"], "建立人机关系")
+        self.assertEqual(output["shots"][0]["size"], "近景")
+        self.assertTrue(output["shots"][0]["seedancePlan"]["generationMode"])
+        self.assertTrue(output["shots"][0]["continuity"]["cutIn"])
+        self.assertTrue(output["normalizationWarnings"])
 
     def test_asset_handoff_acceptance_persists_reference_roles_and_receipt(self) -> None:
         created = self.client.post("/api/v2/projects/PRJ_V3/story/runs", json={"goal": "full", "duration": 12, "generator_profile": "seedance2.5"})

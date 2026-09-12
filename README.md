@@ -52,8 +52,8 @@ Pop-Location
 - `FRAMEFLOW_DB_PATH`：可选的 SQLite 路径；默认使用运行时数据目录。
 - `JIMENG_CLI_HOME`、`JIMENG_CLI_PATH`：即梦 CLI 的本地登录目录和可执行文件配置。
 - `FRAMEFLOW_FFMPEG_PATH`、`FRAMEFLOW_FFPROBE_PATH`：可选的 FFmpeg/FFprobe 完整路径；未设置时从系统 PATH 查找。
-- `OPENAI_API_KEY`、`DEEPSEEK_API_KEY`、`COMFYUI_API_KEY`、`MINIMAX_CN_API_KEY`、`MINIMAX_GLOBAL_API_KEY`：仅用于从环境变量导入对应凭据；运行时优先使用系统凭据库。旧的 `MINIMAX_API_KEY` 仍兼容为中国区回退变量。当前工作台的 TTS 路由固定使用 MiniMax，OpenAI 仍可承担编排和图片能力。
-- `OPENCODE_SERVER_PASSWORD`：OpenCode Server 的可选 Basic Auth 密码。
+- `OPENCODE_SERVER_PASSWORD`：已接入 OpenCode Server 的可选 Basic Auth 密码；故事、分镜、资产总控、资产创作意图和 Prompt 编排统一走当前 OpenCode 编排 Provider。
+- `COMFYUI_API_KEY`、`MINIMAX_CN_API_KEY`、`MINIMAX_GLOBAL_API_KEY`：仅用于导入对应的媒体 Provider 凭据；运行时优先使用系统凭据库。旧的 `MINIMAX_API_KEY` 仍兼容为中国区回退变量。
 
 应用不会把凭据写入项目 JSON、运行快照、前端存储或日志。不要把真实密钥写进源代码、测试夹具或文档。
 

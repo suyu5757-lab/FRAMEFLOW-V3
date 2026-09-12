@@ -294,7 +294,6 @@ Approved 前至少检查：
 
 ### 2. 可借鉴但不能直接安装为 MiniMax 依赖的 Skill
 
-- [OpenAI speech Skill](https://github.com/openai/skills/blob/main/skills/.curated/speech/SKILL.md)：虽然仓库已标记 deprecated，但“保持原文逐字准确、短而明确的表演说明、一次只改一个变量、生成后逐项检查”的流程方法仍然值得借鉴；它不是 MiniMax adapter。
 - [pro-video-composer 的 SKILL.md](https://github.com/znyupup/pro-video-composer/blob/main/SKILL.md)：非常适合借鉴视频对白的逐句情绪表、ASR 校对、ffmpeg 拼接和 storyboard 交接；必须把旧 MiniMax 路径迁移到当前官方接口。
 - [rachel digital-human Skill](https://github.com/Jingyi-Wu-Richael/rachel-digital-human-production)：适合借鉴“授权预检—短试听—用户批准—状态登记”的 UX；它与数字人/HeyGen 绑定，不应作为通用音色 Skill。
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+import json
 import math
 import re
 from typing import Any
@@ -18,6 +19,261 @@ _SCRIPT_DURATION_PATTERN = re.compile(
     r"(?P<unit>秒|s|sec(?:ond)?s?)(?=\s|$|[^\w])",
     re.IGNORECASE,
 )
+
+
+_SOURCE_BEAT_LABEL_PATTERN = re.compile(
+    r"^(?:时间|时长|画面|摄影|镜头|目的|动作|声音|音效|音乐|对白|台词|旁白|转场|连续性|环境|光线|备注|节拍)\s*[:：]"
+)
+_SOURCE_BEAT_HEADING_PATTERN = re.compile(
+    r"^(?:[#＃\s]*)(?:【\s*)?(?:镜头|shot|scene|场景)\s*[#：:._\-\s]*[A-Za-z0-9_-]*",
+    re.IGNORECASE,
+)
+_SOURCE_BEAT_METADATA_PATTERN = re.compile(
+    r"^(?:标题|片名|项目名|总时长|视频时长|影片时长|画幅|比例|格式|语言|平台|镜头数量)\s*[:：]",
+    re.IGNORECASE,
+)
+_SOURCE_BEAT_TIME_ONLY_PATTERN = re.compile(
+    r"^(?:\d{1,2}(?:\.\d+)?\s*(?:-|–|—|~|～|至|到)\s*\d{1,2}(?:\.\d+)?\s*秒|\d{1,2}:\d{2}(?:\.\d+)?\s*(?:-|–|—|~|～|至|到)\s*\d{1,2}:\d{2}(?:\.\d+)?)\s*[：:]?$",
+    re.IGNORECASE,
+)
+_SOURCE_BEAT_CLAUSE_PATTERN = re.compile(
+    r"(?<=[。！？!?；;])\s*|(?=(?:随后|然后|接着|最后|同时|此时|之后|并且))",
+)
+_SOURCE_BEAT_QUOTE_PATTERN = re.compile(r"[“\"‘']([^”\"’']+)[”\"’']")
+_SOURCE_BEAT_LATIN_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{1,}")
+_SOURCE_BEAT_CJK_PATTERN = re.compile(r"[\u3400-\u9fff]{2,}")
+_SOURCE_BEAT_STOPWORDS = {
+    "然后", "随后", "接着", "同时", "此时", "之后", "镜头", "画面", "动作", "摄影", "目的",
+    "声音", "音效", "音乐", "对白", "台词", "旁白", "场景", "角色", "一个", "进行", "完成",
+}
+
+
+def _source_beat_category(text: str) -> str:
+    lowered = text.lower()
+    if _SOURCE_BEAT_QUOTE_PATTERN.search(text) or re.search(r"(?:对白|台词|旁白|说[:：]|system\b)", lowered):
+        return "dialogue"
+    if re.search(r"(?:声音|音效|音乐|bgm|sfx|低频|重低频|雨声|风声)", lowered):
+        return "sound"
+    if re.search(r"(?:切黑|黑场|logo|标志|片尾|转场|cut to|cut\b)", lowered):
+        return "transition"
+    if re.search(r"(?:镜头|摄影|推进|拉远|环绕|俯拍|仰拍|移向|移动|推近|rack focus|orbit|push|slide|tilt)", lowered):
+        return "camera"
+    if re.search(r"(?:光|亮|闪|反射|倒影|逆光|能源|发光|散热)", lowered):
+        return "visual"
+    if re.search(r"(?:触|走|进入|离开|抬|看|启动|关闭|打开|移动|转身|拿起|放下|接触|微笑|说)", lowered):
+        return "action"
+    return "narrative"
+
+
+def _source_beat_is_metadata(line: str) -> bool:
+    clean = line.strip()
+    if not clean or _SOURCE_BEAT_TIME_ONLY_PATTERN.match(clean):
+        return True
+    return bool(_SOURCE_BEAT_METADATA_PATTERN.match(clean))
+
+
+def _source_beat_content_lines(source: str) -> list[str]:
+    lines = [line.strip() for line in str(source or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")]
+    blocks: list[list[str]] = []
+    current: list[str] = []
+
+    def flush() -> None:
+        nonlocal current
+        if current:
+            blocks.append(current)
+            current = []
+
+    for line in lines:
+        if not line:
+            flush()
+            continue
+        if _SOURCE_BEAT_METADATA_PATTERN.match(line) and _source_beat_is_metadata(line):
+            # Keep narrative that follows an inline duration/title prefix,
+            # e.g. ``视频时长：14秒。角色抬眼。``; discard only the metadata
+            # sentence itself.
+            remainder = re.sub(r"^[^：:]+\s*[:：]", "", line, count=1).strip()
+            tail = re.split(r"[。！？!?；;]", remainder, maxsplit=1)
+            if len(tail) == 2 and tail[1].strip():
+                current.append(tail[1].strip())
+            continue
+        heading = _SOURCE_BEAT_HEADING_PATTERN.match(line)
+        if heading:
+            flush()
+            remainder = line[heading.end():].lstrip(" ：:.-—–")
+            if remainder:
+                current.append(remainder)
+            continue
+        current.append(line)
+    flush()
+
+    segments: list[str] = []
+    for block in blocks:
+        # Labelled storyboard rows are already meaningful atomic beats. Keep
+        # them separate so dialogue, sound, camera and transition evidence
+        # cannot disappear inside a single summary paragraph.
+        if len(block) > 1 or any(_SOURCE_BEAT_LABEL_PATTERN.match(line) for line in block):
+            candidates = block
+        else:
+            candidates = _SOURCE_BEAT_CLAUSE_PATTERN.split(block[0])
+        for candidate in candidates:
+            clean = re.sub(r"^\s*(?:\d{1,2}(?::\d{2}(?:\.\d+)?)?\s*(?:-|–|—|~|～|至|到)\s*)", "", candidate).strip(" \t-—–")
+            if not clean or _source_beat_is_metadata(clean):
+                continue
+            segments.append(clean)
+    if not segments:
+        fallback = str(source or "").strip()
+        if fallback:
+            segments = [fallback]
+    return segments
+
+
+def build_source_beat_ledger(source: str | None) -> list[dict[str, Any]]:
+    """Build a stable, backend-facing ledger of content that shots must cover.
+
+    The ledger is intentionally deterministic and conservative. It does not
+    ask an AI to decide what the user's source means before the storyboard is
+    generated; it only turns visible source rows/sentences into stable IDs so
+    the provider must point each shot back to the source it represents.
+    """
+    segments = _source_beat_content_lines(str(source or ""))
+    ledger: list[dict[str, Any]] = []
+    for index, segment in enumerate(segments, start=1):
+        category = _source_beat_category(segment)
+        atomic = category in {"dialogue", "sound", "transition"}
+        ledger.append({
+            "id": f"B{index:03d}",
+            "text": segment,
+            "summary": segment[:220],
+            "category": category,
+            "required": True,
+            "atomic": atomic,
+        })
+    return ledger
+
+
+def _source_beat_terms(text: str) -> list[str]:
+    terms: list[str] = []
+    for value in _SOURCE_BEAT_QUOTE_PATTERN.findall(text):
+        if value.strip():
+            terms.append(value.strip())
+    terms.extend(_SOURCE_BEAT_LATIN_PATTERN.findall(text))
+    for value in _SOURCE_BEAT_CJK_PATTERN.findall(text):
+        clean = value.strip()
+        if clean and clean not in _SOURCE_BEAT_STOPWORDS:
+            terms.append(clean)
+            if len(clean) >= 4:
+                terms.extend(clean[index:index + 2] for index in range(0, len(clean) - 1, 2))
+    return list(dict.fromkeys(term.lower() for term in terms if len(term.strip()) >= 2))
+
+
+def _storyboard_search_text(shot: dict[str, Any]) -> str:
+    fields = (
+        "purpose", "action", "visibleEvent", "eventConsequence", "subjectFocus", "performance",
+        "dialogue", "narration", "sound", "camera", "environment", "spatialGeography",
+        "materialEvidence", "lightingCausality", "firstFrame", "lastFrame", "continuity",
+        "seedancePlan",
+    )
+    values: list[str] = []
+    for field in fields:
+        value = shot.get(field)
+        if value not in (None, "", []):
+            values.append(json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else str(value))
+    return " ".join(values).lower()
+
+
+def storyboard_source_coverage(
+    source: str | None,
+    result: dict[str, Any] | None,
+    normalization_report: dict[str, Any] | None = None,
+    ledger: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Report whether the candidate visibly accounts for source beats.
+
+    New provider output should use ``sourceBeatIds``. A small one-beat source
+    remains backward compatible with older provider payloads; richer sources
+    require explicit mapping or a reliable text match, so a structurally valid
+    but content-poor one-shot candidate cannot pass silently.
+    """
+    source_text = str(source or "")
+    source_ledger = list(ledger if ledger is not None else build_source_beat_ledger(source_text))
+    shots = [item for item in (result or {}).get("shots", []) if isinstance(item, dict)]
+    if not source_ledger:
+        return {"status": "not_applicable", "total": 0, "covered": 0, "partial": 0, "missing": 0, "items": []}
+
+    known_ids = {str(item.get("id")) for item in source_ledger if item.get("id")}
+    by_beat: dict[str, list[str]] = {beat_id: [] for beat_id in known_ids}
+    unknown_mappings: list[dict[str, Any]] = []
+    explicit_mapping = False
+    for shot in shots:
+        raw_ids = shot.get("sourceBeatIds")
+        if raw_ids not in (None, "", []):
+            explicit_mapping = True
+        if isinstance(raw_ids, str):
+            raw_ids = re.split(r"[\n,，、]", raw_ids)
+        if not isinstance(raw_ids, list):
+            raw_ids = []
+        shot_id = str(shot.get("id") or "")
+        for value in raw_ids:
+            beat_id = str(value or "").strip()
+            if not beat_id:
+                continue
+            if beat_id not in known_ids:
+                unknown_mappings.append({"shotId": shot_id, "sourceBeatId": beat_id})
+            else:
+                by_beat[beat_id].append(shot_id)
+
+    search_text = "\n".join(_storyboard_search_text(shot) for shot in shots)
+    items: list[dict[str, Any]] = []
+    for beat in source_ledger:
+        beat_id = str(beat.get("id") or "")
+        shot_ids = list(dict.fromkeys(by_beat.get(beat_id, [])))
+        category = str(beat.get("category") or "narrative")
+        text = str(beat.get("text") or beat.get("summary") or "").strip()
+        terms = _source_beat_terms(text)
+        exact_quote = [term for term in terms if term in search_text and _SOURCE_BEAT_QUOTE_PATTERN.search(text)]
+        lexical_match = [term for term in terms if term in search_text]
+        if shot_ids:
+            status = "covered"
+            reason = "已由候选镜头明确绑定原文节拍。"
+            if category in {"dialogue", "sound"} and terms and not exact_quote and not lexical_match:
+                status = "partial"
+                reason = "镜头声明了节拍关系，但没有找到对应的台词或声音证据。"
+        elif len(source_ledger) == 1 and shots:
+            # Short legacy scripts often have no provider mapping metadata;
+            # keep the existing one-shot workflow usable while richer source
+            # packages must prove each beat explicitly.
+            status = "covered"
+            reason = "单一来源节拍由候选镜头承载。"
+            shot_ids = [str(shot.get("id") or "") for shot in shots if shot.get("id")]
+        elif not explicit_mapping and lexical_match:
+            status = "covered" if len(lexical_match) >= max(1, min(2, len(terms))) else "partial"
+            reason = "通过候选镜头文本与原文节拍的可见词证据匹配。"
+        else:
+            status = "missing"
+            reason = "没有候选镜头明确覆盖该原文节拍。"
+        items.append({
+            "beatId": beat_id,
+            "status": status,
+            "shotIds": shot_ids,
+            "category": category,
+            "summary": str(beat.get("summary") or text)[:220],
+            "reason": reason,
+        })
+
+    dropped = list((normalization_report or {}).get("droppedItems") or [])
+    covered = sum(1 for item in items if item["status"] == "covered")
+    partial = sum(1 for item in items if item["status"] == "partial")
+    missing = sum(1 for item in items if item["status"] == "missing")
+    complete = not unknown_mappings and not dropped and missing == 0 and partial == 0
+    return {
+        "status": "complete" if complete else "incomplete",
+        "total": len(items),
+        "covered": covered,
+        "partial": partial,
+        "missing": missing,
+        "items": items,
+        "unknownMappings": unknown_mappings,
+    }
 
 
 def extract_script_duration(text: str | None) -> dict[str, Any] | None:
@@ -53,26 +309,29 @@ def extract_script_duration(text: str | None) -> dict[str, Any] | None:
 
 
 def shot_budget(duration: int, current: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Return the conservative production budget used by the desktop story desk.
+    """Return the shot-count guidance used by the desktop story desk.
 
-    The count is deliberately tied to editability rather than a model's maximum
-    duration.  A 60 second project therefore defaults to six-to-eight strong,
-    independently reviewable shots instead of a large list of fragile cuts.
+    The automatic range is a planning reference, not a hard ceiling.  A user
+    can still opt into an explicit manual budget when a production really needs
+    a gate, but changing the reference duration must never silently block a
+    deliberate storyboard edit.
     """
     current = current or {}
     duration = max(1, int(duration or 30))
     automatic_min = max(3, math.ceil(duration / 10))
     automatic_max = max(3, math.ceil(duration / 7.5))
     manual_values = any(current.get(key) not in (None, "") for key in ("shot_count_min", "shot_count_target", "shot_count_max"))
-    minimum = int(current.get("shot_count_min") or automatic_min)
-    maximum = int(current.get("shot_count_max") or automatic_max)
+    requested_source = str(current.get("shot_budget_source") or "").strip().lower()
+    source = requested_source if requested_source in {"manual", "automatic"} else ("manual" if manual_values else "automatic")
+    enforced = source == "manual"
+    minimum = int(current.get("shot_count_min") or automatic_min) if enforced else automatic_min
+    maximum = int(current.get("shot_count_max") or automatic_max) if enforced else automatic_max
     if maximum < minimum:
         maximum = minimum
-    target = int(current.get("shot_count_target") or round((minimum + maximum) / 2))
+    target = int(current.get("shot_count_target") or round((minimum + maximum) / 2)) if enforced else round((minimum + maximum) / 2)
     target = max(minimum, min(target, maximum))
-    source = str(current.get("shot_budget_source") or ("manual" if manual_values else "automatic"))
     mode = str(current.get("shot_budget_mode") or "controlled")
-    if maximum > automatic_max:
+    if enforced and maximum > automatic_max:
         mode = "high_tempo"
     return {
         "shot_count_min": minimum,
@@ -288,14 +547,20 @@ def story_checks(document: dict[str, Any]) -> dict[str, Any]:
 
     # The duration entered in StorySpec is a planning reference only.  It is
     # used to suggest a conservative shot-count range, while the actual final
-    # runtime is the sum of the reviewed shots.  Do not turn a deliberate edit
-    # into a story warning merely because it differs from the initial estimate.
+    # runtime is the sum of the reviewed shots.  Automatic guidance must not
+    # turn a deliberate edit into a blocking issue.  An explicit manual budget
+    # remains available as an intentional production gate.
     reference_duration = float(payload["spec"].get("duration") or document.get("duration") or 0)
     budget = shot_budget(int(reference_duration or 30), payload["spec"])
-    if len(shots) > budget["shot_count_max"]:
-        issue("shot_budget_exceeded", "error", f"当前 {len(shots)} 个镜头超过稳定制作上限 {budget['shot_count_max']} 个。请合并同场重复建立/反应镜头，或在制作设置中主动提高上限。", details={"actual": len(shots), **budget})
-    elif len(shots) >= budget["shot_count_max"]:
-        issue("shot_budget_near_limit", "warning", f"当前镜头数量已达到稳定制作上限 {budget['shot_count_max']} 个。后续新增镜头会阻塞资产生产。", details={"actual": len(shots), **budget})
+    enforced = budget["shot_budget_source"] == "manual"
+    if enforced and len(shots) > budget["shot_count_max"]:
+        issue("shot_budget_exceeded", "error", f"当前 {len(shots)} 个镜头超过已明确设置的手动上限 {budget['shot_count_max']} 个。请合并、删除或提高手动预算后再进入资产生产。", details={"actual": len(shots), **budget})
+    elif enforced and len(shots) >= budget["shot_count_max"]:
+        issue("shot_budget_near_limit", "warning", f"当前镜头数量已达到已明确设置的手动上限 {budget['shot_count_max']} 个。", details={"actual": len(shots), **budget})
+    elif not enforced and len(shots) > budget["shot_count_max"]:
+        issue("shot_budget_advisory", "warning", f"当前 {len(shots)} 个镜头高于按参考时长计算的建议范围 {budget['shot_count_max']} 个；参考范围不是上限，不会阻塞继续编辑或进入资产生产。", details={"actual": len(shots), **budget})
+    elif not enforced and len(shots) >= budget["shot_count_max"] and shots:
+        issue("shot_budget_advisory", "warning", f"当前镜头数量已达到按参考时长计算的建议范围 {budget['shot_count_max']} 个；仍可按叙事需要继续添加。", details={"actual": len(shots), **budget})
     errors = sum(1 for item in issues if item["severity"] == "error")
     warnings = sum(1 for item in issues if item["severity"] == "warning")
     return {

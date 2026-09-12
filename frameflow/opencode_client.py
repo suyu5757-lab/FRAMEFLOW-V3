@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,7 @@ from frameflow.providers import ProviderError, error_from_response
 
 
 DEFAULT_OPENCODE_DIRECTORY = Path.home() / ".local" / "share" / "frameflow-opencode-context"
+DEFAULT_OPENCODE_MESSAGE_TIMEOUT_SECONDS = 45.0
 
 
 def _auth_headers(profile: dict[str, Any], password: str = "") -> dict[str, str]:
@@ -26,17 +28,24 @@ def _auth_headers(profile: dict[str, Any], password: str = "") -> dict[str, str]
 async def opencode_request_json(
     profile: dict[str, Any], method: str, path: str, password: str = "", **kwargs: Any
 ) -> Any:
+    timeout_seconds = kwargs.pop("timeout_seconds", 300.0)
+    try:
+        timeout_seconds = max(0.5, float(timeout_seconds))
+    except (TypeError, ValueError):
+        timeout_seconds = 300.0
     headers = dict(kwargs.pop("headers", {}))
     headers.update(_auth_headers(profile, password))
     headers.setdefault("Content-Type", "application/json")
     url = f"{profile['base_url'].rstrip('/')}/{path.lstrip('/')}"
     try:
         async with httpx.AsyncClient(
-            timeout=httpx.Timeout(300.0, connect=4.0),
+            timeout=httpx.Timeout(timeout_seconds, connect=min(4.0, timeout_seconds)),
             follow_redirects=False,
             trust_env=False,
         ) as client:
             response = await client.request(method, url, headers=headers, **kwargs)
+    except httpx.TimeoutException as exc:
+        raise ProviderError(f"OpenCode Server 响应超时（{timeout_seconds:g} 秒）。", "timeout", 504) from exc
     except httpx.RequestError as exc:
         raise ProviderError(f"无法连接 OpenCode Server：{exc}", "connection", 502) from exc
     if response.status_code >= 400:
@@ -150,15 +159,42 @@ def _structured_result(payload: Any) -> dict[str, Any]:
         if isinstance(part, dict) and part.get("type") == "text" and part.get("text")
     ]
     if texts:
-        try:
-            result = json.loads("\n".join(texts))
-            if isinstance(result, dict):
-                return result
-        except json.JSONDecodeError:
-            pass
+        raw_text = "\n".join(texts).strip()
+        candidates = [raw_text]
+        if raw_text.startswith("```"):
+            fenced = raw_text.split("\n", 1)[1] if "\n" in raw_text else raw_text[3:]
+            if fenced.endswith("```"):
+                fenced = fenced[:-3].rstrip()
+            candidates.append(fenced)
+        # Text fallback responses occasionally include one short sentence
+        # before the JSON object. Decode the first complete object without
+        # accepting arbitrary prose as a structured result.
+        object_start = raw_text.find("{")
+        if object_start > 0:
+            try:
+                decoded, end = json.JSONDecoder().raw_decode(raw_text[object_start:])
+                if isinstance(decoded, dict) and not raw_text[object_start + end:].strip():
+                    return decoded
+            except json.JSONDecodeError:
+                pass
+        for candidate in candidates:
+            try:
+                result = json.loads(candidate)
+                if isinstance(result, dict):
+                    return result
+            except json.JSONDecodeError:
+                continue
     error = info.get("error")
     if error:
-        raise ProviderError(f"OpenCode 结构化输出失败：{error}", "validation", 502)
+        message = f"OpenCode 结构化输出失败：{error}"
+        normalized = message.lower()
+        if re.search(r"monthly usage limit|usage limit|quota|insufficient\s+(?:api\s*)?(?:balance|credit|quota)|payment required|billing", normalized):
+            raise ProviderError(message, "billing", 402)
+        if re.search(r"rate limit|rate_limit|too many requests|try again later", normalized):
+            raise ProviderError(message, "rate_limit", 429)
+        if re.search(r"unauthori[sz]ed|authentication|invalid (?:api )?key|api key.*(?:invalid|expired)", normalized):
+            raise ProviderError(message, "auth", 401)
+        raise ProviderError(message, "validation", 502)
     raise ProviderError("OpenCode 未返回结构化输出。", "validation", 502)
 
 
@@ -188,16 +224,33 @@ async def opencode_structured(
         raise ProviderError(f"OpenCode 创建会话失败（directory={directory}）：{exc}", exc.kind, exc.status_code) from exc
     if not isinstance(session, dict) or not session.get("id"):
         raise ProviderError("OpenCode 未能创建会话。", "validation", 502)
+    # OpenCode 1.18.29's HTTP message endpoint currently rejects the native
+    # json_schema envelope for the large FrameFlow contracts with
+    # ``Expected OutputFormatJsonSchema``. Sending the same contract request
+    # as strict JSON text is the supported compatibility path: the local
+    # parser below, followed by FrameFlow's schema/coverage gates, remains the
+    # authoritative validator. This also avoids waiting for a native-schema
+    # request that can never reach the model.
+    schema_text = json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
     body = {
-        "system": instructions,
+        "system": (
+            f"{instructions}\n\n"
+            "请只返回一个完整、合法的 JSON 对象，严格符合下方任务约定的字段结构；"
+            "不要使用 Markdown 代码围栏、解释文字、自然语言前后缀或补丁格式。\n"
+            f"JSON Schema（仅用于约束输出，不要把 schema 本身作为结果返回）：{schema_text}"
+        ),
         "parts": [{"type": "text", "text": input_text}],
-        # OpenCode 1.18 validates OutputFormatJsonSchema strictly and rejects
-        # the retryCount extension even though some generated SDK typings list
-        # it as optional. Structured-output retries are handled by FrameFlow
-        # at the provider boundary; keep this payload compatible with the
-        # running local server.
-        "format": {"type": "json_schema", "schema": schema},
+        # Omit ``format`` intentionally. OpenCode 1.18.29's public message
+        # endpoint rejects both the object and string spellings of its text
+        # format, while its internal model defaults an omitted value to plain
+        # text. FrameFlow parses and validates that text locally.
     }
+    output_mode = "text_json"
+    configured_timeout = profile.get("model_config", {}).get("message_timeout_seconds")
+    try:
+        message_timeout = max(10.0, min(300.0, float(configured_timeout or DEFAULT_OPENCODE_MESSAGE_TIMEOUT_SECONDS)))
+    except (TypeError, ValueError):
+        message_timeout = DEFAULT_OPENCODE_MESSAGE_TIMEOUT_SECONDS
     try:
         payload = await opencode_request_json(
             profile,
@@ -205,12 +258,27 @@ async def opencode_structured(
             f"/session/{session['id']}/message",
             password,
             params={"directory": directory},
+            timeout_seconds=message_timeout,
             json=body,
         )
     except ProviderError as exc:
-        raise ProviderError(f"OpenCode 结构化消息失败（directory={directory}）：{exc}", exc.kind, exc.status_code) from exc
+        if exc.kind == "timeout":
+            try:
+                await opencode_request_json(
+                    profile,
+                    "POST",
+                    f"/session/{session['id']}/abort",
+                    password,
+                    params={"directory": directory},
+                    timeout_seconds=5.0,
+                    json={},
+                )
+            except ProviderError:
+                pass
+        raise ProviderError(f"OpenCode JSON 文本消息失败（directory={directory}）：{exc}", exc.kind, exc.status_code) from exc
     result = _structured_result(payload)
     result["response_id"] = (payload.get("info") or {}).get("id") if isinstance(payload, dict) else None
     result["model"] = model_ref
     result["opencode_session_id"] = session["id"]
+    result["opencode_output_mode"] = output_mode
     return result

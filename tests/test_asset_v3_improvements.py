@@ -64,6 +64,32 @@ class AssetV3ImprovementTests(unittest.TestCase):
         self.assertEqual(audit.status_code, 200, audit.text)
         self.assertIn("待登记", audit.json()["counts"])
 
+    def test_asset_image_geometry_separates_base_assets_from_final_output(self) -> None:
+        character = {"id": "C001", "assetClass": "character"}
+        scene = {"id": "S001", "assetClass": "scene"}
+        prop = {"id": "P001", "assetClass": "prop"}
+        fusion = {"id": "F001", "assetClass": "fusion"}
+        self.assertEqual(server._asset_generation_profile(character, "9:16"), {"aspect_ratio": "16:9", "image_size": "1536x1024", "source": "class_default"})
+        self.assertEqual(server._asset_generation_profile(scene, "9:16"), {"aspect_ratio": "16:9", "image_size": "1536x1024", "source": "class_default"})
+        self.assertEqual(server._asset_generation_profile(prop, "9:16"), {"aspect_ratio": "1:1", "image_size": "1024x1024", "source": "class_default"})
+        self.assertEqual(server._asset_generation_profile(fusion, "9:16"), {"aspect_ratio": "9:16", "image_size": "1024x1536", "source": "project_output"})
+
+    def test_library_exposes_asset_geometry_policy(self) -> None:
+        project = project_document()
+        project["ratio"] = "9:16"
+        project["assets"].append({"id": "P001", "name": "道具一", "skill": "prop", "assetClass": "prop", "grade": "B", "status": "missing"})
+        saved = self.client.put("/api/v2/projects/PRJ_ASSET_V3", json={"document": project})
+        self.assertEqual(saved.status_code, 200, saved.text)
+        assets = {item["id"]: item for item in self.client.get("/api/v2/projects/PRJ_ASSET_V3/assets").json()["assets"]}
+        self.assertEqual(assets["C001"]["assetAspectRatio"], "16:9")
+        self.assertEqual(assets["C001"]["assetGenerationSize"], "1536x1024")
+        self.assertEqual(assets["C001"]["assetLayoutProfile"], "character_reference_sheet")
+        self.assertEqual(assets["C001"]["assetProviderAspectRatio"], "3:2")
+        self.assertEqual(assets["S001"]["assetAspectRatio"], "16:9")
+        self.assertEqual(assets["S001"]["assetLayoutProfile"], "empty_environment_board")
+        self.assertEqual(assets["P001"]["assetAspectRatio"], "1:1")
+        self.assertEqual(assets["P001"]["assetLayoutProfile"], "isolated_object_board")
+
     def test_library_query_contract_paginates_filters_and_sorts_server_side(self) -> None:
         first = self.client.get("/api/v2/projects/PRJ_ASSET_V3/assets?page=1&page_size=1&asset_type=character&sort=id")
         self.assertEqual(first.status_code, 200, first.text)
@@ -148,6 +174,7 @@ class AssetV3ImprovementTests(unittest.TestCase):
         self.assertEqual(generated.status_code, 200, generated.text)
         self.assertEqual(image_mock.await_count, 1)
         self.assertEqual(image_mock.await_args.args[2], canonical_prompt)
+        self.assertEqual(image_mock.await_args.args[3], "1536x1024")
         expected_hash = hashlib.sha256(canonical_prompt.encode("utf-8")).hexdigest()
         self.assertEqual(generated.json()["prompt_sha256"], expected_hash)
         with server.app.state.db.connect() as connection:

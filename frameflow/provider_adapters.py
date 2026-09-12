@@ -179,8 +179,8 @@ def _capabilities(profile: Any, defaults: list[str]) -> list[str]:
     if not isinstance(values, list) or not values:
         values = defaults
     if _provider_type(profile) == "openai":
-        # FRAMEFLOW reserves the TTS route for MiniMax. OpenAI remains
-        # available for orchestration and image capabilities.
+        # FRAMEFLOW reserves the TTS route for MiniMax. Legacy text/media
+        # adapters keep their declared non-TTS capabilities for compatibility.
         values = [item for item in values if str(item) != "tts"]
     return sorted({str(item) for item in values if str(item) in CAPABILITY_SPECS})
 
@@ -281,7 +281,7 @@ def normalize_provider_output(
     provider_task_id: str | None = None,
     status: str = "succeeded",
 ) -> dict[str, Any]:
-    """Normalize common OpenAI/CLI/ComfyUI response shapes into ArtifactRef inputs."""
+    """Normalize common upstream response shapes into ArtifactRef inputs."""
     outputs: list[dict[str, Any]] = []
 
     def add_output(kind: str, value: Any, mime_type: str | None = None, **extra: Any) -> None:
@@ -465,7 +465,7 @@ class OpenAIAdapter(ProviderAdapter):
                 body = {"model": model or "gpt-5.5", "store": False, "input": request.get("input") or request.get("prompt") or ""}
                 payload = await request_json("POST", f"{self.profile['base_url'].rstrip('/')}/responses", credential, json=body)
         else:
-            raise ProviderError(f"OpenAI 适配器不支持 {capability}。", "configuration", 422)
+            raise ProviderError(f"当前 Provider 适配器不支持 {capability}。", "configuration", 422)
         return self.normalize(payload, capability, model, None, "succeeded")
 
 

@@ -497,7 +497,6 @@ export type SettingsEnvelope = {
     database: { path: string; status: string };
     keyring: { available: boolean; backend?: string | null };
     media: { ffmpeg?: string | null; ffprobe?: string | null };
-    openai: { profile_id?: string | null; credential_configured: boolean };
     minimax?: {
       profile_id?: string | null;
       credential_configured: boolean;
@@ -821,6 +820,7 @@ export type StoryShot = {
   size: string;
   camera: string;
   action: string;
+  sourceBeatIds?: string[];
   [key: string]: unknown;
 };
 
@@ -851,6 +851,18 @@ export type StoryEnvelope = {
   asset_board?: AssetBoardEnvelope;
 };
 
+export type PromptConsistencyReview = {
+  status: 'not_started' | 'checking' | 'needs_repair' | 'passed' | 'needs_intent_revision' | 'blocked' | string;
+  attempt: number;
+  maxAttempts?: number;
+  message: string;
+  issueCodes?: string[];
+  issues?: Array<{ code?: string; message?: string }>;
+  checks?: Record<string, boolean>;
+  requiresIntentRevision?: boolean;
+  checkedAt?: string | null;
+};
+
 export type AssetPromptCard = {
   id: string;
   assetClass: string;
@@ -879,17 +891,30 @@ export type AssetPromptCard = {
   generationChoiceStatus?: string;
   generationStatus?: string;
   imageGenerationEligible?: boolean;
+  assetAspectRatio?: '16:9' | '1:1' | '9:16' | string | null;
+  assetGenerationSize?: '1536x1024' | '1024x1024' | '1024x1536' | string | null;
+  assetLayoutProfile?: string | null;
+  assetProviderAspectRatio?: string | null;
+  promptConsistencyReview?: PromptConsistencyReview | null;
 };
 
 export type AssetPromptRun = {
   id: string;
   status: string;
+  assetIntentVersion?: number | null;
   promptCards: AssetPromptCard[];
   /** One automatically-created planning slot per storyboard shot. */
   fusionPlans?: Array<Record<string, unknown>>;
   missingA?: string[];
   regulatorOutput?: Record<string, unknown>;
   promptOutput?: Record<string, unknown>;
+  promptConsistency?: {
+    status?: string;
+    maxAutoRepairAttempts?: number;
+    passed?: number;
+    failed?: number;
+    assets?: Array<{ assetId?: string; status?: string; repairAttempts?: number; issueCodes?: string[]; message?: string }>;
+  };
 };
 
 export type AssetPromptRunEnvelope = {
@@ -899,6 +924,78 @@ export type AssetPromptRunEnvelope = {
   story: StoryEnvelope;
   library: AssetLibraryEnvelope;
   asset_board: AssetBoardEnvelope;
+};
+
+export type AssetIntentAsset = {
+  assetId: string;
+  assetClass: string;
+  assetName: string;
+  assetRole?: string;
+  relevantShots: string[];
+  grade?: string;
+  required?: boolean;
+  userText: string;
+  mode?: 'user_input' | 'script_only' | 'deferred' | 'draft' | string | null;
+  status: 'empty' | 'processing' | 'submitted' | 'blocked' | 'failed' | string;
+  warningSummary: string[];
+  assetAspectRatio?: '16:9' | '1:1' | '9:16' | string | null;
+  assetGenerationSize?: '1536x1024' | '1024x1024' | '1024x1536' | string | null;
+  assetAspectRatioSource?: string | null;
+  assetLayoutProfile?: string | null;
+  assetProviderAspectRatio?: string | null;
+  promptConsistencyReview?: PromptConsistencyReview | null;
+  updatedAt?: string | null;
+  readOnly?: boolean;
+};
+
+export type AssetIntentProgress = {
+  handled: number;
+  total: number;
+  percent: number;
+  allHandled: boolean;
+};
+
+export type AssetIntentSystemPlan = {
+  assetId: string;
+  assetClass: string;
+  assetName: string;
+  assetRole?: string;
+  relevantShots: string[];
+  grade?: string;
+  kind: 'fusion' | 'shot_continuity' | 'audio' | 'system_other' | string;
+  label: string;
+  status: 'system_planned' | string;
+  message?: string;
+  readOnly?: boolean;
+};
+
+export type AssetIntentEnvelope = {
+  project_id: string;
+  revision: number;
+  assetIntentVersion: number;
+  sourceStoryRevision?: string | null;
+  currentStoryRevision?: string | null;
+  sourceAssetManifestFingerprint?: string | null;
+  currentAssetManifestFingerprint: string;
+  manifestStale: boolean;
+  assets: AssetIntentAsset[];
+  systemPlans: AssetIntentSystemPlan[];
+  summary?: {
+    baseAssetCount: number;
+    systemPlanCount: number;
+  };
+  progress: AssetIntentProgress;
+  warnings: string[];
+  assetManifestReady: boolean;
+};
+
+export type AssetIntentPrepareEnvelope = AssetIntentEnvelope & {
+  preparedAssetCount?: number;
+  project_revision?: number;
+  story?: StoryEnvelope['story'];
+  checks?: StoryEnvelope['checks'];
+  library?: AssetLibraryEnvelope;
+  asset_board?: AssetBoardEnvelope;
 };
 
 export type FusionPromptRunEnvelope = {
@@ -1011,6 +1108,12 @@ export type LibraryAsset = Record<string, any> & {
   assetClass: string;
   grade?: string;
   assetMetadata?: Record<string, any>;
+  assetAspectRatio?: '16:9' | '1:1' | '9:16' | string | null;
+  assetGenerationSize?: '1536x1024' | '1024x1024' | '1024x1536' | string | null;
+  assetAspectRatioSource?: string | null;
+  assetLayoutProfile?: string | null;
+  assetProviderAspectRatio?: string | null;
+  promptConsistencyReview?: PromptConsistencyReview | null;
   readiness: AssetReadiness;
   workflow: AssetWorkflow;
   registered_ready?: boolean;

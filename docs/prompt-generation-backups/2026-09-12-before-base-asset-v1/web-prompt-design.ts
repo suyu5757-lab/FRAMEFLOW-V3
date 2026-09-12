@@ -6,41 +6,11 @@ export const PROMPT_FIELD_ORDER = [
   'continuityChecklist', 'mustPreserve', 'mustAvoid', 'generationNotes',
 ] as const;
 const PROMPT_SUPPLEMENT_MARKER = '同时满足以下补充制作要求：';
-export type PromptCompositionMode = 'legacy_supplement' | 'clean_replace' | 'base_asset';
-export const BASE_ASSET_PROMPT_COMPILER_VERSION = 'base-asset-v1';
-const baseAssetClasses = new Set(['character', 'scene', 'prop', 'product']);
-const baseAssetAspectRatios: Record<string, string> = { character: '16:9', scene: '16:9', prop: '1:1', product: '1:1' };
-const baseAssetOrientations: Record<string, string> = { '16:9': '横向', '1:1': '正方形', '9:16': '纵向' };
-const baseAssetIdPattern = /(?<![A-Za-z0-9])(?:SH|CHAR|SCENE|PROP|ITEM|ENV|ASSET|C|S|P)[_-]?\d{1,4}(?![A-Za-z0-9])/gi;
-const baseAgeRangePattern = /\b\d{1,2}\s*(?:至|到|[-–—~])\s*\d{1,2}\s*岁/g;
-const baseSceneBackgroundRule = '背景边界必须展示实际环境的后景层、空间封口和消失方向，不能用白色、米白或浅灰设计板替代环境本体；后景仍保持空环境，不加入角色、独立道具或融合对象。';
-const baseInternalMarkers = [
-  'FRAMEFLOW', 'Prompt Contract', 'suyu-skill-v2', '资产 ID', 'Prompt QA', 'Pending',
-  'user-confirmation-required', 'generationStatus', 'promptPack', 'promptQuality',
-  '同时满足以下补充制作要求', '建议尺寸为', 'quality=', 'size=', 'background=', 'output_format=',
-  'generationNotes', 'suggestedSize', 'referenceRoles', 'generationReferenceAssets', 'identityAnchor', 'identityLock',
-  'characterDetails', 'sceneDetails', 'propDetails', 'fusionDetails', 'shotPlan', 'mustPreserve', 'mustAvoid',
-  'negativePrompt', 'visualStyle', 'cameraExecution', 'lightingCausality', 'atmosphereBehavior',
-];
-
-export function isBaseAssetClass(assetClass?: string): boolean {
-  return baseAssetClasses.has(canonicalAssetClass(assetClass));
-}
-
-export function promptCompositionModeForAsset(assetClass: string | undefined, requested: PromptCompositionMode = 'legacy_supplement'): PromptCompositionMode {
-  const cls = canonicalAssetClass(assetClass);
-  if (cls === 'fusion') return 'legacy_supplement';
-  if (baseAssetClasses.has(cls) && (requested === 'clean_replace' || requested === 'base_asset')) return 'base_asset';
-  if (requested === 'base_asset') return 'clean_replace';
-  return requested;
-}
 
 export type PromptRecord = Record<string, unknown>;
 export type PromptContext = {
   shots?: PromptRecord[];
   references?: unknown[];
-  assetGenerationProfile?: Record<string, unknown>;
-  assetLayoutProfile?: string | null;
 };
 
 export const AUDIO_PROMPT_SCHEMA_VERSION = 'minimax-speech-audio-v2';
@@ -188,78 +158,6 @@ function unique(values: unknown[]): string[] {
   return result;
 }
 
-function baseText(value: unknown): string {
-  let rendered = text(value);
-  if (!rendered) return '';
-  rendered = rendered.replace(baseAgeRangePattern, '明确的成年年龄');
-  rendered = rendered.replaceAll('明确的成年年龄视觉年龄', '明确的成年年龄');
-  baseInternalMarkers.forEach((marker) => { rendered = rendered.replaceAll(marker, ''); });
-  rendered = rendered.replace(/(?:SH|S)\d{1,4}\s*(?:与|和|、|\/|及)\s*(?:SH|S)\d{1,4}/gi, '所有相关镜头');
-  rendered = rendered.replace(/可跨\s*所有相关镜头\s*复用/g, '可跨镜头复用');
-  rendered = rendered.replace(/所有相关镜头\s*(复用|保持|连续性|一致)/g, '跨镜头$1');
-  rendered = rendered.replace(baseAssetIdPattern, '');
-  rendered = rendered.replace(/\s{2,}/g, ' ').replace(/[；，,]{2,}/g, '；');
-  rendered = rendered.replace(/(?:^|[；，,])\s*(?:与|和|及)\s*(?=[；，,。]|$)/g, '');
-  rendered = rendered.replace(/^\s*(?:是|为)\s+/, '');
-  rendered = rendered.replace(/(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])/g, '');
-  return rendered.trim().replace(/^[；，,\s]+|[；，,\s]+$/g, '');
-}
-
-function baseTexts(values: unknown[]): string[] {
-  const result: string[] = [];
-  values.forEach((value) => {
-    const rendered = baseText(value);
-    if (rendered && !result.includes(rendered)) result.push(rendered);
-  });
-  return result;
-}
-
-function mergeBaseConstraints(existing: unknown[], defaults: string[]): string[] {
-  const result = baseTexts(existing);
-  const topicGroups = [
-    ['文字', 'logo', '编号', '序列号', '二维码', '水印'],
-    ['角色', '人物', '人群', '重复角色', '额外人物'],
-    ['融合', '接触阴影', '握持', '放置', '穿戴', '手持'],
-    ['镜头级', '动作', '对白', '剧情光', '动作模糊', '表演'],
-    ['场景', '环境', '建筑', '入口', '地标'],
-    ['道具', '物品', '零件', '配件', '装饰'],
-    ['脸型', '眼型', '发型', '服装', '身体比例', '物体类别', '材质'],
-  ];
-  const topics = (value: string) => new Set(topicGroups.flatMap((keywords, index) => keywords.some((keyword) => value.toLowerCase().includes(keyword.toLowerCase())) ? [index] : []));
-  baseTexts(defaults).forEach((item) => {
-    const itemTopics = topics(item);
-    if (!result.some((current) => [...itemTopics].every((topic) => topics(current).has(topic)))) result.push(item);
-  });
-  return result;
-}
-
-function visiblePromptConstraints(value: unknown, mode: PromptCompositionMode): string[] {
-  const values = list(value);
-  if (mode === 'legacy_supplement') return values;
-  return values.filter((item) => !baseInternalMarkers.some((marker) => item.includes(marker)));
-}
-
-function baseReferenceProse(strategy: unknown): string {
-  const record = isRecord(strategy) ? strategy : {};
-  const rawRoles = record.roles || record.references || [];
-  const roles = Array.isArray(rawRoles) ? rawRoles : [rawRoles];
-  const descriptions = roles.map((role, index) => {
-    if (isRecord(role)) {
-      const controls = baseText(role.controls || role.scope || role.use || role.role || '视觉参考');
-      const mustNot = baseText(role.mustNotControl || role.must_not_control);
-      return `参考图 ${index + 1} 只控制${controls || '其声明的视觉范围'}${mustNot ? `，不控制${mustNot}` : ''}`;
-    }
-    return `参考图 ${index + 1} 只作为视觉参考，不改变主体身份、结构或背景`;
-  });
-  return descriptions.length ? sentence(descriptions.join('；'), '参考图职责：') : '';
-}
-
-function baseStateText(values: unknown[], rejectMarkers: string[] = []): string {
-  const actionMarkers = ['触碰', '接触', '握住', '拿起', '抬眼', '微笑', '笑意', '轻微笑', '出击', '奔跑', '转身', '说‘', '说"', '对白', '台词'];
-  const blocked = [...actionMarkers, ...rejectMarkers];
-  return baseTexts(values).filter((item) => !blocked.some((marker) => item.includes(marker))).map((item) => item.replace(/[。；，,]+$/g, '')).join('；');
-}
-
 function keyLabel(key: string): string {
   return keyLabels[key] || key.replace(/([A-Z])/g, ' $1').replace(/^./, (value) => value.toUpperCase());
 }
@@ -403,7 +301,7 @@ export function normalizePromptPack(assetClass: string | undefined, rawPack: unk
     mayVary: ['variableDetails', 'optionalDetails'],
   });
   const propSource = copyRecord(source.propDetails || source.itemDetails);
-  const prop = mergeDetail(propSource, cls === 'prop' || cls === 'product' ? source : {}, {
+  const prop = mergeDetail(propSource, cls === 'prop' ? source : {}, {
     objectIdentity: ['identity', 'identityAnchor', 'category', 'function'], silhouetteAndProportions: ['silhouette', 'proportions'],
     structureAndFunction: ['structure', 'functionalDetails'], materialAndCondition: ['materials', 'materialFinish', 'condition', 'state'],
     detailAndMaterialBehavior: ['detailEvidence', 'materialBehavior'], colorMarkingsAndLabelPolicy: ['color', 'markings', 'labelPolicy'],
@@ -515,105 +413,6 @@ function hasStructuredContent(pack: PromptRecord): boolean {
   return Object.entries(pack).some(([key, value]) => key !== 'schemaVersion' && key !== 'workflow' && key !== 'assetType' && key !== 'promptQuality' && !(key === 'referenceStrategy' && JSON.stringify(value) === JSON.stringify({ status: 'no_reference_assets' })) && hasValue(value));
 }
 
-function baseAssetGeometryPrompt(cls: string, context?: PromptContext): string {
-  if (!baseAssetClasses.has(cls)) return '';
-  const profile = context?.assetGenerationProfile || {};
-  const ratio = String(profile.aspect_ratio || baseAssetAspectRatios[cls] || '1:1');
-  const orientation = baseAssetOrientations[ratio] || '';
-  if (cls === 'character') return `画布与基础资产输出要求：生成一张 ${ratio} ${orientation}角色设定参考板；画面采用宽幅或对应比例布局，完整容纳面部近景、正面全身、90°侧面全身和180°背面全身视图；所有视图完整显示，不裁切头部、脚部、服装、装备或身体轮廓。`;
-  if (cls === 'scene') return `画布与基础资产输出要求：生成一张 ${ratio} ${orientation}空环境设计参考图；完整展示空间的前景、中景、背景、后景封口和可用于后续融合的动作区域；不得因为最终视频比例而改成项目画幅。`;
-  const label = cls === 'product' ? '独立产品' : '独立物品';
-  return `画布与基础资产输出要求：生成一张 ${ratio} ${orientation}${label}设计参考图；完整展示主体轮廓、关键结构、材质、功能部位和尺度关系，不加入人物、环境或融合关系。`;
-}
-
-function buildBaseAssetPrompt(cls: string, pack: PromptRecord, fallback = '', context?: PromptContext): string {
-  const fallbackText = String(fallback || '').trim();
-  if (!hasStructuredContent(pack)) return fallbackText;
-  const paragraphs: string[] = [];
-  const add = (values: unknown[], prefix: string) => {
-    const rendered = baseTexts(values).map((item) => item.replace(/[。；，,]+$/g, ''));
-    if (rendered.length) paragraphs.push(sentence(rendered.join('；'), prefix));
-  };
-    add([pack.promptIntent], '这张基础资产设计图的生产目标是：');
-    const geometry = baseAssetGeometryPrompt(cls, context);
-    if (geometry) paragraphs.push(geometry);
-  const reference = baseReferenceProse(pack.referenceStrategy);
-  if (reference) paragraphs.push(reference);
-
-  if (cls === 'character') {
-    const details = isRecord(pack.characterDetails) ? pack.characterDetails : {};
-    const identity = baseTexts([pack.identityAnchor, pack.identityLock, details.stableAnchors]);
-    add(identity, '主体身份核心：');
-    let staticState = baseStateText([pack.visibleEvent]);
-    if (staticState.includes('同一角色') && !staticState.includes('不是四名相似角色')) staticState = `${staticState}；不是四名相似角色`;
-    if (staticState && ['静态', '结构参考板', '设定板', '参考板', '视图', '展示'].some((marker) => staticState.includes(marker))) add([staticState], '基础资产只呈现以下静态状态：');
-    add([details.faceAndExpression], '脸部身份锚点：');
-    add(['年龄使用单一明确的成年年龄印象，不使用年龄范围；所有可见面部视图保持自然放松的中性表情，眼型、虹膜颜色、眼距和眉眼比例属于身份锚点。'], '脸部连续性规则：');
-    add([details.hairAndHeadSilhouette], '发型与头部轮廓锚点：');
-    add([details.bodyPoseAction], '身体比例与中性姿态：');
-    add([details.costumeAndMaterials], '服装层次与固定结构：');
-    add([details.detailAndMaterialBehavior], '镜头可见的细节与材质行为：');
-    const costumeText = baseText(details.costumeAndMaterials);
-    const materialText = baseText(details.detailAndMaterialBehavior);
-    if ((/青蓝|cyan/i.test(costumeText) || /青蓝|cyan/i.test(materialText)) && (/腕|接口|wrist/i.test(costumeText))) add(['青蓝色照明只出现在已定义的腕部同步接口和颈后窄型接口指示灯，不在其他部位扩散为装饰性灯光。'], '颜色定位规则：');
-    const authoredLayout = baseText(details.referenceSheet);
-    let layout = '四个区域展示的是同一名角色的不同观察视角，不是四名相似角色；上方约 38% 居中放置一张正面头部与上半身身份特写；下方约 62% 分成三个等宽栏，依次为正面全身、严格 90° 左侧面全身和严格 180° 背面全身；三张全身视图必须等高、同尺度、脚底处于同一水平基线、头顶高度一致，不使用不同视图之间的透视缩放。';
-    if (staticState.includes('同一角色')) layout = layout.replace('四个区域展示的是同一名角色的不同观察视角，不是四名相似角色；', '');
-    if (authoredLayout && !['38%', '62%', '90', '180'].every((token) => authoredLayout.includes(token))) layout += ` 补充参考板说明：${authoredLayout}`;
-    else if (authoredLayout) layout = authoredLayout;
-    add([layout, '镜头使用约 70–85mm 全画幅等效，机位位于躯干中部，保持自然透视，避免广角、头大脚小和不同视图的比例漂移。', pack.cameraExecution], '参考板布局与摄影机执行为：');
-    const styleText = baseText(pack.visualStyle);
-    const studioRule = /棚拍|设计光/.test(styleText) ? '' : '使用稳定均匀的中性棚拍设计光，准确区分皮肤、发丝、织物、磨砂装甲、金属接口和手套表面。';
-    add([pack.visualStyle, studioRule, '使用白色、米白或中性浅灰的干净设计背景，不加入具体生活场景。'], '光线、渲染与背景为：');
-    add([...baseTexts([...list(pack.continuityChecklist), details.continuityLocks]), '所有视图保持同一张脸、眼型与虹膜颜色、发长与发色、服装层次、固定装备、身体比例和手部尺度。', '基础资产默认不允许身份、发型、服装结构或配件位置变化。'], '基础资产连续性锁定：');
-    add(baseTexts(visiblePromptConstraints(pack.mustPreserve, 'base_asset')), '必须保留：');
-    const avoid = mergeBaseConstraints(visiblePromptConstraints(pack.mustAvoid || pack.negativePrompt, 'base_asset'), ['不出现具体生活场景、机位外的叙事环境、额外人物或重复角色。', '不把镜头级接触动作、对白、剧情光、动作模糊或剧情性表演写入结构参考板。', '不改变年龄印象、脸型、眼型、发型轮廓、服装层次、固定装备或身体比例。', '避免动漫化面部、网红脸、极端 V 形下颌、瓷娃娃皮肤、重度美颜和广角透视变形。', '不生成可读文字、编号、Logo、水印或未定义配件。']);
-    add(avoid, '必须避免：');
-    return paragraphs.filter(Boolean).join('\n\n').trim() || fallbackText;
-  }
-
-  if (cls === 'scene') {
-    const details = isRecord(pack.sceneDetails) ? pack.sceneDetails : {};
-    add([pack.identityAnchor, pack.identityLock, details.identityAndPurpose, details.stableAnchors, '只生成空环境，不插入人物、独立道具或融合结果。'], '环境身份与叙事功能：');
-    const staticState = baseStateText([pack.visibleEvent, pack.eventConsequence], ['角色', '人物', '人群', '手部', '道具', '物品', '融合', '进入画面', '离开画面', '站在', '走入', '放置', '握住', '穿戴']);
-    if (staticState) add([staticState], '环境的静态表面/天气状态为：');
-    add([pack.spatialGeography, details.spatialLayoutAndGeography], '空间布局与地理为：');
-    add([details.foregroundMidgroundBackground], '前景、中景与背景分层为：');
-    add([details.setDressingAndFixedAnchors], '陈设与固定地标为：');
-    add([details.materialsAndSurfaceState, pack.materialEvidence], '材质与表面状态为：');
-    add([details.detailEvidenceAndAtmosphere, pack.atmosphereBehavior], '镜头可见的环境细节与空气行为为：');
-    add([pack.lightingCausality, details.lightingWeatherAtmosphere], '光线、天气与大气为：');
-    add([details.actionBlockingZones], '动作/阻挡区只保留为空的可用空间：');
-    add([details.propPlacementZones], '道具预留区只保留为空的接触与放置空间：');
-    add([pack.cameraExecution, pack.visualStyle, '使用可复用的中性环境设计视角，避免把单一镜头的动作或融合关系固化进环境资产。'], '构图、摄影机与渲染为：');
-    add([baseSceneBackgroundRule], '背景边界为：');
-    add([...baseTexts([...list(pack.continuityChecklist), details.continuityLocks, details.stableAnchors])], '环境连续性锁定：');
-    add(baseTexts(visiblePromptConstraints(pack.mustPreserve, 'base_asset')), '必须保留：');
-    const avoid = mergeBaseConstraints(visiblePromptConstraints(pack.mustAvoid || pack.negativePrompt, 'base_asset'), ['不出现角色、手部、独立道具或角色-道具-环境融合。', '动作区与道具预留区保持空白，不添加接触阴影、握持关系或特定角色阻挡。', '不新增与空间逻辑冲突的建筑、入口、地标、现代物件或不可解释的装饰。', '不生成可读文字、Logo、水印、网格、分镜表或多余人物。']);
-    add(avoid, '必须避免：');
-    return paragraphs.filter(Boolean).join('\n\n').trim() || fallbackText;
-  }
-
-  if (cls === 'prop' || cls === 'product') {
-    const details = isRecord(pack.propDetails) ? pack.propDetails : {};
-    add([pack.identityAnchor, pack.identityLock, details.objectIdentity, '只生成独立物品设计资产。'], '物品身份与功能为：');
-    const staticState = baseStateText([pack.visibleEvent, pack.eventConsequence], ['角色', '人物', '人群', '场景', '环境', '融合', '手部', '握住', '手持', '穿戴', '放置', '接触', '进入画面', '离开画面']);
-    if (staticState) add([staticState], '物品当前状态为：');
-    add([details.silhouetteAndProportions], '轮廓与比例为：');
-    add([details.structureAndFunction], '结构与功能证据为：');
-    add([details.materialAndCondition, details.detailAndMaterialBehavior, pack.materialEvidence], '材质、状态与表面行为为：');
-    add([details.colorMarkingsAndLabelPolicy], '颜色、标记与文字策略为：');
-    add([details.scaleAndInteraction], '尺度与未来交互说明为：');
-    add([pack.cameraExecution || '中性物品设计记录视角，完整显示轮廓、关键结构和接触部位，避免广角变形。', pack.visualStyle, '使用白色、米白或中性浅灰的干净设计背景，不加入具体生活场景。'], '展示、摄影机与背景为：');
-    add([...baseTexts([...list(pack.continuityChecklist), details.continuityLocks]), '每次生成保持同一物体类别、轮廓比例、结构数量、材质层次、标记位置和状态定义。'], '物品连续性锁定：');
-    add(baseTexts(visiblePromptConstraints(pack.mustPreserve, 'base_asset')), '必须保留：');
-    const avoid = mergeBaseConstraints(visiblePromptConstraints(pack.mustAvoid || pack.negativePrompt, 'base_asset'), ['不改变物品类别、结构数量、尺度关系、材质或状态。', '不执行手持、穿戴、放置、接触阴影或物品-角色-环境融合；交互只作为文字尺度说明。', '不添加随机零件、装饰、品牌、可读 Logo、序列号、二维码、文字或水印。', '不让场景、人物或其他物体取代独立物品的主体轮廓。']);
-    add(avoid, '必须避免：');
-    return paragraphs.filter(Boolean).join('\n\n').trim() || fallbackText;
-  }
-  return fallbackText;
-}
-
 function audioContextCandidates(context?: PromptContext): Array<{ shotId: string; kind: string; text: string }> {
   return contextShots(context).flatMap((shot) => {
     const shotId = String(shot.id || shot.shotId || shot.shot_id || '').trim();
@@ -722,9 +521,8 @@ export function formatMiniMaxWebPromptPackage(packageValue: MiniMaxWebPromptPack
   ].filter(Boolean).join('\n');
 }
 
-export function buildNaturalLanguagePrompt(assetClass: string | undefined, rawPack: unknown, fallbackPrompt = '', context?: PromptContext, compositionMode: PromptCompositionMode = 'legacy_supplement'): string {
+export function buildNaturalLanguagePrompt(assetClass: string | undefined, rawPack: unknown, fallbackPrompt = '', context?: PromptContext): string {
   const cls = canonicalAssetClass(assetClass);
-  const effectiveMode = promptCompositionModeForAsset(cls, compositionMode);
   const pack = normalizePromptPack(cls, rawPack, { context });
   const fallback = String(fallbackPrompt || '').trim();
   if (!hasStructuredContent(pack)) return fallback;
@@ -733,7 +531,6 @@ export function buildNaturalLanguagePrompt(assetClass: string | undefined, rawPa
     if (packageValue.copyText) return packageValue.copyText;
     return packageValue.candidateText ? `MiniMax Speech 2.8 Web：候选朗读文本待用户确认：${packageValue.candidateText}` : 'MiniMax Speech 2.8 Web：尚未确认唯一朗读文本，暂不生成。';
   }
-  if (effectiveMode === 'base_asset') return buildBaseAssetPrompt(cls, pack, fallback, context);
   const plan = Array.isArray(pack.shotPlan) ? pack.shotPlan.filter(isRecord) : [];
   const shot = shotProse(plan);
   const paragraphs: string[] = [];
@@ -825,9 +622,8 @@ export function buildNaturalLanguagePrompt(assetClass: string | undefined, rawPa
   return compiled.trim();
 }
 
-export function canonicalizePromptOutput(assetClass: string | undefined, rawPack: unknown, prompt: string, context?: PromptContext, compositionMode: PromptCompositionMode = 'legacy_supplement'): { prompt: string; promptPack: PromptRecord; promptContractVersion: string; promptWorkflow: string; promptFieldOrder: readonly string[]; promptCompositionMode?: PromptCompositionMode; promptCompilerVersion?: string } {
+export function canonicalizePromptOutput(assetClass: string | undefined, rawPack: unknown, prompt: string, context?: PromptContext): { prompt: string; promptPack: PromptRecord; promptContractVersion: string; promptWorkflow: string; promptFieldOrder: readonly string[] } {
   const promptPack = normalizePromptPack(assetClass, rawPack, { context });
   const fieldOrder = canonicalAssetClass(assetClass) === 'audio' ? AUDIO_PROMPT_FIELD_ORDER : PROMPT_FIELD_ORDER;
-  const effectiveMode = promptCompositionModeForAsset(assetClass, compositionMode);
-  return { prompt: buildNaturalLanguagePrompt(assetClass, promptPack, prompt, context, effectiveMode), promptPack, promptContractVersion: PROMPT_CONTRACT_VERSION, promptWorkflow: PROMPT_WORKFLOW_ID, promptFieldOrder: fieldOrder, ...(effectiveMode === 'base_asset' ? { promptCompositionMode: effectiveMode, promptCompilerVersion: BASE_ASSET_PROMPT_COMPILER_VERSION } : {}) };
+  return { prompt: buildNaturalLanguagePrompt(assetClass, promptPack, prompt, context), promptPack, promptContractVersion: PROMPT_CONTRACT_VERSION, promptWorkflow: PROMPT_WORKFLOW_ID, promptFieldOrder: fieldOrder };
 }

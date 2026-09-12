@@ -4,7 +4,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from frameflow.opencode_client import normalize_opencode_providers, opencode_structured, probe_opencode, split_model_ref
+from frameflow.opencode_client import _structured_result, normalize_opencode_providers, opencode_structured, probe_opencode, split_model_ref
+from frameflow.providers import ProviderError
 
 
 class OpenCodeClientTests(unittest.IsolatedAsyncioTestCase):
@@ -56,19 +57,46 @@ class OpenCodeClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session_body["agent"], "build")
         self.assertNotIn("model", message_body)
         self.assertNotIn("agent", message_body)
-        self.assertEqual(message_body["format"], {"type": "json_schema", "schema": {"type": "object"}})
-        self.assertNotIn("retryCount", message_body["format"])
+        self.assertNotIn("format", message_body)
+        self.assertIn('"type":"object"', message_body["system"])
         expected_directory = str(Path("/tmp/frameflow-opencode-test").resolve())
         self.assertEqual(calls[0][3], {"directory": expected_directory})
         self.assertEqual(calls[1][3], {"directory": expected_directory})
         self.assertEqual(result["opencode_session_id"], "SES_TEST")
 
+    async def test_structured_prompt_aborts_session_after_message_timeout(self) -> None:
+        calls = []
+
+        async def fake_request(profile, method, path, password="", **kwargs):
+            calls.append((method, path, kwargs))
+            if path == "/session":
+                return {"id": "SES_TIMEOUT"}
+            if path.endswith("/message"):
+                raise ProviderError("OpenCode Server 响应超时。", "timeout", 504)
+            return None
+
+        with mock.patch("frameflow.opencode_client.opencode_request_json", new=fake_request):
+            with self.assertRaisesRegex(ProviderError, "JSON 文本消息失败"):
+                await opencode_structured(self.profile, "", "opencode-go/gpt-5.6-luna", "system", "prompt", {"type": "object"})
+        self.assertEqual([call[1] for call in calls], ["/session", "/session/SES_TIMEOUT/message", "/session/SES_TIMEOUT/abort"])
+
     def test_structured_result_accepts_server_field_name(self) -> None:
-        from frameflow.opencode_client import _structured_result
         self.assertEqual(
             _structured_result({"info": {"structured": {"reply": "ok"}}, "parts": []}),
             {"reply": "ok"},
         )
+
+    def test_structured_result_classifies_upstream_usage_limit(self) -> None:
+        with self.assertRaises(ProviderError) as context:
+            _structured_result({"info": {"error": "Monthly usage limit reached. Resets in 3 days."}, "parts": []})
+        self.assertEqual(context.exception.kind, "billing")
+        self.assertEqual(context.exception.status_code, 402)
+
+    def test_structured_result_classifies_upstream_rate_limit(self) -> None:
+        with self.assertRaises(ProviderError) as context:
+            _structured_result({"info": {"error": "Rate limit exceeded. Please try again later."}, "parts": []})
+        self.assertEqual(context.exception.kind, "rate_limit")
+        self.assertEqual(context.exception.status_code, 429)
 
 
 if __name__ == "__main__":

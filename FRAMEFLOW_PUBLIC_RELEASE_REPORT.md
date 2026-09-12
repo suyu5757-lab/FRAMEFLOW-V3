@@ -48,7 +48,7 @@
 
 ## 4. 安全扫描
 
-- 常见 OpenAI/GitHub/Slack 密钥格式：未发现
+- 常见第三方密钥格式：未发现
 - 私钥块：未发现
 - 长 Bearer Token：未发现
 - `.env` / `.env.*` 实际配置文件：未发现；仅保留空值 `.env.example`

@@ -462,13 +462,13 @@ class AssistantWorkspaceTests(unittest.TestCase):
         conversation_id = first_run["conversation_id"]
         wrong_provider = self.client.post(f"/api/v2/assistant/runs/{first_run_id}/external-confirmation", json={
             "decision": "approve",
-            "provider_profile_id": "opencode-default",
+            "provider_profile_id": "openai-default",
             "detail": {"approved_by": "test"},
         })
         self.assertEqual(wrong_provider.status_code, 409, wrong_provider.text)
         rejected = self.client.post(f"/api/v2/assistant/runs/{first_run_id}/external-confirmation", json={
             "decision": "reject",
-            "provider_profile_id": "openai-default",
+            "provider_profile_id": "opencode-default",
             "detail": {"approved_by": "test"},
         })
         self.assertEqual(rejected.status_code, 200, rejected.text)
@@ -481,7 +481,7 @@ class AssistantWorkspaceTests(unittest.TestCase):
         self.assertEqual(self.client.get(f"/api/v2/assistant/runs/{second_run_id}").json()["status"], "awaiting_external_confirmation")
         approved = self.client.post(f"/api/v2/assistant/runs/{second_run_id}/external-confirmation", json={
             "decision": "approve",
-            "provider_profile_id": "openai-default",
+            "provider_profile_id": "opencode-default",
             "detail": {"approved_by": "test"},
         })
         self.assertEqual(approved.status_code, 200, approved.text)
@@ -495,19 +495,19 @@ class AssistantWorkspaceTests(unittest.TestCase):
         self.assertEqual(third_run["status"], "succeeded", third_run)
         self.assertEqual(len(self.adapter.calls), 2)
         consented = self.client.get(f"/api/v2/projects/{self.project_id}/assistant/conversations").json()["conversations"]
-        self.assertIn("openai-default", next(item for item in consented if item["id"] == conversation_id)["external_consent"])
+        self.assertIn("opencode-default", next(item for item in consented if item["id"] == conversation_id)["external_consent"])
         switched_attachment = self._upload("switched-provider.txt", b"switch", "text/plain", conversation_id)
         switched_run_id = self._start_run(
             "切换 Provider 后必须重新确认",
             [switched_attachment["id"]],
             conversation_id,
-            provider_profile_id="opencode-default",
-            model="opencode-go/gpt-5.6-luna",
+            provider_profile_id="openai-default",
+            model="gpt-5.6-terra",
         )
         self.assertEqual(self.client.get(f"/api/v2/assistant/runs/{switched_run_id}").json()["status"], "awaiting_external_confirmation")
         switched_rejected = self.client.post(f"/api/v2/assistant/runs/{switched_run_id}/external-confirmation", json={
             "decision": "reject",
-            "provider_profile_id": "opencode-default",
+            "provider_profile_id": "openai-default",
             "detail": {"approved_by": "test"},
         })
         self.assertEqual(switched_rejected.status_code, 200, switched_rejected.text)
@@ -900,7 +900,7 @@ class AssistantWorkspaceTests(unittest.TestCase):
 
         approved = self.client.post(
             "/api/v2/assistant/runs/" + run_id + "/external-confirmation",
-            json={"decision": "approve", "provider_profile_id": "openai-default", "detail": {"approved_by": "test"}},
+            json={"decision": "approve", "provider_profile_id": "opencode-default", "detail": {"approved_by": "test"}},
         )
         assert approved.status_code == 200, approved.text
         for _ in range(60):
@@ -961,7 +961,7 @@ class AssistantWorkspaceTests(unittest.TestCase):
         assert self.adapter.calls == []
         awaiting = self.client.get("/api/v2/assistant/runs/" + run_id).json()
         assert awaiting["awaiting_confirmation"]["attachments"][0]["delivery_mode"] == "multimodal"
-        approved = self.client.post("/api/v2/assistant/runs/" + run_id + "/external-confirmation", json={"decision": "approve", "provider_profile_id": "openai-default", "detail": {"approved_by": "test"}})
+        approved = self.client.post("/api/v2/assistant/runs/" + run_id + "/external-confirmation", json={"decision": "approve", "provider_profile_id": "opencode-default", "detail": {"approved_by": "test"}})
         assert approved.status_code == 200, approved.text
         for _ in range(60):
             run = self.client.get("/api/v2/assistant/runs/" + run_id).json()
@@ -1009,7 +1009,7 @@ class AssistantWorkspaceTests(unittest.TestCase):
         self.assertEqual(waiting["status"], "awaiting_external_confirmation")
         approved = self.client.post(f"/api/v2/assistant/runs/{run_id}/external-confirmation", json={
             "decision": "approve",
-            "provider_profile_id": "openai-default",
+            "provider_profile_id": "opencode-default",
             "detail": {"approved_by": "test"},
         })
         self.assertEqual(approved.status_code, 200, approved.text)

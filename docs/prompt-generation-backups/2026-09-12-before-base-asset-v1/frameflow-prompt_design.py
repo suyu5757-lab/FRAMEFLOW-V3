@@ -17,8 +17,6 @@ from copy import deepcopy
 import re
 from typing import Any, Literal
 
-from frameflow.asset_geometry import DEFAULT_BASE_ASSET_ASPECT_RATIOS, asset_layout_profile
-
 
 PROMPT_CONTRACT_VERSION = "2.0"
 PROMPT_WORKFLOW_ID = "suyu-skill-v2"
@@ -108,54 +106,7 @@ def _audio_language_boost(locale: Any, language: Any, explicit: Any) -> str | No
     return AUDIO_LOCALE_LANGUAGE_BOOSTS.get(normalized) or AUDIO_LOCALE_LANGUAGE_BOOSTS.get(normalized.split("-", 1)[0])
 
 PROMPT_SUPPLEMENT_MARKER = "同时满足以下补充制作要求："
-PromptCompositionMode = Literal["legacy_supplement", "clean_replace", "base_asset"]
-BASE_ASSET_PROMPT_COMPILER_VERSION = "base-asset-v1"
-BASE_ASSET_CLASSES = frozenset({"character", "scene", "prop", "product"})
-
-BASE_CHARACTER_LAYOUT_RULE = (
-    "四个区域展示的是同一名角色的不同观察视角，不是四名相似角色；"
-    "上方约 38% 居中放置一张正面头部与上半身身份特写；"
-    "下方约 62% 分成三个等宽栏，依次为正面全身、严格 90° 左侧面全身和严格 180° 背面全身；"
-    "三张全身视图必须等高、同尺度、脚底处于同一水平基线、头顶高度一致，不使用不同视图之间的透视缩放。"
-)
-BASE_CHARACTER_CAMERA_RULE = (
-    "镜头使用约 70–85mm 全画幅等效，机位位于躯干中部，保持自然透视，"
-    "避免广角、头大脚小和不同视图的比例漂移。"
-)
-BASE_NEUTRAL_BACKGROUND_RULE = "使用白色、米白或中性浅灰的干净设计背景，不加入具体生活场景。"
-BASE_SCENE_BACKGROUND_RULE = (
-    "背景边界必须展示实际环境的后景层、空间封口和消失方向，不能用白色、米白或浅灰设计板替代环境本体；"
-    "后景仍保持空环境，不加入角色、独立道具或融合对象。"
-)
-
-# These values are generation guidance, not fusion instructions. The fusion
-# compiler deliberately stays on the legacy path below.
-BASE_ASSET_COMPILER_RULES = {
-    "version": BASE_ASSET_PROMPT_COMPILER_VERSION,
-    "classes": ["character", "scene", "prop", "product"],
-    "order": ["goal", "identity", "visible_structure", "material", "layout_camera", "rendering", "continuity", "must_avoid"],
-    "shared": [
-        "基础资产 Prompt 是独立、可复用的设计资产执行稿，不是镜头融合稿。",
-        "只保留一次稳定身份/结构定义；不把 Prompt Contract、资产 ID、QA、版本、provider 接口尺寸或供应商字段写进生图正文；基础资产的设计画幅和布局要求必须由系统规格写入正文。",
-        "移除镜头级动作、对白、剧情光和其他 shot-specific detail；基础资产默认不允许身份或结构随视图变化。",
-        "参考图只声明控制范围，不把参考资产 ID 直接写入生图正文。",
-    ],
-    "character": [
-        "四个区域是同一角色；严格正面、90°侧面、180°背面，等高、同尺度、脚底对齐。",
-        "固定一个明确年龄印象、脸型、眼型/虹膜/眼距、发型前侧/侧面/后侧轮廓和轻微真实面部纹理；不得使用年龄范围。",
-        "服装结构用固定 landmark 表达，青蓝光只出现在已定义的局部接口；不把角色放入场景或独立道具融合。",
-        "保持成年真实人类面部解剖，避免动漫夸张、网红脸、极端 V 形下颌、瓷娃娃皮肤和重度美颜。",
-    ],
-    "scene": [
-        "只生成空环境；明确空间布局、前中后景、固定地标、代表性表面状态、因果光线和空气行为。",
-        "动作区与道具预留区只能作为空白空间规划，不得插入角色、道具或接触阴影。",
-        "背景边界展示实际环境的后景层、空间封口和消失方向，不用设计板替代环境本体。",
-    ],
-    "prop": [
-        "只生成独立物品设计资产；明确对象类别、轮廓比例、结构功能、材质状态、颜色/标记策略和尺度参照。",
-        "交互字段只描述未来接触点和尺度逻辑，不执行手持、穿戴、放置或场景融合。",
-    ],
-}
+PromptCompositionMode = Literal["legacy_supplement", "clean_replace"]
 
 # These markers belong to FrameFlow's internal contract or UI state. They are
 # useful in the structured asset record, but they are not image-generator
@@ -177,24 +128,6 @@ PROMPT_INTERNAL_MARKERS = (
     "size=",
     "background=",
     "output_format=",
-    "generationNotes",
-    "suggestedSize",
-    "referenceRoles",
-    "generationReferenceAssets",
-    "identityAnchor",
-    "identityLock",
-    "characterDetails",
-    "sceneDetails",
-    "propDetails",
-    "fusionDetails",
-    "shotPlan",
-    "mustPreserve",
-    "mustAvoid",
-    "negativePrompt",
-    "visualStyle",
-    "cameraExecution",
-    "lightingCausality",
-    "atmosphereBehavior",
 )
 
 PROMPT_CLASS_ALIASES = {
@@ -289,7 +222,7 @@ PROMPT_KEY_LABELS = {
     "itemIdentityLock": "道具身份锁", "sceneIdentityLock": "场景身份锁", "interactionAndContact": "交互与接触", "placementScaleAndCamera": "位置尺度与摄影机",
     "lightingShadowsAndMaterialIntegration": "光影与材质整合", "compositionAndDepth": "构图与景深", "motionContinuityNotes": "运动连续性",
     "stableIdentityAnchors": "稳定身份锚点", "shotSpecificDetail": "本镜头细节", "optionalIncidentalDetail": "可选偶发细节", "mayVary": "允许变化",
-    "role": "参考角色", "controls": "控制范围", "mustNotControl": "不控制范围", "referenceId": "参考 ID", "medium": "媒介", "style": "风格", "lighting": "光线", "palette": "调色", "opticalEffects": "光学效果", "lens": "焦段", "referenceSheet": "参考板版式", "state": "状态",
+    "role": "参考角色", "controls": "控制范围", "mustNotControl": "不控制范围", "referenceId": "参考 ID", "medium": "媒介", "style": "风格", "lighting": "光线",
     "audioDetails": "声音制作字段", "sourceText": "朗读文本", "textStatus": "文本状态", "voiceIdentity": "声音身份", "language": "语言", "dialect": "方言/口音",
     "performanceDirection": "表演方向", "emotion": "情绪", "intensity": "强度", "pace": "语速", "pausePlan": "停顿计划", "pronunciation": "发音标注",
     "provider": "Provider", "model": "模型", "voiceId": "音色 ID", "speed": "语速参数", "pitch": "音调参数", "volume": "音量参数", "languageBoost": "语言增强",
@@ -300,34 +233,6 @@ PROMPT_KEY_LABELS = {
 def canonical_asset_class(asset_class: str | None) -> str:
     value = str(asset_class or "unknown").strip().lower()
     return PROMPT_CLASS_ALIASES.get(value, value)
-
-
-def is_base_asset_class(asset_class: str | None) -> bool:
-    """Return whether a class uses the independent base-asset compiler."""
-
-    return canonical_asset_class(asset_class) in BASE_ASSET_CLASSES
-
-
-def prompt_composition_mode_for_asset(
-    asset_class: str | None,
-    requested: PromptCompositionMode = "legacy_supplement",
-) -> PromptCompositionMode:
-    """Resolve the compiler mode without allowing fusion to enter base mode.
-
-    ``fusion`` is intentionally pinned to the historical compiler. The new
-    base-asset compiler is only for independent character, environment, and
-    item/product assets; this guard also protects callers that accidentally
-    pass ``base_asset`` for a non-visual or fusion record.
-    """
-
-    cls = canonical_asset_class(asset_class)
-    if cls == "fusion":
-        return "legacy_supplement"
-    if cls in BASE_ASSET_CLASSES and requested in {"clean_replace", "base_asset"}:
-        return "base_asset"
-    if requested == "base_asset":
-        return "clean_replace"
-    return requested
 
 
 def _value_at_path(value: Any, path: str) -> Any:
@@ -389,144 +294,6 @@ def _clean_list(value: Any) -> list[str]:
     return result
 
 
-_BASE_ASSET_ID_PATTERN = re.compile(
-    r"(?<![A-Za-z0-9])(?:SH|CHAR|SCENE|PROP|ITEM|ENV|ASSET|C|S|P)[_-]?\d{1,4}(?![A-Za-z0-9])",
-    flags=re.IGNORECASE,
-)
-_BASE_AGE_RANGE_PATTERN = re.compile(r"\b\d{1,2}\s*(?:至|到|[-–—~])\s*\d{1,2}\s*岁")
-
-
-def _base_asset_text(value: Any) -> str:
-    """Render authored visual content while removing workbench identifiers.
-
-    The structured pack keeps IDs and shot references for auditability. The
-    independent image prompt must not repeat those identifiers, and legacy
-    packs often put an age range in the character identity. We remove the
-    range without inventing a new numeric age; the provider/compiler contract
-    asks for a single age impression on the next authored version.
-    """
-
-    # ``render_prompt_value`` maps structured keys to human-readable labels;
-    # using ``_text`` here would leak raw JSON keys such as ``framing`` and
-    # ``depthOfField`` into the model-facing prompt.
-    rendered = render_prompt_value(value)
-    if not rendered:
-        return ""
-    for marker in PROMPT_INTERNAL_MARKERS:
-        rendered = rendered.replace(marker, "")
-    rendered = _BASE_AGE_RANGE_PATTERN.sub("明确的成年年龄", rendered)
-    rendered = rendered.replace("明确的成年年龄视觉年龄", "明确的成年年龄")
-    # Preserve the useful meaning of a cross-shot reference while hiding the
-    # individual internal shot IDs from the model-facing prose.
-    rendered = re.sub(
-        r"(?:SH|S)\d{1,4}\s*(?:与|和|、|/|及)\s*(?:SH|S)\d{1,4}",
-        "所有相关镜头",
-        rendered,
-        flags=re.IGNORECASE,
-    )
-    rendered = re.sub(r"可跨\s*所有相关镜头\s*复用", "可跨镜头复用", rendered)
-    rendered = re.sub(r"所有相关镜头\s*(复用|保持|连续性|一致)", r"跨镜头\1", rendered)
-    rendered = _BASE_ASSET_ID_PATTERN.sub("", rendered)
-    rendered = re.sub(r"\s{2,}", " ", rendered)
-    rendered = re.sub(r"[；，,]{2,}", "；", rendered)
-    rendered = re.sub(r"(?:^|[；，,])\s*(?:与|和|及)\s*(?=[；，,。]|$)", "", rendered)
-    rendered = re.sub(r"^\s*(?:是|为)\s+", "", rendered)
-    rendered = re.sub(r"(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])", "", rendered)
-    return rendered.strip(" ；，,")
-
-
-def _base_asset_texts(values: list[Any]) -> list[str]:
-    result: list[str] = []
-    for value in values:
-        rendered = _base_asset_text(value)
-        if rendered and rendered not in result:
-            result.append(rendered)
-    return result
-
-
-def _merge_base_constraints(existing: list[Any], defaults: list[str]) -> list[str]:
-    """Merge Must avoid items without repeating the same failure category."""
-
-    result = _base_asset_texts(existing)
-    topic_groups = (
-        ("text", ("文字", "logo", "编号", "序列号", "二维码", "水印")),
-        ("people", ("角色", "人物", "人群", "重复角色", "额外人物")),
-        ("fusion", ("融合", "接触阴影", "握持", "放置", "穿戴", "手持")),
-        ("action", ("镜头级", "动作", "对白", "剧情光", "动作模糊", "表演")),
-        ("scene", ("场景", "环境", "建筑", "入口", "地标")),
-        ("object", ("道具", "物品", "零件", "配件", "装饰")),
-        ("identity", ("脸型", "眼型", "发型", "服装", "身体比例", "物体类别", "材质")),
-    )
-
-    def topics(value: str) -> set[str]:
-        return {
-            name
-            for name, keywords in topic_groups
-            if any(keyword.lower() in value.lower() for keyword in keywords)
-        }
-
-    for default in _base_asset_texts(defaults):
-        default_topics = topics(default)
-        if any(default_topics and default_topics.issubset(topics(current)) for current in result):
-            continue
-        result.append(default)
-    return result
-
-
-def _base_reference_prose(strategy: dict[str, Any]) -> str:
-    """Describe reference roles without leaking asset IDs into the prompt."""
-
-    roles = strategy.get("roles") or strategy.get("references") or []
-    if not isinstance(roles, list):
-        roles = [roles]
-    descriptions: list[str] = []
-    for index, role in enumerate(roles, start=1):
-        if isinstance(role, dict):
-            controls = _base_asset_text(
-                role.get("controls")
-                or role.get("scope")
-                or role.get("use")
-                or role.get("role")
-                or "视觉参考"
-            )
-            must_not = _base_asset_text(role.get("mustNotControl") or role.get("must_not_control"))
-            description = f"参考图 {index} 只控制{controls or '其声明的视觉范围'}"
-            if must_not:
-                description += f"，不控制{must_not}"
-        else:
-            description = f"参考图 {index} 只作为视觉参考，不改变主体身份、结构或背景"
-        descriptions.append(description)
-    return _sentence("；".join(descriptions), "参考图职责：") if descriptions else ""
-
-
-def _base_state_text(values: list[Any], *, reject_markers: tuple[str, ...] = ()) -> str:
-    """Keep a static/environmental state but reject obvious shot actions."""
-
-    rendered = _base_asset_texts(values)
-    if not rendered:
-        return ""
-    action_markers = (
-        "触碰",
-        "接触",
-        "握住",
-        "拿起",
-        "抬眼",
-        "微笑",
-        "笑意",
-        "轻微笑",
-        "出击",
-        "奔跑",
-        "转身",
-        "说‘",
-        "说\"",
-        "对白",
-        "台词",
-    )
-    blocked = action_markers + reject_markers
-    kept = [item.rstrip("。；，,") for item in rendered if not any(marker in item for marker in blocked)]
-    return "；".join(kept)
-
-
 def _visible_prompt_constraints(value: Any, composition_mode: PromptCompositionMode) -> list[str]:
     """Keep structured constraints while hiding workbench-only metadata.
 
@@ -537,7 +304,7 @@ def _visible_prompt_constraints(value: Any, composition_mode: PromptCompositionM
     """
 
     values = _clean_list(value)
-    if composition_mode not in {"clean_replace", "base_asset"}:
+    if composition_mode != "clean_replace":
         return values
     return [
         item for item in values
@@ -823,7 +590,7 @@ def normalize_prompt_pack(
         "colorMarkingsAndLabelPolicy": ("colorMarkingsAndLabelPolicy", "color", "markings", "labelPolicy"),
         "scaleAndInteraction": ("scaleAndInteraction", "scale", "interaction", "contact"),
         "mayVary": ("mayVary", "variableDetails", "optionalDetails"),
-    }, root=source if cls in {"prop", "product"} else None)
+    }, root=source if cls == "prop" else None)
     fusion = _merge_detail(raw_fusion, {
         "fusionModule": ("fusionModule", "module"),
         "shotUsage": ("shotUsage", "usage", "shot_usage"),
@@ -937,13 +704,12 @@ def prompt_contract(asset_class: str | None = None) -> dict[str, Any]:
         "character": CHARACTER_REQUIREMENTS,
         "scene": SCENE_REQUIREMENTS,
         "prop": PROP_REQUIREMENTS,
-        "product": PROP_REQUIREMENTS,
         "fusion": FUSION_REQUIREMENTS,
         "shot": SHOT_REQUIREMENTS,
         "audio": AUDIO_REQUIREMENTS,
     }
     selected_requirements = class_requirements if selected == "all" else {selected: class_requirements.get(selected, [])}
-    contract = {
+    return {
         "version": PROMPT_CONTRACT_VERSION,
         "workflow": PROMPT_WORKFLOW_ID,
         "asset_class": selected,
@@ -996,37 +762,16 @@ def prompt_contract(asset_class: str | None = None) -> dict[str, Any]:
             },
         },
     }
-    if selected in {"all", "character", "scene", "prop", "product"}:
-        contract["base_asset_compiler"] = deepcopy(BASE_ASSET_COMPILER_RULES)
-        contract["validation_contract"] = {
-            "scope": "生成后检查，不作为生图正文",
-            "checks": [
-                "身份/结构锚点只定义一次并可跨镜头复用",
-                "角色基础参考板是同一角色的四个视图，视图比例和基线一致",
-                "环境基础资产不包含角色、独立道具或融合结果",
-                "物品基础资产保持对象类别、轮廓、结构、材质、状态和尺度一致",
-                "生图正文不包含内部 ID、合同字段、版本、QA、provider 接口尺寸或供应商信息；基础资产设计画幅必须出现一次",
-            ],
-        }
-    return contract
 
 
 def prompt_contract_instructions(*, fusion: bool = False) -> str:
     """Return the shared SUYU Skill v2 instructions appended to providers."""
 
     character_sheet_rule = (
-        "角色首轮默认只规划一张基础角色结构参考板：四个区域必须是同一名角色而不是四名相似角色；"
-        "上方约 38% 为居中的正面头部与上半身身份特写，下方约 62% 为三个等宽栏，依次是正面全身、严格 90° 左侧面全身和严格 180° 背面全身；"
-        "三张全身视图等高、同尺度、脚底同一水平基线、头顶高度一致；使用白色、米白或中性浅灰背景、稳定中性棚拍光线和无动作中性姿态，不把生活场景当作 DES 角色资产。"
+        "角色首轮默认只规划一张结构参考板：同一张合成图包含面部/上半身身份特写，以及同一角色的正面、侧面、背面全身结构视图；"
+        "使用白色、米白或中性浅灰背景，稳定光线，无动作姿态，不把生活场景当作 DES 角色资产。"
         if not fusion else
         "融合阶段不重新生成角色设定板；直接复用已连接角色的 identityAnchor、服装、材质、装备和比例。"
-    )
-    base_asset_rule = (
-        "当 assetClass 为 character、scene、prop 或 product 时，使用基础资产 Prompt 编译规则 "
-        f"{BASE_ASSET_PROMPT_COMPILER_VERSION}：最终生图正文只保留一次生产目标、稳定身份/结构、镜头可见细节、材质、布局/摄影机、渲染、连续性和 Must avoid；"
-        "不把 Prompt Contract、资产 ID、QA、版本、provider 接口尺寸、供应商或工作台字段写入正文；基础资产的设计画幅、方向和布局要求由系统规格写入正文，不把 generationReferenceAssets 的 ID 写入正文；"
-        "镜头级动作、对白、剧情光和融合关系只能留在结构化 metadata 或后续 shot/fusion 阶段；基础角色板不输出‘允许变化’或‘未见正脸细节’，identityAnchor 只写紧凑的核心身份，不重复脸部、服装和材质全文。"
-        if not fusion else ""
     )
     return (
         f"本次使用 FRAMEFLOW Prompt Contract v{PROMPT_CONTRACT_VERSION} / {PROMPT_WORKFLOW_ID}。"
@@ -1037,13 +782,10 @@ def prompt_contract_instructions(*, fusion: bool = False) -> str:
         "promptPack 至少包含 schemaVersion、workflow、promptIntent、referenceStrategy、identityAnchor、visibleEvent、characterDetails、"
         "sceneDetails、propDetails、fusionDetails、shotPlan、visualStyle、continuityChecklist、mustPreserve、mustAvoid、generationNotes 和 suggestedSize；"
         "非适用类别的对象填空对象，但不能省略稳定合同字段。"
-        + base_asset_rule
-        + "角色必须具体写脸型/下颌/眉眼/眼神/少量真实纹理或轻微不对称、发型前侧后轮廓与运动规则、身体比例/重心/手部、从头到脚服装层次和材质、"
+        "角色必须具体写脸型/下颌/眉眼/眼神/少量真实纹理或轻微不对称、发型前侧后轮廓与运动规则、身体比例/重心/手部、从头到脚服装层次和材质、"
         "静态表情与镜头可见的微表情；不要用‘漂亮、真实、有气质’代替身份控制。"
-        + character_sheet_rule
-        + ("基础环境资产只生成空环境；动作区和道具预留区只能作为空白空间规划，不得放入角色、道具、接触阴影或融合关系。" if not fusion else "")
-        + ("基础物品资产只生成独立物体设计；交互字段只描述未来接触点和尺度逻辑，不执行手持、穿戴、放置或场景融合。" if not fusion else "")
-        + "场景必须写地点功能、尺度与地理、前中后景、两到四个固定地标、陈设与负空间、表面状态、实际光源及其阴影/反射后果、"
+        + character_sheet_rule +
+        "场景必须写地点功能、尺度与地理、前中后景、两到四个固定地标、陈设与负空间、表面状态、实际光源及其阴影/反射后果、"
         "雨雾尘风等空气行为、动作/阻挡区和道具预留区；场景阶段不直接融合角色或道具。"
         "道具必须写对象类别、轮廓比例、功能结构、材质与状态、颜色/标记策略、尺度参照和接触/交互；A 级道具需要走 video-prop-design-director。"
         "融合必须分别保留角色、道具和场景的 identityAnchor，先建立角色-道具接触单元，再放入场景，明确尺度链、接触压力、遮挡、落地、阴影、环境光遮蔽和材质响应。"
@@ -1196,19 +938,11 @@ def prompt_pack_has_generation_fields(asset_class: str | None, prompt_pack: Any)
             "interactionAndContact",
             "placementScaleAndCamera",
         ),
-        "product": (
-            "objectIdentity",
-            "silhouetteAndProportions",
-            "structureAndFunction",
-            "materialAndCondition",
-            "scaleAndInteraction",
-        ),
     }
     detail_group = pack.get({
         "character": "characterDetails",
         "scene": "sceneDetails",
         "prop": "propDetails",
-        "product": "propDetails",
         "fusion": "fusionDetails",
     }.get(cls, ""), {})
     detail_values = [detail_group.get(key) for key in class_fields.get(cls, ())] if isinstance(detail_group, dict) else []
@@ -1220,7 +954,7 @@ def prompt_pack_has_generation_fields(asset_class: str | None, prompt_pack: Any)
     return authored_common >= 3 and authored_details >= 2
 
 
-def validate_clean_prompt(prompt: str, previous_prompt: str = "", *, base_asset: bool = False) -> list[str]:
+def validate_clean_prompt(prompt: str, previous_prompt: str = "") -> list[str]:
     """Validate the user-facing natural-language prompt boundary."""
 
     text = str(prompt or "").strip()
@@ -1259,13 +993,6 @@ def validate_clean_prompt(prompt: str, previous_prompt: str = "", *, base_asset:
         issues.append("clean Prompt 仍以旧 Prompt 全文开头，未形成完整替换稿")
     if len(text) > 6000:
         issues.append("clean Prompt 超过 6000 个字符，请删除重复合同和泛化说明")
-    if base_asset:
-        if _BASE_ASSET_ID_PATTERN.search(text):
-            issues.append("基础资产生图 Prompt 不得包含内部资产/镜头 ID")
-        if _BASE_AGE_RANGE_PATTERN.search(text):
-            issues.append("基础角色 Prompt 必须使用单一成年年龄印象，不得保留年龄范围")
-        if "允许变化：" in text:
-            issues.append("基础资产 Prompt 不得把身份或结构写成允许变化")
     return list(dict.fromkeys(issues))
 
 
@@ -1375,251 +1102,6 @@ def _build_audio_prompt_text(prompt_pack: dict[str, Any], fallback_prompt: str =
     if candidate:
         return f"MiniMax Speech 2.8 Web：候选朗读文本待用户确认：{candidate}"
     return "MiniMax Speech 2.8 Web：尚未确认唯一朗读文本，暂不生成。"
-
-
-_BASE_ASSET_ORIENTATION = {
-    "16:9": "横向",
-    "1:1": "正方形",
-    "9:16": "纵向",
-}
-
-
-def base_asset_geometry_prompt(
-    asset_class: str | None,
-    context: dict[str, Any] | None = None,
-) -> str:
-    """Return the system-owned canvas instruction for a reusable base asset.
-
-    The semantic design ratio is deliberately independent from the provider's
-    image size. The latter remains request metadata and must not leak into the
-    natural-language image prompt.
-    """
-
-    cls = canonical_asset_class(asset_class)
-    if cls not in BASE_ASSET_CLASSES:
-        return ""
-    context = context if isinstance(context, dict) else {}
-    profile = context.get("asset_generation_profile")
-    profile = profile if isinstance(profile, dict) else {}
-    ratio = str(profile.get("aspect_ratio") or DEFAULT_BASE_ASSET_ASPECT_RATIOS.get(cls) or "1:1")
-    orientation = _BASE_ASSET_ORIENTATION.get(ratio, "")
-    if cls == "character":
-        return (
-            "画布与基础资产输出要求："
-            f"生成一张 {ratio} {orientation}角色设定参考板；"
-            "画面采用宽幅或对应比例布局，完整容纳面部近景、正面全身、90°侧面全身和180°背面全身视图；"
-            "所有视图完整显示，不裁切头部、脚部、服装、装备或身体轮廓。"
-        )
-    if cls == "scene":
-        return (
-            "画布与基础资产输出要求："
-            f"生成一张 {ratio} {orientation}空环境设计参考图；"
-            "完整展示空间的前景、中景、背景、后景封口和可用于后续融合的动作区域；"
-            "不得因为最终视频比例而改成项目画幅。"
-        )
-    if cls in {"prop", "product"}:
-        label = "独立产品" if cls == "product" else "独立物品"
-        return (
-            "画布与基础资产输出要求："
-            f"生成一张 {ratio} {orientation}{label}设计参考图；"
-            "完整展示主体轮廓、关键结构、材质、功能部位和尺度关系，不加入人物、环境或融合关系。"
-        )
-    return f"画布与基础资产输出要求：生成一张 {ratio} {orientation}基础资产设计参考图。"
-
-
-def _build_base_asset_prompt(
-    asset_class: str,
-    pack: dict[str, Any],
-    fallback_prompt: str = "",
-    *,
-    context: dict[str, Any] | None = None,
-) -> str:
-    """Compile an independent character, scene, or item design prompt.
-
-    The base-asset compiler intentionally has no shot-plan loop. A base asset
-    is the reusable visual source of truth; shot actions and final character /
-    item / scene relationships belong to the later fusion workflow.
-    """
-
-    cls = canonical_asset_class(asset_class)
-    fallback = str(fallback_prompt or "").strip()
-    if not _structured_content(pack):
-        return fallback
-
-    paragraphs: list[str] = []
-
-    def add(values: list[Any], prefix: str) -> None:
-        rendered = _base_asset_texts(values)
-        if rendered:
-            paragraphs.append(_sentence("；".join(item.rstrip("。；，,") for item in rendered), prefix))
-
-    add([pack.get("promptIntent")], "这张基础资产设计图的生产目标是：")
-    geometry = base_asset_geometry_prompt(cls, context)
-    if geometry:
-        paragraphs.append(geometry)
-    reference = _base_reference_prose(pack.get("referenceStrategy") or {})
-    if reference:
-        paragraphs.append(reference)
-
-    if cls == "character":
-        details = pack.get("characterDetails") if isinstance(pack.get("characterDetails"), dict) else {}
-        identity = _base_asset_texts([
-            pack.get("identityAnchor"),
-            pack.get("identityLock"),
-            details.get("stableAnchors"),
-        ])
-        add(identity, "主体身份核心：")
-
-        static_state = _base_state_text([pack.get("visibleEvent")])
-        if "同一角色" in static_state and "不是四名相似角色" not in static_state:
-            static_state = f"{static_state}；不是四名相似角色"
-        if static_state and any(marker in static_state for marker in ("静态", "结构参考板", "设定板", "参考板", "视图", "展示")):
-            add([static_state], "基础资产只呈现以下静态状态：")
-
-        add([details.get("faceAndExpression")], "脸部身份锚点：")
-        add(["年龄使用单一明确的成年年龄印象，不使用年龄范围；所有可见面部视图保持自然放松的中性表情，眼型、虹膜颜色、眼距和眉眼比例属于身份锚点。"], "脸部连续性规则：")
-        add([details.get("hairAndHeadSilhouette")], "发型与头部轮廓锚点：")
-        add([details.get("bodyPoseAction")], "身体比例与中性姿态：")
-        add([details.get("costumeAndMaterials")], "服装层次与固定结构：")
-        add([details.get("detailAndMaterialBehavior")], "镜头可见的细节与材质行为：")
-        costume_text = _base_asset_text(details.get("costumeAndMaterials"))
-        material_text = _base_asset_text(details.get("detailAndMaterialBehavior"))
-        if ("青蓝" in costume_text or "cyan" in costume_text.lower() or "青蓝" in material_text or "cyan" in material_text.lower()) and ("腕" in costume_text or "接口" in costume_text or "wrist" in costume_text.lower()):
-            add(["青蓝色照明只出现在已定义的腕部同步接口和颈后窄型接口指示灯，不在其他部位扩散为装饰性灯光。"], "颜色定位规则：")
-
-        authored_layout = _base_asset_text(details.get("referenceSheet"))
-        layout = BASE_CHARACTER_LAYOUT_RULE
-        same_character_rule = "四个区域展示的是同一名角色的不同观察视角，不是四名相似角色；"
-        if "同一角色" in static_state:
-            layout = layout.replace(same_character_rule, "")
-        if authored_layout and not all(token in authored_layout for token in ("38%", "62%", "90", "180")):
-            layout += f" 补充参考板说明：{authored_layout}"
-        elif authored_layout:
-            layout = authored_layout
-        add([layout, BASE_CHARACTER_CAMERA_RULE, pack.get("cameraExecution")], "参考板布局与摄影机执行为：")
-        style_text = _base_asset_text(pack.get("visualStyle"))
-        studio_rule = "" if "棚拍" in style_text or "设计光" in style_text else "使用稳定均匀的中性棚拍设计光，准确区分皮肤、发丝、织物、磨砂装甲、金属接口和手套表面。"
-        add([pack.get("visualStyle"), studio_rule, BASE_NEUTRAL_BACKGROUND_RULE], "光线、渲染与背景为：")
-
-        continuity = _base_asset_texts([
-            *(_clean_list(pack.get("continuityChecklist"))),
-            details.get("continuityLocks"),
-            "所有视图保持同一张脸、眼型与虹膜颜色、发长与发色、服装层次、固定装备、身体比例和手部尺度。",
-            "基础资产默认不允许身份、发型、服装结构或配件位置变化。",
-        ])
-        add(continuity, "基础资产连续性锁定：")
-        preserve = _base_asset_texts(_visible_prompt_constraints(pack.get("mustPreserve"), "base_asset"))
-        add(preserve, "必须保留：")
-        avoid = _merge_base_constraints(
-            _visible_prompt_constraints(pack.get("mustAvoid") or pack.get("negativePrompt"), "base_asset"),
-            [
-            "不出现具体生活场景、机位外的叙事环境、额外人物或重复角色。",
-            "不把镜头级接触动作、对白、剧情光、动作模糊或剧情性表演写入结构参考板。",
-            "不改变年龄印象、脸型、眼型、发型轮廓、服装层次、固定装备或身体比例。",
-            "避免动漫化面部、网红脸、极端 V 形下颌、瓷娃娃皮肤、重度美颜和广角透视变形。",
-            "不生成可读文字、编号、Logo、水印或未定义配件。",
-            ],
-        )
-        add(avoid, "必须避免：")
-        return "\n\n".join(item for item in paragraphs if item).strip() or fallback
-
-    if cls == "scene":
-        details = pack.get("sceneDetails") if isinstance(pack.get("sceneDetails"), dict) else {}
-        add([
-            pack.get("identityAnchor"),
-            pack.get("identityLock"),
-            details.get("identityAndPurpose"),
-            details.get("stableAnchors"),
-            "只生成空环境，不插入人物、独立道具或融合结果。",
-        ], "环境身份与叙事功能：")
-        static_state = _base_state_text(
-            [pack.get("visibleEvent"), pack.get("eventConsequence")],
-            reject_markers=("角色", "人物", "人群", "手部", "道具", "物品", "融合", "进入画面", "离开画面", "站在", "走入", "放置", "握住", "穿戴"),
-        )
-        if static_state:
-            add([static_state], "环境的静态表面/天气状态为：")
-        add([
-            pack.get("spatialGeography"),
-            details.get("spatialLayoutAndGeography"),
-        ], "空间布局与地理为：")
-        add([details.get("foregroundMidgroundBackground")], "前景、中景与背景分层为：")
-        add([details.get("setDressingAndFixedAnchors")], "陈设与固定地标为：")
-        add([details.get("materialsAndSurfaceState"), pack.get("materialEvidence")], "材质与表面状态为：")
-        add([details.get("detailEvidenceAndAtmosphere"), pack.get("atmosphereBehavior")], "镜头可见的环境细节与空气行为为：")
-        add([pack.get("lightingCausality"), details.get("lightingWeatherAtmosphere")], "光线、天气与大气为：")
-        add([details.get("actionBlockingZones")], "动作/阻挡区只保留为空的可用空间：")
-        add([details.get("propPlacementZones")], "道具预留区只保留为空的接触与放置空间：")
-        add([
-            pack.get("cameraExecution"),
-            pack.get("visualStyle"),
-            "使用可复用的中性环境设计视角，避免把单一镜头的动作或融合关系固化进环境资产。",
-        ], "构图、摄影机与渲染为：")
-        add([BASE_SCENE_BACKGROUND_RULE], "背景边界为：")
-        continuity = _base_asset_texts([
-            *(_clean_list(pack.get("continuityChecklist"))),
-            details.get("continuityLocks"),
-            details.get("stableAnchors"),
-        ])
-        add(continuity, "环境连续性锁定：")
-        preserve = _base_asset_texts(_visible_prompt_constraints(pack.get("mustPreserve"), "base_asset"))
-        add(preserve, "必须保留：")
-        avoid = _merge_base_constraints(
-            _visible_prompt_constraints(pack.get("mustAvoid") or pack.get("negativePrompt"), "base_asset"),
-            [
-            "不出现角色、手部、独立道具或角色-道具-环境融合。",
-            "动作区与道具预留区保持空白，不添加接触阴影、握持关系或特定角色阻挡。",
-            "不新增与空间逻辑冲突的建筑、入口、地标、现代物件或不可解释的装饰。",
-            "不生成可读文字、Logo、水印、网格、分镜表或多余人物。",
-            ],
-        )
-        add(avoid, "必须避免：")
-        return "\n\n".join(item for item in paragraphs if item).strip() or fallback
-
-    if cls in {"prop", "product"}:
-        details = pack.get("propDetails") if isinstance(pack.get("propDetails"), dict) else {}
-        add([
-            pack.get("identityAnchor"),
-            pack.get("identityLock"),
-            details.get("objectIdentity"),
-            "只生成独立物品设计资产。",
-        ], "物品身份与功能为：")
-        static_state = _base_state_text(
-            [pack.get("visibleEvent"), pack.get("eventConsequence")],
-            reject_markers=("角色", "人物", "人群", "场景", "环境", "融合", "手部", "握住", "手持", "穿戴", "放置", "接触", "进入画面", "离开画面"),
-        )
-        if static_state:
-            add([static_state], "物品当前状态为：")
-        add([details.get("silhouetteAndProportions")], "轮廓与比例为：")
-        add([details.get("structureAndFunction")], "结构与功能证据为：")
-        add([details.get("materialAndCondition"), details.get("detailAndMaterialBehavior"), pack.get("materialEvidence")], "材质、状态与表面行为为：")
-        add([details.get("colorMarkingsAndLabelPolicy")], "颜色、标记与文字策略为：")
-        add([details.get("scaleAndInteraction")], "尺度与未来交互说明为：")
-        add([
-            pack.get("cameraExecution") or "中性物品设计记录视角，完整显示轮廓、关键结构和接触部位，避免广角变形。",
-            pack.get("visualStyle"),
-            BASE_NEUTRAL_BACKGROUND_RULE,
-        ], "展示、摄影机与背景为：")
-        continuity = _base_asset_texts([
-            *(_clean_list(pack.get("continuityChecklist"))),
-            details.get("continuityLocks"),
-            "每次生成保持同一物体类别、轮廓比例、结构数量、材质层次、标记位置和状态定义。",
-        ])
-        add(continuity, "物品连续性锁定：")
-        preserve = _base_asset_texts(_visible_prompt_constraints(pack.get("mustPreserve"), "base_asset"))
-        add(preserve, "必须保留：")
-        avoid = _merge_base_constraints(
-            _visible_prompt_constraints(pack.get("mustAvoid") or pack.get("negativePrompt"), "base_asset"),
-            [
-            "不改变物品类别、结构数量、尺度关系、材质或状态。",
-            "不执行手持、穿戴、放置、接触阴影或物品-角色-环境融合；交互只作为文字尺度说明。",
-            "不添加随机零件、装饰、品牌、可读 Logo、序列号、二维码、文字或水印。",
-            "不让场景、人物或其他物体取代独立物品的主体轮廓。",
-            ],
-        )
-        add(avoid, "必须避免：")
-        return "\n\n".join(item for item in paragraphs if item).strip() or fallback
-
-    return fallback
 
 
 def _build_clean_visual_prompt(
@@ -1814,18 +1296,15 @@ def build_natural_language_prompt(
     """Compile a normalized pack into a copy-ready, action-centred prompt."""
 
     cls = canonical_asset_class(asset_class)
-    effective_mode = prompt_composition_mode_for_asset(cls, composition_mode)
     pack = normalize_prompt_pack(cls, prompt_pack, context=context)
     fallback = str(fallback_prompt or "").strip()
     if not _structured_content(pack):
         return fallback
     if cls == "audio":
         return _build_audio_prompt_text(pack, fallback, context=context)
-    if effective_mode == "base_asset":
+    if composition_mode == "clean_replace":
         if not prompt_pack_has_generation_fields(cls, pack):
             return fallback
-        return _build_base_asset_prompt(cls, pack, fallback, context=context)
-    if effective_mode == "clean_replace":
         return _build_clean_visual_prompt(cls, pack, fallback, context=context)
 
     plan = pack.get("shotPlan") if isinstance(pack.get("shotPlan"), list) else []
@@ -2012,7 +1491,6 @@ def canonicalize_prompt_output(
     """Return the one canonical prompt representation used by persistence."""
 
     cls = canonical_asset_class(asset_class)
-    effective_mode = prompt_composition_mode_for_asset(cls, composition_mode)
     pack = normalize_prompt_pack(
         cls,
         prompt_pack,
@@ -2021,14 +1499,14 @@ def canonicalize_prompt_output(
         must_avoid=must_avoid,
         context=context,
     )
-    if effective_mode in {"clean_replace", "base_asset"} and strict_clean and not prompt_pack_has_generation_fields(cls, prompt_pack):
+    if composition_mode == "clean_replace" and strict_clean and not prompt_pack_has_generation_fields(cls, prompt_pack):
         raise ValueError("Prompt Pack 未形成完整的新稿，不能进入 clean_replace 重写。")
-    compiled = build_natural_language_prompt(cls, pack, prompt, context=context, composition_mode=effective_mode)
-    if effective_mode in {"clean_replace", "base_asset"} and strict_clean:
-        issues = validate_clean_prompt(compiled, previous_prompt, base_asset=effective_mode == "base_asset")
+    compiled = build_natural_language_prompt(cls, pack, prompt, context=context, composition_mode=composition_mode)
+    if composition_mode == "clean_replace" and strict_clean:
+        issues = validate_clean_prompt(compiled, previous_prompt)
         if issues:
             raise ValueError("；".join(issues))
-    result = {
+    return {
         "prompt": compiled,
         "promptPack": pack,
         "promptQuality": assess_prompt_pack(cls, pack, compiled),
@@ -2036,10 +1514,6 @@ def canonicalize_prompt_output(
         "promptWorkflow": PROMPT_WORKFLOW_ID,
         "promptFieldOrder": list(AUDIO_PROMPT_FIELD_ORDER if cls == "audio" else PROMPT_FIELD_ORDER),
     }
-    if effective_mode == "base_asset":
-        result["promptCompositionMode"] = effective_mode
-        result["promptCompilerVersion"] = BASE_ASSET_PROMPT_COMPILER_VERSION
-    return result
 
 
 def _coverage_item(label: str, paths: tuple[str, ...], prompt_pack: dict[str, Any], prompt: str) -> dict[str, Any]:
@@ -2139,11 +1613,6 @@ def assess_prompt_pack(asset_class: str, prompt_pack: Any, prompt: str = "") -> 
                 ("融合光影与遮挡", ("fusionDetails.lightingShadowsAndMaterialIntegration", "fusionDetails.compositionAndDepth", "lighting", "occlusion")),
                 ("视频参考用途", ("fusionDetails.shotUsage", "fusionDetails.seedanceReferenceRole", "shotUsage")),
             ]
-        elif asset_class in {"prop", "product"}:
-            required = common + [
-                ("结构与材质", ("propDetails.objectIdentity", "propDetails.silhouetteAndProportions", "propDetails.structureAndFunction", "structure", "materials", "assetSpec", "productionSpec")),
-                ("使用状态与尺度", ("propDetails.materialAndCondition", "propDetails.scaleAndInteraction", "usageState", "interaction", "state", "poseAction")),
-            ]
         elif asset_class == "shot":
             required = common + [
                 ("镜头事件与后果", ("visibleEvent", "shotPlan", "eventConsequence", "action")),
@@ -2179,18 +1648,14 @@ __all__ = [
     "PROMPT_CONTRACT_VERSION",
     "PROMPT_WORKFLOW_ID",
     "PROMPT_FIELD_ORDER",
-    "BASE_ASSET_PROMPT_COMPILER_VERSION",
     "AUDIO_PROMPT_SCHEMA_VERSION",
     "AUDIO_PROMPT_FIELD_ORDER",
     "PROMPT_CLASS_ALIASES",
     "canonical_asset_class",
-    "is_base_asset_class",
-    "prompt_composition_mode_for_asset",
     "prompt_contract",
     "prompt_contract_instructions",
     "normalize_prompt_pack",
     "build_natural_language_prompt",
-    "base_asset_geometry_prompt",
     "build_audio_prompt_package",
     "canonicalize_prompt_output",
     "assess_prompt_pack",

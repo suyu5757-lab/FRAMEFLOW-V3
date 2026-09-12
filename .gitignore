@@ -51,6 +51,7 @@ backups/
 *.swo
 
 # Windows and OS metadata
+*.DS_Store
 Thumbs.db
 Desktop.ini
 $RECYCLE.BIN/

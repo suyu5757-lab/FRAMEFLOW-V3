@@ -33,6 +33,64 @@ describe('shared prompt workflow compiler', () => {
     expect(prompt).toContain('图片生成时需要提供的参考图资产：P02');
   });
 
+  it('compiles a base character into one static same-character turnaround', () => {
+    const prompt = buildNaturalLanguagePrompt('character', {
+      promptIntent: '建立可跨镜头复用的角色基础身份参考板',
+      identityAnchor: 'C001 是 20–22 岁东亚成年女性驾驶员',
+      visibleEvent: '同一张合成参考板静态展示同一角色的四个视图',
+      characterDetails: {
+        faceAndExpression: '窄鹅蛋脸、深棕近黑杏仁眼、轻微眼睑不对称和少量可见毛孔，表情自然放松',
+        hairAndHeadSilhouette: '黑色偏冷棕中短层次发，后侧固定为低位短束发',
+        bodyPoseAction: '纤细修长成年女性比例，双手可见的中性站姿，不接触机甲',
+        costumeAndMaterials: '冷白驾驶服、石墨黑结构、白色驾驶手套、双腕青蓝同步接口',
+        detailAndMaterialBehavior: '中性棚灯显示皮肤、发丝、织物和磨砂装甲的材质差异',
+      },
+      cameraExecution: { framing: '结构参考板', camera: '中性设计记录视角' },
+      visualStyle: { medium: '写实角色设计参考' },
+      continuityChecklist: ['SH001 与 SH002 复用同一张脸'],
+      mustPreserve: ['C001 原始资产 ID', '白色驾驶手套'],
+      mustAvoid: ['文字和水印'],
+    }, '旧 Prompt\n\n同时满足以下补充制作要求：触碰机甲并说走吧。', undefined, 'base_asset');
+    expect(prompt).toContain('38%');
+    expect(prompt).toContain('16:9 横向角色设定参考板');
+    expect(prompt.match(/画布与基础资产输出要求：/g)?.length).toBe(1);
+    expect(prompt).toContain('严格 90° 左侧面全身');
+    expect(prompt).toContain('严格 180° 背面全身');
+    expect(prompt).toContain('不是四名相似角色');
+    expect(prompt).not.toContain('C001');
+    expect(prompt).not.toContain('SH001');
+    expect(prompt).not.toContain('同时满足以下补充制作要求');
+    expect(prompt).not.toContain('允许变化：');
+  });
+
+  it('keeps fusion on the legacy supplement path even if base mode is passed', () => {
+    const prompt = buildNaturalLanguagePrompt('fusion', {
+      promptIntent: '将已确认资产按镜头关系融合',
+      identityAnchor: '角色、道具和环境身份',
+      visibleEvent: '角色握住道具并进入环境',
+      fusionDetails: { interactionAndContact: '手部接触可信' },
+    }, '旧融合 Prompt', undefined, 'base_asset');
+    expect(prompt).toContain('同时满足以下补充制作要求');
+    expect(prompt).toContain('旧融合 Prompt');
+  });
+
+  it('keeps the scene base prompt focused on the real environment background', () => {
+    const prompt = buildNaturalLanguagePrompt('scene', {
+      promptIntent: '建立可跨镜头复用的空环境',
+      identityAnchor: '同一座山腰祠堂',
+      visibleEvent: '角色进入画面并在门前放置道具',
+      sceneDetails: {
+        spatialLayoutAndGeography: '前景湿石阶，中景空院落，背景木门与山体消失方向',
+        actionBlockingZones: '院落中央保持空白',
+      },
+    }, '', undefined, 'base_asset');
+    expect(prompt).toContain('背景边界必须展示实际环境的后景层');
+    expect(prompt).toContain('16:9 横向空环境设计参考图');
+    expect(prompt).not.toContain('使用白色、米白或中性浅灰的干净设计背景，不加入具体生活场景。');
+    expect(prompt).not.toContain('角色进入画面');
+    expect(prompt).not.toContain('放置道具');
+  });
+
   it('adds explicit scene geography, material evidence, and camera-visible shot context', () => {
     const prompt = buildNaturalLanguagePrompt('scene', {
       promptIntent: '建立雨夜祠堂的空环境和动作空间',

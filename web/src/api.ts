@@ -1,4 +1,4 @@
-import type { AgentPlan, AudioStudioEnvelope, AudioStudioDocument, AssetAuditEnvelope, AssetBoard, AssetBoardEnvelope, AssetImageGenerate, AssetLibraryEnvelope, AssetPromptRunEnvelope, DashboardEnvelope, FusionPromptRunEnvelope, GraphEnvelope, MiniMaxRegion, MiniMaxVoiceCatalog, ProjectCreateInput, ProjectRecord, RenderEstimate, RenderJob, RunEstimate, SettingsEnvelope, SettingsProvider, SpeechGenerateInput, StoryDiff, StoryDocument, StoryEnvelope, StoryRun, TimelineDocument, TimelineEnvelope, TimelinePreflight, VoiceDesignGenerateInput, WorkflowGraph, WorkflowManifest, WorkflowRun, WorkflowRunDetail } from './types';
+import type { AgentPlan, AudioStudioEnvelope, AudioStudioDocument, AssetAuditEnvelope, AssetBoard, AssetBoardEnvelope, AssetImageGenerate, AssetIntentEnvelope, AssetIntentPrepareEnvelope, AssetLibraryEnvelope, AssetPromptRunEnvelope, DashboardEnvelope, FusionPromptRunEnvelope, GraphEnvelope, MiniMaxRegion, MiniMaxVoiceCatalog, ProjectCreateInput, ProjectRecord, RenderEstimate, RenderJob, RunEstimate, SettingsEnvelope, SettingsProvider, SpeechGenerateInput, StoryDiff, StoryDocument, StoryEnvelope, StoryRun, TimelineDocument, TimelineEnvelope, TimelinePreflight, VoiceDesignGenerateInput, WorkflowGraph, WorkflowManifest, WorkflowRun, WorkflowRunDetail } from './types';
 import type { AssistantAttachment, AssistantContractBundle, AssistantConversation, AssistantMessage, AssistantRun, AssistantRunEvent, AudioAssistantDraftApplyResult } from './assistant-types';
 
 export class StudioApiError extends Error {
@@ -19,6 +19,19 @@ export class StudioApiError extends Error {
   }
 }
 
+function formatApiIssue(issue: unknown): string {
+  if (typeof issue === 'string') return issue;
+  if (issue && typeof issue === 'object') {
+    const record = issue as Record<string, unknown>;
+    const message = String(record.message || record.reason || record.code || '').trim();
+    const path = String(record.path || record.asset_id || record.assetId || record.shot_id || '').trim();
+    if (message && path) return `${path}: ${message}`;
+    if (message) return message;
+    try { return JSON.stringify(issue); } catch { return '结构化问题'; }
+  }
+  return String(issue ?? '结构化问题');
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
@@ -30,7 +43,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const body = await response.json().catch(() => ({ message: '服务返回无法解析的响应。' }));
   if (!response.ok) {
     const detail = typeof body.detail === 'object' ? body.detail?.message : body.detail;
-    const issueText = Array.isArray(body.details?.issues) ? body.details.issues.map((issue: unknown) => String(issue)).join('；') : '';
+    const issueText = Array.isArray(body.details?.issues) ? body.details.issues.map(formatApiIssue).join('；') : '';
     const baseMessage = body.message || detail || body.error || `请求失败（${response.status}）`;
     const message = issueText && !String(baseMessage).includes(issueText) ? `${baseMessage}：${issueText}` : baseMessage;
     throw new StudioApiError(message, {
@@ -178,7 +191,11 @@ export const studioApi = {
   acceptRegulator: (runId: string) => request<{ run: StoryRun }>(`/api/v2/story-runs/${encodeURIComponent(runId)}/accept-regulator`, { method: 'POST' }),
   storyDiff: (projectId: string, fromVersionId: string, toVersionId: string) => request<StoryDiff>(`/api/v2/projects/${encodeURIComponent(projectId)}/story/diff?from_version_id=${encodeURIComponent(fromVersionId)}&to_version_id=${encodeURIComponent(toVersionId)}`),
   rollbackStory: (projectId: string, versionId: string, expectedRevision: number, scope: 'script' | 'shots' | 'all' = 'all') => request<StoryEnvelope>(`/api/v2/projects/${encodeURIComponent(projectId)}/story/rollback`, json('POST', { version_id: versionId, expected_revision: expectedRevision, scope })),
-  generateAssetPrompts: (projectId: string, body: { expected_revision?: number; target_asset_id?: string; review_feedback?: string; source_qa_run_id?: string; operator_idea?: string }) => request<AssetPromptRunEnvelope>(`/api/v2/projects/${encodeURIComponent(projectId)}/asset-prompt-runs`, json('POST', body)),
+  assetIntents: (projectId: string) => request<AssetIntentEnvelope>(`/api/v2/projects/${encodeURIComponent(projectId)}/asset-intents`, { cache: 'no-store' }),
+  prepareAssetIntents: (projectId: string, expectedRevision: number) => request<AssetIntentPrepareEnvelope>(`/api/v2/projects/${encodeURIComponent(projectId)}/asset-intents/prepare`, json('POST', { expected_revision: expectedRevision })),
+  rebaseAssetIntents: (projectId: string, expectedRevision: number) => request<AssetIntentPrepareEnvelope>(`/api/v2/projects/${encodeURIComponent(projectId)}/asset-intents/rebase`, json('POST', { expected_revision: expectedRevision })),
+  interpretAssetIntent: (projectId: string, assetId: string, body: { expected_revision?: number; user_text?: string; mode: 'user_input' | 'script_only' | 'deferred' | 'draft' }) => request<AssetIntentEnvelope>(`/api/v2/projects/${encodeURIComponent(projectId)}/asset-intents/${encodeURIComponent(assetId)}/interpret`, json('POST', body)),
+  generateAssetPrompts: (projectId: string, body: { expected_revision?: number; target_asset_id?: string; review_feedback?: string; source_qa_run_id?: string; operator_idea?: string; asset_intent_version?: number }) => request<AssetPromptRunEnvelope>(`/api/v2/projects/${encodeURIComponent(projectId)}/asset-prompt-runs`, json('POST', body)),
   generateFusionPrompt: (projectId: string, body: { expected_project_revision: number; expected_board_revision: number; fusion_asset_id: string; shot_id: string; source_asset_ids: string[]; confirmed: boolean; provider_profile_id?: string; model?: string }) => request<FusionPromptRunEnvelope>(`/api/v2/projects/${encodeURIComponent(projectId)}/fusion-prompt-runs`, json('POST', body)),
   approveAssetPrompt: (projectId: string, promptVersionId: string) => request<Record<string, unknown>>(`/api/v2/projects/${encodeURIComponent(projectId)}/prompt-versions/${encodeURIComponent(promptVersionId)}/qa`, json('POST', { decision: 'Approved', report: { manual_review: true, review_source: 'asset-prompt-card', note: '用户在无限画布中确认 Prompt 卡内容。' } })),
   timeline: (projectId: string) => request<TimelineEnvelope>(`/api/v2/projects/${encodeURIComponent(projectId)}/timeline`),

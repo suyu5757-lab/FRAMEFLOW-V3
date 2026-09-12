@@ -238,7 +238,7 @@ export function parseStoryboardImport(source: string, options: StoryboardImportO
   });
 
   if (duration !== null && Math.abs(shots.reduce((sum, shot) => sum + Number(shot.duration || 0), 0) - duration) > 0.2) warnings.push('导入文本的总时长与主体镜头时间范围略有差异，已以镜头时间范围作为实际镜头时长。');
-  if (markers.length > 8) warnings.push(`导入识别到 ${markers.length} 个主体镜头，超过受控建议上限，请在生产检查中合并或拆分审阅。`);
+  if (markers.length > 8) warnings.push(`导入识别到 ${markers.length} 个主体镜头，高于参考范围；请按叙事需要审阅。`);
 
   const scene: Record<string, unknown> = {
     id: sceneId,

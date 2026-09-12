@@ -1,7 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Connection, Edge, EdgeChange, Node, NodeChange, Viewport } from '@xyflow/react';
 import { StudioApiError, studioApi } from './api';
-import { AudioStudioView } from './AudioStudioView';
 import { AssistantWorkspace } from './AssistantWorkspace';
 import { StoryWorkbench } from './StoryWorkbench';
 import { EDGE_RELATIONS, autoLayoutNodes, edgeRelationPresentation, wouldCreateExecutionCycle, type EdgeRelation } from './graph-editor';
@@ -12,7 +11,7 @@ import { buildAssetGenerationOrder, type AssetGenerationOrderItem } from './asse
 import { generationReferenceAssetsForAsset, mergeGenerationReferenceAssets } from './asset-reference-requirements';
 import { applyAssetBoardSelection, assetBoardSelectionKey, selectedAssetBoardCards as getSelectedAssetBoardCards, singleSelectedAssetBoardCard, type AssetBoardSelectionKey } from './asset-board-selection';
 import { VirtualAssetList } from './components/VirtualAssetList';
-import { PROMPT_CONTRACT_VERSION, PROMPT_WORKFLOW_ID, buildMiniMaxWebPromptPackage, buildNaturalLanguagePrompt, formatMiniMaxWebPromptPackage, normalizePromptPack, renderPromptValue } from './prompt-design';
+import { PROMPT_CONTRACT_VERSION, PROMPT_WORKFLOW_ID, buildMiniMaxWebPromptPackage, buildNaturalLanguagePrompt, formatMiniMaxWebPromptPackage, isBaseAssetClass, normalizePromptPack, renderPromptValue } from './prompt-design';
 
 type StudioMode = 'home' | 'story' | 'canvas' | 'timeline' | 'audio' | 'settings';
 type AssetPromptRunState = {
@@ -24,6 +23,7 @@ type AutoSaveState = 'idle' | 'scheduled' | 'saving' | 'saved' | 'error';
 const AUTO_SAVE_DELAY_MS = 900;
 const AUTO_SAVE_RETRY_DELAY_MS = 5000;
 const LazyAssetBoardFlow = lazy(() => import('./AssetBoardFlow').then(({ AssetBoardFlow }) => ({ default: AssetBoardFlow })));
+const LazyAudioStudioView = lazy(() => import('./AudioStudioView').then(({ AudioStudioView }) => ({ default: AudioStudioView })));
 type FlowNode = Node<GraphNodeData, 'workflow'>;
 type AssetBoardCollapseTarget = { type: 'shot' | 'asset'; id: string; keepNodeId?: string; scopeKey?: string };
 type AssetBoardContextTarget = { nodeId: string; assetId: string; label: string; nodeType: AssetBoardNodeData['node_type']; rowKey: string; x: number; y: number };
@@ -58,6 +58,25 @@ type AssetBoardNodeData = Omit<AssetBoardNode, 'node_type'> & {
 type AssetFlowNode = Node<AssetBoardNodeData, 'asset-board'>;
 type EditorSnapshot = { nodes: FlowNode[]; edges: Edge[] };
 type AssetBoardEditorSnapshot = { board: AssetBoard; selectedNodeIds: string[] };
+
+function hasNativeTextSelection(): boolean {
+  const selection = window.getSelection();
+  return Boolean(selection && !selection.isCollapsed && selection.toString().trim());
+}
+
+function storyGenerationErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error || '未知错误');
+  if (error instanceof StudioApiError && (error.category === 'billing' || error.status === 402)) {
+    return `AI 候选生成失败：当前 OpenCode 模型额度已用尽，请恢复可用额度或切换到有额度的模型。${message ? `（${message}）` : ''}`;
+  }
+  if (error instanceof StudioApiError && (error.category === 'rate_limit' || error.status === 429)) {
+    return `AI 候选生成失败：当前 OpenCode 模型正在限流，请稍后重试或切换模型。${message ? `（${message}）` : ''}`;
+  }
+  if (error instanceof StudioApiError && error.category === 'connection') {
+    return `AI 候选生成失败：无法连接 OpenCode Server，请确认 4096 服务在线。${message ? `（${message}）` : ''}`;
+  }
+  return message;
+}
 
 function applyNodeChangesLocal<T extends Node>(changes: NodeChange<T>[], nodes: T[]): T[] {
   let next = [...nodes];
@@ -408,7 +427,7 @@ function useDialogFocus(open: boolean) {
     if (!focusable.length) {
       event.preventDefault();
       dialogRef.current.focus();
-      return;
+      return false;
     }
     const currentIndex = focusable.indexOf(document.activeElement as HTMLElement);
     if (event.shiftKey && (currentIndex <= 0 || currentIndex === -1)) {
@@ -960,22 +979,21 @@ function composeAssetPrompt(asset: LibraryAsset, story: StoryEnvelope | null, pr
     const webPackage = buildMiniMaxWebPromptPackage(promptPack, prompt, { shots, references: asset.references || [] });
     return formatMiniMaxWebPromptPackage(webPackage, asset.name || '', asset.id);
   }
-  const compiledPrompt = buildNaturalLanguagePrompt(asset.assetClass, promptPack, prompt, { shots, references: asset.references || [] });
+  const compositionMode = asset.assetClass === 'fusion' ? 'legacy_supplement' : isBaseAssetClass(asset.assetClass) ? 'base_asset' : 'clean_replace';
+  const compiledPrompt = buildNaturalLanguagePrompt(asset.assetClass, promptPack, prompt, { shots, references: asset.references || [] }, compositionMode);
   const deps = (asset.dependencies || []).map((item) => `${item.shot_id || '未指定镜头'} · ${item.role || '依赖'}`).join('；');
   const storyGoal = story?.story.spec.creative_goal || '';
-  const characterReferencePlan = asset.assetClass === 'character'
-    ? '首轮只生成一张角色设定参考板：同一张合成图包含面部/上半身身份特写，以及正面、侧面、背面全身结构视图；中性棚拍背景、稳定光线、无动作姿态、无文字和水印。融合验证不理想时，再按需追加镜头化或动作化图片。'
-    : '';
   return [
-    `FRAMEFLOW 视觉资产生产 · ${assetClassLabels[asset.assetClass] || asset.assetClass} · Prompt Contract v${PROMPT_CONTRACT_VERSION} · ${PROMPT_WORKFLOW_ID}`,
+    `外部生成交接包 · ${assetClassLabels[asset.assetClass] || asset.assetClass}`,
+    `【Image Execution Prompt｜仅将这一段提供给图像模型】\n${compiledPrompt}`,
+    '【工作台元数据｜不属于 Image Execution Prompt，请勿粘贴到图像模型】',
     `资产名称：${asset.name || asset.id}`,
     `资产 ID：${asset.id}`,
     storyGoal ? `项目创意目标：${storyGoal}` : '',
     deps ? `镜头依赖：${deps}` : '',
-    characterReferencePlan,
     `资产身份/生产规格补充：${renderPromptValue({ identityAnchors: anchors, assetSpec: spec })}`,
-    `可直接执行的自然语言 Prompt：\n${compiledPrompt}`,
-    '执行边界：结构化字段只用于控制生成，不要把字段名、标签、合同版本或说明文字生成到画面中。保持身份锚点、空间关系、材质证据、光线因果和连续性；生成前仍需用户确认具体图像工具。',
+    `Prompt Contract：v${PROMPT_CONTRACT_VERSION} · ${PROMPT_WORKFLOW_ID}`,
+    '执行边界：Image Execution Prompt 不包含字段名、标签、内部流程、版本、尺寸或供应商控制项；生成前仍需用户确认具体图像工具。',
   ].filter(Boolean).join('\n\n');
 }
 
@@ -1938,13 +1956,11 @@ const settingsCapabilityLabels: Record<string, string> = {
   tts: '语音 / TTS', music: '音乐', sfx: '音效', lip_sync: '口型同步', upscale: '放大 / 修复', upload: '媒体上传',
 };
 const settingsProviderLabels: Record<string, string> = {
-  openai: 'OpenAI', openai_compatible: 'OpenAI-compatible', jimeng_cli: '即梦官方 CLI', opencode: 'OpenCode Agent', comfyui: 'ComfyUI 本地', minimax: 'MiniMax TTS',
+  jimeng_cli: '即梦官方 CLI', opencode: 'OpenCode Agent', comfyui: 'ComfyUI 本地', minimax: 'MiniMax TTS',
 };
-const settingsProviderTypes = ['openai', 'openai_compatible', 'jimeng_cli', 'opencode', 'comfyui', 'minimax'];
-const settingsEnvForType: Record<string, string> = { openai: 'OPENAI_API_KEY', openai_compatible: 'DEEPSEEK_API_KEY', opencode: 'OPENCODE_SERVER_PASSWORD', comfyui: 'COMFYUI_API_KEY', minimax: 'MINIMAX_CN_API_KEY' };
+const settingsProviderTypes = ['opencode', 'jimeng_cli', 'comfyui', 'minimax'];
+const settingsEnvForType: Record<string, string> = { opencode: 'OPENCODE_SERVER_PASSWORD', comfyui: 'COMFYUI_API_KEY', minimax: 'MINIMAX_CN_API_KEY' };
 const settingsProviderCapabilities: Record<string, string[]> = {
-  openai: ['orchestrator', 'vision', 'image', 'image_edit'],
-  openai_compatible: ['orchestrator'],
   opencode: ['orchestrator'],
   jimeng_cli: ['video'],
   comfyui: ['image', 'image_edit', 'video', 'music', 'sfx', 'lip_sync', 'upscale', 'upload'],
@@ -2115,15 +2131,16 @@ function SettingsView({ settings, busy, onRefresh, onSaveProvider, onAddPreset, 
   onClearCredential: (providerId: string, region?: MiniMaxRegion) => void;
   onProbe: (providerId: string) => Promise<boolean>;
 }) {
-  const providers = settings?.providers || [];
+  const providers = (settings?.providers || []).filter((provider) => !['openai', 'openai_compatible'].includes(provider.provider_type));
+  const presets = (settings?.presets || []).filter((preset) => !['openai', 'openai_compatible'].includes(preset.provider_type));
   const [selectedId, setSelectedId] = useState('');
   const [isCreating, setIsCreating] = useState(false);
   const [providerManagementMode, setProviderManagementMode] = useState(false);
   const [secret, setSecret] = useState('');
-  const [environmentVariable, setEnvironmentVariable] = useState('OPENAI_API_KEY');
+  const [environmentVariable, setEnvironmentVariable] = useState('OPENCODE_SERVER_PASSWORD');
   const [minimaxSecrets, setMinimaxSecrets] = useState<Record<MiniMaxRegion, string>>({ cn: '', global: '' });
   const [minimaxEnvironmentVariables, setMinimaxEnvironmentVariables] = useState<Record<MiniMaxRegion, string>>({ cn: 'MINIMAX_CN_API_KEY', global: 'MINIMAX_GLOBAL_API_KEY' });
-  const [draft, setDraft] = useState<SettingsDraft>({ providerType: 'openai', displayName: '', baseUrl: 'https://api.openai.com/v1', capabilities: ['orchestrator'], enabled: true, modelConfig: '{}', serverUsername: 'opencode', agent: 'build', preferredModel: '', thinkingStrength: 'max', cliExecutable: 'dreamina', minimaxRegion: 'cn' });
+  const [draft, setDraft] = useState<SettingsDraft>({ providerType: 'opencode', displayName: '', baseUrl: 'http://127.0.0.1:4096', capabilities: ['orchestrator'], enabled: true, modelConfig: '{}', serverUsername: 'opencode', agent: 'build', preferredModel: '', thinkingStrength: 'max', cliExecutable: 'dreamina', minimaxRegion: 'cn' });
   const [saveFeedback, setSaveFeedback] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
   const [probePendingId, setProbePendingId] = useState<string | null>(null);
   useEffect(() => {
@@ -2193,13 +2210,13 @@ function SettingsView({ settings, busy, onRefresh, onSaveProvider, onAddPreset, 
     const config = selected.model_config || {};
     setDraft({ providerType: selected.provider_type, displayName: selected.display_name, baseUrl: selected.base_url, capabilities: [...selected.capabilities], enabled: selected.enabled, modelConfig: JSON.stringify(config, null, 2), serverUsername: String(config.server_username || 'opencode'), agent: String(config.agent || 'build'), preferredModel: String(config.model_version || config.orchestrator_model || config.preferred_model || config.tts_model || ''), thinkingStrength: String(config.thinking_strength || config.reasoning_effort || 'max'), cliExecutable: String(config.executable || 'dreamina'), minimaxRegion: selected.active_region === 'global' || config.region === 'global' || selected.base_url.includes('minimax.io') ? 'global' : 'cn' });
     setSecret('');
-    setEnvironmentVariable(settingsEnvForType[selected.provider_type] || 'OPENAI_API_KEY');
+    setEnvironmentVariable(settingsEnvForType[selected.provider_type] || 'OPENCODE_SERVER_PASSWORD');
     setMinimaxSecrets({ cn: '', global: '' });
     setMinimaxEnvironmentVariables({ cn: 'MINIMAX_CN_API_KEY', global: 'MINIMAX_GLOBAL_API_KEY' });
   }, [selected?.id, selected?.model_config]);
 
   const selectProvider = (provider: SettingsProvider) => { setIsCreating(false); setSelectedId(provider.id); setSaveFeedback(null); };
-  const startCreate = () => { setIsCreating(true); setSelectedId(''); setSecret(''); setMinimaxSecrets({ cn: '', global: '' }); setMinimaxEnvironmentVariables({ cn: 'MINIMAX_CN_API_KEY', global: 'MINIMAX_GLOBAL_API_KEY' }); setSaveFeedback(null); setDraft({ providerType: 'openai', displayName: '新 Provider', baseUrl: 'https://api.openai.com/v1', capabilities: ['orchestrator'], enabled: true, modelConfig: '{}', serverUsername: 'opencode', agent: 'build', preferredModel: '', thinkingStrength: 'max', cliExecutable: 'dreamina', minimaxRegion: 'cn' }); };
+  const startCreate = () => { setIsCreating(true); setSelectedId(''); setSecret(''); setMinimaxSecrets({ cn: '', global: '' }); setMinimaxEnvironmentVariables({ cn: 'MINIMAX_CN_API_KEY', global: 'MINIMAX_GLOBAL_API_KEY' }); setSaveFeedback(null); setDraft({ providerType: 'opencode', displayName: 'OpenCode Agent', baseUrl: 'http://127.0.0.1:4096', capabilities: ['orchestrator'], enabled: true, modelConfig: '{}', serverUsername: 'opencode', agent: 'build', preferredModel: '', thinkingStrength: 'max', cliExecutable: 'dreamina', minimaxRegion: 'cn' }); };
   const toggleCapability = (capability: string) => {
     if (!supportedCapabilities.includes(capability)) return;
     setDraft((current) => ({ ...current, capabilities: current.capabilities.includes(capability) ? current.capabilities.filter((item) => item !== capability) : [...current.capabilities, capability] }));
@@ -2252,7 +2269,7 @@ function SettingsView({ settings, busy, onRefresh, onSaveProvider, onAddPreset, 
           <button type="button" className="settings-provider-select" onClick={() => selectProvider(provider)}><span className="settings-provider-status">{provider.enabled ? '●' : '○'}</span><span><b>{provider.display_name}</b><small>{settingsProviderLabels[provider.provider_type] || provider.provider_type}</small></span><i className={provider.healthy === true ? 'ok' : provider.healthy === false ? 'danger' : ''}>{provider.credential_configured ? '已接入' : provider.provider_type === 'comfyui' || provider.provider_type === 'opencode' || provider.provider_type === 'jimeng_cli' ? '待连接' : '缺凭据'}</i></button>
           {providerManagementMode && <button type="button" className="settings-provider-delete" aria-label={`删除 ${provider.display_name}`} title="永久删除此 Provider" onClick={() => onDeleteProvider(provider.id)} disabled={busy}>×</button>}
         </div>)}
-        <div className="settings-presets"><div className="settings-presets-heading"><small>快速接入预设</small><span>删除配置后仍可重新添加</span></div>{settings.presets.map((preset: SettingsPreset) => { const presetView = buildSettingsPresetView(preset, providers); return <button key={preset.preset_id} className={presetView.provider ? 'settings-preset-installed' : ''} aria-label={presetView.provider ? `打开 ${preset.display_name} 当前配置` : `添加 ${preset.display_name} Provider`} onClick={() => presetView.provider ? selectProvider(presetView.provider) : onAddPreset(preset.preset_id)} disabled={busy}><b>{presetView.provider ? `打开 ${preset.display_name}` : preset.display_name}</b><span className="settings-preset-status">{presetView.status}</span><span className="settings-preset-detail">{presetView.detail}</span></button>; })}</div>
+        <div className="settings-presets"><div className="settings-presets-heading"><small>快速接入预设</small><span>删除配置后仍可重新添加</span></div>{presets.map((preset: SettingsPreset) => { const presetView = buildSettingsPresetView(preset, providers); return <button key={preset.preset_id} className={presetView.provider ? 'settings-preset-installed' : ''} aria-label={presetView.provider ? `打开 ${preset.display_name} 当前配置` : `添加 ${preset.display_name} Provider`} onClick={() => presetView.provider ? selectProvider(presetView.provider) : onAddPreset(preset.preset_id)} disabled={busy}><b>{presetView.provider ? `打开 ${preset.display_name}` : preset.display_name}</b><span className="settings-preset-status">{presetView.status}</span><span className="settings-preset-detail">{presetView.detail}</span></button>; })}</div>
       </aside>
         <div className="settings-editor">
           <div className="settings-editor-heading"><div><small>{isCreating ? 'NEW PROVIDER' : 'PROVIDER PROFILE'}</small><h3>{isCreating ? '创建新的 V3 Provider' : selected?.display_name || '选择 Provider'}</h3></div>{selected && <div className="settings-editor-actions"><button onClick={async () => { setProbePendingId(selected.id); try { await onProbe(selected.id); } finally { setProbePendingId(null); } }} disabled={busy}>连接探测</button>{providerManagementMode && <button className="danger-button" onClick={() => onDeleteProvider(selected.id)} disabled={busy}>删除配置</button>}</div>}</div>
@@ -2265,7 +2282,7 @@ function SettingsView({ settings, busy, onRefresh, onSaveProvider, onAddPreset, 
           {draft.providerType === 'minimax' && <MiniMaxCredentialPanel selected={selected} activeRegion={activeMinimaxRegion} preferredModel={draft.preferredModel} modelOptions={minimaxModelOptions} secrets={minimaxSecrets} environmentVariables={minimaxEnvironmentVariables} busy={busy} onModelChange={(model) => setDraft((current) => ({ ...current, preferredModel: model }))} onSecretChange={(region, value) => setMinimaxSecrets((current) => ({ ...current, [region]: value }))} onEnvironmentChange={(region, value) => setMinimaxEnvironmentVariables((current) => ({ ...current, [region]: value }))} onWrite={(region) => { if (!selected) return; onWriteCredential(selected.id, minimaxSecrets[region], region); setMinimaxSecrets((current) => ({ ...current, [region]: '' })); }} onImport={(region) => { if (!selected) return; onImportCredential(selected.id, minimaxEnvironmentVariables[region], region); }} onClear={(region) => { if (!selected) return; onClearCredential(selected.id, region); }} onSelectRegion={(region) => setDraft((current) => ({ ...current, minimaxRegion: region, baseUrl: minimaxRegionLabels[region].baseUrl }))} />}
           <label className="settings-json-field">扩展配置 JSON<textarea value={draft.modelConfig} onChange={(event) => setDraft({ ...draft, modelConfig: event.target.value })} spellCheck={false} /></label>
          <div className="settings-save-row"><button className="settings-primary" onClick={saveProvider} disabled={busy || !draft.displayName.trim() || !draft.baseUrl.trim()}>{isCreating ? '创建 Provider' : '保存 Provider 配置'}</button>{saveFeedback && <span className={`settings-save-feedback ${saveFeedback.kind}`} role="status">{saveFeedback.text}</span>}</div>
-        {!isCreating && selected && (selected.provider_type === 'jimeng_cli' ? <section className="settings-credential-card"><div className="settings-subheading"><small>LOCAL CLI LOGIN</small><h4>即梦本机登录态</h4><p>{selected.credential_configured ? 'CLI 已检测到本机登录态。' : '不填写 API Key；请先安装官方 CLI，并运行 dreamina login 或 dreamina login --headless。'}</p></div><small className="settings-security-note">登录态由官方 dreamina CLI 自己管理，FrameFlow 不读取、不保存 Cookie 或 token。</small></section> : selected.provider_type !== 'minimax' ? <section className="settings-credential-card"><div className="settings-subheading"><small>CREDENTIALS</small><h4>系统凭据库</h4><p>{selected.credential_configured ? `当前状态：已配置 ${selected.credential_mask || '••••••••'}` : selected.provider_type === 'opencode' || selected.provider_type === 'comfyui' ? '当前 Provider 可以不配置密钥，连接由本地服务决定。' : '当前状态：未配置 API Key'}</p></div><div className="settings-credential-actions"><input type="password" value={secret} onChange={(event) => setSecret(event.target.value)} placeholder="输入后仅写入系统凭据库，不会保存到网页" autoComplete="off"/><button onClick={() => { onWriteCredential(selected.id, secret); setSecret(''); }} disabled={busy || !secret}>写入凭据库</button><select value={environmentVariable} onChange={(event) => setEnvironmentVariable(event.target.value)}><option>{settingsEnvForType[selected.provider_type] || 'OPENAI_API_KEY'}</option><option>OPENAI_API_KEY</option><option>DEEPSEEK_API_KEY</option><option>OPENCODE_SERVER_PASSWORD</option><option>COMFYUI_API_KEY</option><option>MINIMAX_API_KEY</option></select><button onClick={() => onImportCredential(selected.id, environmentVariable)} disabled={busy}>导入环境变量</button><button className="danger-button" onClick={() => onClearCredential(selected.id)} disabled={busy}>清除系统凭据</button></div><small className="settings-security-note">API Key 不回显、不进入项目 JSON、运行快照、日志、前端 localStorage 或 Provider 探测结果。</small></section> : null)}
+        {!isCreating && selected && (selected.provider_type === 'jimeng_cli' ? <section className="settings-credential-card"><div className="settings-subheading"><small>LOCAL CLI LOGIN</small><h4>即梦本机登录态</h4><p>{selected.credential_configured ? 'CLI 已检测到本机登录态。' : '不填写 API Key；请先安装官方 CLI，并运行 dreamina login 或 dreamina login --headless。'}</p></div><small className="settings-security-note">登录态由官方 dreamina CLI 自己管理，FrameFlow 不读取、不保存 Cookie 或 token。</small></section> : selected.provider_type !== 'minimax' ? <section className="settings-credential-card"><div className="settings-subheading"><small>CREDENTIALS</small><h4>系统凭据库</h4><p>{selected.credential_configured ? `当前状态：已配置 ${selected.credential_mask || '••••••••'}` : selected.provider_type === 'opencode' || selected.provider_type === 'comfyui' ? '当前 Provider 可以不配置密钥，连接由本地服务决定。' : '当前状态：未配置 API Key'}</p></div><div className="settings-credential-actions"><input type="password" value={secret} onChange={(event) => setSecret(event.target.value)} placeholder="输入后仅写入系统凭据库，不会保存到网页" autoComplete="off"/><button onClick={() => { onWriteCredential(selected.id, secret); setSecret(''); }} disabled={busy || !secret}>写入凭据库</button><select value={environmentVariable} onChange={(event) => setEnvironmentVariable(event.target.value)}><option>{settingsEnvForType[selected.provider_type] || 'OPENCODE_SERVER_PASSWORD'}</option><option>OPENCODE_SERVER_PASSWORD</option><option>COMFYUI_API_KEY</option><option>MINIMAX_API_KEY</option></select><button onClick={() => onImportCredential(selected.id, environmentVariable)} disabled={busy}>导入环境变量</button><button className="danger-button" onClick={() => onClearCredential(selected.id)} disabled={busy}>清除系统凭据</button></div><small className="settings-security-note">API Key 不回显、不进入项目 JSON、运行快照、日志、前端 localStorage 或 Provider 探测结果。</small></section> : null)}
        </div>
     </div>
     <section className="settings-security-panel"><div><small>SECURITY BOUNDARY</small><h3>安全与费用规则</h3></div><ul><li>付费媒体调用必须通过 V3 审批门，设置页不会直接触发生成。</li><li>密钥只进入系统凭据库；清除操作只清除系统存储，不修改环境变量。</li><li>Provider 探测只展示脱敏状态、延迟、能力和模型目录。</li><li>新结果保留为独立版本；设置变更不会覆盖项目、资产或时间线内容。</li></ul></section>
@@ -2499,7 +2516,7 @@ function Studio() {
   const onAssetBoardNodeClick = useCallback((event: React.MouseEvent, node: AssetFlowNode) => {
     if (!['asset', 'handoff', 'artifact'].includes(String(node.data.node_type))) return;
     const target = event.target as HTMLElement | null;
-    if (target?.closest('button, input, textarea, select, label, a')) return;
+    if (target?.closest('button, input, textarea, select, label, a, details, summary')) return;
     if (event.shiftKey || event.ctrlKey || event.metaKey) return;
     const selectionKey = assetBoardSelectionKey(node);
     if (!selectionKey) return;
@@ -2513,7 +2530,7 @@ function Studio() {
     // boundary before the event reaches the flow renderer.
     if (!event.ctrlKey || event.metaKey) return;
     const target = event.target as HTMLElement | null;
-    if (target?.closest('button, input, textarea, select, label, a')) return;
+    if (target?.closest('button, input, textarea, select, label, a, details, summary')) return;
     const card = target?.closest('.asset-board-card');
     const nodeId = card?.closest<HTMLElement>('.react-flow__node')?.dataset.id;
     if (!nodeId) return;
@@ -2667,7 +2684,7 @@ function Studio() {
     if (!confirmed) { setNotice('已取消图像生成，仍保留 Prompt 卡。'); return; }
     setBusy(true);
     try {
-      const result = await studioApi.generateAssetImage(projectId, assetId, { prompt: asset.prompt, prompt_version: asset.promptVersion, size: '1024x1024', quality: 'medium', confirmed: true });
+      const result = await studioApi.generateAssetImage(projectId, assetId, { prompt: asset.prompt, prompt_version: asset.promptVersion, size: (asset.assetGenerationSize || '1024x1024') as '1536x1024' | '1024x1024' | '1024x1536', quality: 'medium', confirmed: true });
       const [library, projectEnvelope] = await Promise.all([studioApi.assetLibrary(projectId), studioApi.projects()]);
       setAssetLibrary(library); setProjects(projectEnvelope.projects); await refreshPromptBoard(library); setNotice(`${asset.assetClass === 'character' ? '角色结构参考图' : '图像候选'}已生成 · ${String(result.artifact?.id || result.artifact_id || 'artifact')} · 待图片 QA 与资产登记`);
     } catch (error) { setNotice((error as Error).message); } finally { setBusy(false); }
@@ -3152,7 +3169,7 @@ function Studio() {
   const assetGenerationOrder = useMemo(() => buildAssetGenerationOrder({ assets: assetLibrary?.assets || [], storyShots: story?.story.shots || [], board: assetBoardEnvelope?.board, boardNodes: assetBoardNodes.map((node) => ({ asset_id: node.data.asset_id, config: node.data.config })) }), [assetBoardEnvelope?.board, assetBoardNodes, assetLibrary?.assets, story?.story.shots]);
 
   const buildAssetBoardFlow = (envelope: AssetBoardEnvelope, library: AssetLibraryEnvelope, shots: StoryShot[]) => {
-    const boardNodes = assetBoardToFlowNodes(envelope.board, library.assets, assetBoardFilter, assetBoardShowShots, shots, { preset: assetBoardLayoutPreset, columnWidth: assetBoardColumnWidth, gap: assetBoardGap, layoutMode: assetBoardLayoutMode, collapsedScopes: assetBoardCollapsedScopes, onToggleScope: toggleAssetBoardScope, onContextMenu: openAssetContextMenu, onApprovePrompt: approveAssetPromptCard, onGenerateImage: generateAssetImageCard, onCopyPrompt: copyAssetPromptCard, onUploadAsset: uploadAssetFromBoard, onApproveAsset: approveAssetFromBoard, onRejectAsset: rejectAssetFromBoard, onRegisterAsset: registerAssetFromBoard, onRemoveArtifact: removeUploadedAssetFromBoard, onOpenAssetProduction: openAssetProductionShortcut });
+    const boardNodes = assetBoardToFlowNodes(envelope.board, library.assets, assetBoardFilter, assetBoardShowShots, shots, { preset: assetBoardLayoutPreset, columnWidth: assetBoardColumnWidth, gap: assetBoardGap, layoutMode: assetBoardLayoutMode, collapsedScopes: assetBoardCollapsedScopes, onToggleScope: toggleAssetBoardScope, onContextMenu: openAssetContextMenu, onApprovePrompt: approveAssetPromptCard, onGenerateImage: generateAssetImageCard, onGeneratePrompt: generatePromptFromBoard, onGenerateFusionPrompt: generateFusionPromptFromBoard, onCopyPrompt: copyAssetPromptCard, onUploadAsset: uploadAssetFromBoard, onApproveAsset: approveAssetFromBoard, onRejectAsset: rejectAssetFromBoard, onRegisterAsset: registerAssetFromBoard, onRemoveArtifact: removeUploadedAssetFromBoard, onOpenAssetProduction: openAssetProductionShortcut });
     return { boardNodes, boardEdges: assetBoardToFlowEdges(envelope.board, boardNodes) };
   };
 
@@ -3750,12 +3767,48 @@ function Studio() {
     await syncAssetBoard();
   };
 
-  const generateAssetPrompts = async (targetAssetId?: string, options: { reviewFeedback?: string; sourceQaRunId?: string; operatorIdea?: string; storyOverride?: StoryEnvelope } = {}) => {
-    const sourceStory = options.storyOverride || story;
+  const prepareAssetIntent = async (): Promise<boolean> => {
+    if (!projectId || !story) {
+      setNotice('请先选择项目并加载故事与分镜。');
+      return false;
+    }
+    setBusy(true);
+    setNotice('读取资产');
+    try {
+      if (storyDirty) {
+        const saved = await saveStory();
+        if (!saved) return false;
+      }
+      const currentIntent = await studioApi.assetIntents(projectId);
+      if (currentIntent.assetManifestReady) return true;
+      const prepared = await studioApi.prepareAssetIntents(projectId, currentIntent.revision);
+      setProjects((current) => current.map((item) => item.document.id === projectId ? { ...item, revision: prepared.revision } : item));
+      if (prepared.story) {
+        const nextStory: StoryEnvelope = { project_id: projectId, revision: prepared.revision, story: prepared.story, checks: prepared.checks || story.checks };
+        storyRef.current = nextStory;
+        setStory(nextStory);
+        setStoryDirty(false);
+      }
+      if (prepared.library) setAssetLibrary(prepared.library);
+      if (prepared.asset_board && prepared.library) {
+        const flow = buildAssetBoardFlow(prepared.asset_board, prepared.library, prepared.story?.shots || story.story.shots || []);
+        commitAssetBoardServerState(prepared.asset_board, flow.boardNodes, flow.boardEdges);
+      }
+      setNotice(`已准备 ${prepared.preparedAssetCount || 0} 项资产，开始逐项确认创作意图。`);
+      return true;
+    } catch (error) {
+      setNotice((error as Error).message);
+      return false;
+    } finally { setBusy(false); }
+  };
+
+  const generateAssetPrompts = async (targetAssetId?: string, options: { reviewFeedback?: string; sourceQaRunId?: string; operatorIdea?: string; storyOverride?: StoryEnvelope; assetIntentVersion?: number } = {}) => {
+    let sourceStory = options.storyOverride || story;
+    let sourceStoryRefreshed = false;
     if (!projectId || !sourceStory) {
       setNotice('请先选择项目并加载故事与分镜。');
       setAssetPromptRun({ status: 'error', message: '没有加载项目或故事与分镜，任务未启动。', startedAt: null });
-      return;
+      return false;
     }
     const startedAt = Date.now();
     const preparingMessage = storyDirty ? '正在保存故事与分镜，保存完成后开始资产审计…' : '正在准备资产 Prompt 生成任务…';
@@ -3763,30 +3816,43 @@ function Studio() {
     setNotice(targetAssetId ? '正在生成当前资产的 Prompt 草稿，请稍候…' : '正在执行资产总控并生成 Prompt 卡，请稍候；不要重复点击。');
     setBusy(true);
     try {
-      const currentStory = storyDirty && !options.storyOverride ? await saveStory(false) : sourceStory;
+      if (options.assetIntentVersion !== undefined && !options.storyOverride) {
+        const refreshed = await studioApi.story(projectId);
+        sourceStory = refreshed;
+        sourceStoryRefreshed = true;
+        storyRef.current = refreshed;
+        setStory(refreshed);
+        setStoryDirty(false);
+      }
+      const currentStory = storyDirty && !options.storyOverride && !sourceStoryRefreshed ? await saveStory(false) : sourceStory;
       if (!currentStory) {
         setAssetPromptRun({ status: 'error', message: '故事与分镜保存失败，资产 Prompt 任务未启动。', startedAt });
-        return;
+        return false;
       }
       setAssetPromptRun({ status: 'running', message: '正在调用资产总控模型，执行依赖审计并生成 Prompt 卡…', startedAt });
-      const result = await studioApi.generateAssetPrompts(projectId, { expected_revision: currentStory.revision, ...(targetAssetId ? { target_asset_id: targetAssetId } : {}), ...(options.reviewFeedback?.trim() ? { review_feedback: options.reviewFeedback.trim(), source_qa_run_id: options.sourceQaRunId } : {}), ...(options.operatorIdea?.trim() ? { operator_idea: options.operatorIdea.trim() } : {}) });
+      const result = await studioApi.generateAssetPrompts(projectId, { expected_revision: currentStory.revision, ...(targetAssetId ? { target_asset_id: targetAssetId } : {}), ...(options.reviewFeedback?.trim() ? { review_feedback: options.reviewFeedback.trim(), source_qa_run_id: options.sourceQaRunId } : {}), ...(options.operatorIdea?.trim() ? { operator_idea: options.operatorIdea.trim() } : {}), ...(options.assetIntentVersion !== undefined ? { asset_intent_version: options.assetIntentVersion } : {}) });
       setStory(result.story); setStoryDirty(false); setAssetLibrary(result.library); setProjects((current) => current.map((item) => item.document.id === projectId ? { ...item, revision: result.revision } : item));
       const flow = buildAssetBoardFlow(result.asset_board, result.library, result.story.story.shots);
       const nextBoardNodes = targetAssetId ? flow.boardNodes.map((node) => ({ ...node, selected: node.data.node_type === 'asset' && String(node.data.asset_id || '') === targetAssetId })) : flow.boardNodes;
-      commitAssetBoardServerState(result.asset_board, nextBoardNodes, flow.boardEdges); setMode('canvas');
+      commitAssetBoardServerState(result.asset_board, nextBoardNodes, flow.boardEdges);
       if (targetAssetId) {
+        setMode('canvas');
         const generated = result.run.promptCards.find((card) => card.id === targetAssetId);
         setAssetPromptDraft(generated?.prompt ? { assetId: targetAssetId, prompt: generated.prompt, promptPack: generated.promptPack, promptQuality: generated.promptQuality } : null);
         setAssetProductionFocus({ assetId: targetAssetId, target: 'prompt' });
       }
       const fusionPlanCount = Array.isArray(result.run.fusionPlans) ? result.run.fusionPlans.length : 0;
-      const successMessage = targetAssetId ? options.operatorIdea?.trim() ? '已将你的补充想法整合为当前资产 Prompt 草稿，请检查并保存后进入 Prompt QA。' : options.reviewFeedback ? '已按审核反馈重写当前资产 Prompt 草稿，请检查并保存后进入 Prompt QA。' : '当前资产 Prompt 草稿已生成，请编辑并保存后进入 Prompt QA。' : `已生成 ${result.run.promptCards.length} 张基础资产 Prompt 卡，并建立 ${fusionPlanCount} 张镜头融合卡；等待 Prompt QA 和用户确认。`;
-      setAssetPromptRun({ status: 'success', message: successMessage, startedAt });
-      setNotice(targetAssetId ? options.operatorIdea?.trim() ? '已整合你的补充想法生成 Prompt 草稿 · 请检查并保存后进入 Prompt QA' : options.reviewFeedback ? '已按审核反馈重写 Prompt 草稿 · 请检查并保存后进入 Prompt QA' : '已为当前资产生成 Prompt 草稿 · 请编辑并保存后进入 Prompt QA' : `已生成 ${result.run.promptCards.length} 张基础资产 Prompt 卡 · 自动建立 ${fusionPlanCount} 张镜头融合卡 · 等待 QA`); void refreshDashboard(false);
+      const consistency = (result.run.promptConsistency || {}) as { status?: string; passed?: number; failed?: number };
+      const consistencyPassed = consistency.status === 'passed';
+      const successMessage = targetAssetId ? options.operatorIdea?.trim() ? '已将你的补充想法整合为当前资产 Prompt 草稿，请检查并保存后进入 Prompt QA。' : options.reviewFeedback ? '已按审核反馈重写当前资产 Prompt 草稿，请检查并保存后进入 Prompt QA。' : '当前资产 Prompt 草稿已生成，请编辑并保存后进入 Prompt QA。' : consistencyPassed ? `已生成 ${result.run.promptCards.length} 张基础资产 Prompt 卡；Prompt 一致性审核通过，等待 Prompt QA 和用户确认。` : `基础资产 Prompt 已生成，但一致性审核未通过；已停止自动修订，请返回资产创作意图界面查看反馈。`;
+      setAssetPromptRun({ status: targetAssetId || consistencyPassed ? 'success' : 'error', message: successMessage, startedAt });
+      setNotice(targetAssetId ? options.operatorIdea?.trim() ? '已整合你的补充想法生成 Prompt 草稿 · 请检查并保存后进入 Prompt QA' : options.reviewFeedback ? '已按审核反馈重写 Prompt 草稿 · 请检查并保存后进入 Prompt QA' : '已为当前资产生成 Prompt 草稿 · 请编辑并保存后进入 Prompt QA' : consistencyPassed ? `已生成 ${result.run.promptCards.length} 张基础资产 Prompt 卡 · 一致性审核通过 · 自动建立 ${fusionPlanCount} 张镜头融合卡` : 'Prompt 一致性审核未通过 · 请返回资产创作意图界面处理反馈'); void refreshDashboard(false);
+      return true;
     } catch (error) {
       const message = (error as Error).message;
       setAssetPromptRun({ status: 'error', message: `任务未完成：${message}`, startedAt });
       setNotice(message);
+      return false;
     } finally { setBusy(false); }
   };
   generateAssetPromptRef.current = (assetId: string, operatorIdea?: string) => { void generateAssetPrompts(assetId, { operatorIdea }); };
@@ -4217,16 +4283,17 @@ function Studio() {
     const sourceAsset = assetLibrary?.assets.find((item) => item.id === assetId);
     if (!sourceAsset) return;
     const metadata = sourceAsset.assetMetadata || {};
+    const generatedDraft = assetPromptDraft?.assetId === assetId ? assetPromptDraft : null;
     saveAssetMetadata(assetId, {
       expected_revision: project?.revision,
       asset_class: sourceAsset.assetClass,
       prompt,
-      prompt_pack: sourceAsset.promptPack || metadata.prompt_pack || {},
+      prompt_pack: generatedDraft?.promptPack || sourceAsset.promptPack || metadata.prompt_pack || {},
       asset_spec: sourceAsset.assetSpec || metadata.asset_spec || {},
       identity_anchors: sourceAsset.identityAnchors || metadata.identity_anchors || {},
       must_preserve: sourceAsset.mustPreserve || metadata.must_preserve || [],
       must_avoid: sourceAsset.mustAvoid || metadata.must_avoid || [],
-      source: sourceAsset.source || 'asset-prompt-generator',
+      source: 'asset-prompt-generator',
       authorization_status: sourceAsset.authorizationStatus || 'pending',
       fusion_source_asset_ids: sourceAsset.assetClass === 'fusion' ? sourceAsset.fusionSourceAssetIds : undefined,
     });
@@ -4373,7 +4440,7 @@ function Studio() {
     } finally { if (manageBusy) setBusy(false); }
   };
 
-  const generateStoryCandidate = async (mode: 'optimize' | 'direct' = 'optimize', revision?: { feedback: string; runId: string }) => {
+  const generateStoryCandidate = async (mode: 'optimize' | 'direct' = 'optimize', options?: { feedback?: string; runId?: string; sourceScriptOverride?: string; sourceRunId?: string }) => {
     if (!story || !projectId) return;
     setBusy(true);
     try {
@@ -4381,13 +4448,13 @@ function Studio() {
       if (!currentStory) return;
       const currentSpec = currentStory.story.spec;
       const generatorProfile = currentSpec.generator_profile || project?.document.generator || 'seedance2.5';
-      const created = await studioApi.createStoryRun(projectId, { goal: mode === 'direct' ? 'script_storyboard' : 'full', workflow_mode: mode === 'direct' ? 'storyboard_from_source' : 'optimize_script_and_storyboard', strength: 'balanced', duration: currentSpec.duration, ratio: currentSpec.ratio, generator: generatorProfile, generator_profile: generatorProfile, shot_count_min: currentSpec.shot_count_min, shot_count_target: currentSpec.shot_count_target, shot_count_max: currentSpec.shot_count_max, shot_budget_mode: currentSpec.shot_budget_mode, shot_budget_source: currentSpec.shot_budget_source, audience: currentSpec.audience, platform: currentSpec.platform, language: currentSpec.language, brand_requirements: currentSpec.brand_requirements, must_preserve: currentSpec.must_preserve, must_avoid: currentSpec.must_avoid, ...(revision ? { revision_feedback: revision.feedback, revision_of_run_id: revision.runId } : {}) });
+      const created = await studioApi.createStoryRun(projectId, { goal: mode === 'direct' ? 'script_storyboard' : 'full', workflow_mode: mode === 'direct' ? 'storyboard_from_source' : 'optimize_script_and_storyboard', strength: 'balanced', duration: currentSpec.duration, ratio: currentSpec.ratio, generator: generatorProfile, generator_profile: generatorProfile, shot_count_min: currentSpec.shot_count_min, shot_count_target: currentSpec.shot_count_target, shot_count_max: currentSpec.shot_count_max, shot_budget_mode: currentSpec.shot_budget_mode, shot_budget_source: currentSpec.shot_budget_source, audience: currentSpec.audience, platform: currentSpec.platform, language: currentSpec.language, brand_requirements: currentSpec.brand_requirements, must_preserve: currentSpec.must_preserve, must_avoid: currentSpec.must_avoid, ...(options?.feedback && options.runId ? { revision_feedback: options.feedback, revision_of_run_id: options.runId } : {}), ...(options?.sourceScriptOverride && options.sourceRunId ? { source_script_override: options.sourceScriptOverride, source_script_run_id: options.sourceRunId } : {}) });
       const started = await studioApi.startStoryRun(created.id);
       setStoryRun(started.run);
-      setNotice(revision ? '已按你的意见重新生成候选，请继续审阅；上一版仍保留在运行记录中' : mode === 'direct' ? '原文直转分镜候选已生成，等待审阅' : '拍摄剧本与分镜候选已生成，等待逐层接受');
+      setNotice(options?.sourceScriptOverride ? '已将 AI 拍摄剧本作为锁定来源生成分镜候选，等待审阅' : options?.feedback ? '已按你的意见重新生成候选，请继续审阅；上一版仍保留在运行记录中' : mode === 'direct' ? '原文直转分镜候选已生成，等待审阅' : '拍摄剧本与分镜候选已生成，等待逐层接受');
       void refreshDashboard(false);
     } catch (error) {
-      setNotice((error as Error).message);
+      setNotice(storyGenerationErrorMessage(error));
     } finally { setBusy(false); }
   };
 
@@ -4685,6 +4752,10 @@ function Studio() {
       if (!event.ctrlKey && !event.metaKey) return;
       const key = event.key.toLowerCase();
       if (mode !== 'canvas' && ['c', 'x', 'v'].includes(key)) {
+        // Let the browser handle Cmd/Ctrl+C whenever the user has selected
+        // rendered workbench text. Node clipboard shortcuts remain available
+        // when there is no native text selection.
+        if (key === 'c' && hasNativeTextSelection()) return;
         event.preventDefault();
         if (key === 'v') {
           if (!workflowClipboard.current.length) { setNotice('工作流剪贴板为空'); return; }
@@ -4739,12 +4810,13 @@ function Studio() {
         window.setTimeout(() => document.getElementById('asset-board-directory-search')?.focus(), 0);
         return;
       }
-      if (key === 's') {
-        event.preventDefault();
-        void saveAssetBoard();
-        return;
-      }
+      // Ctrl/Cmd+S is handled once by onGlobalShortcut via saveCurrentPage.
+      // Keeping it out of this canvas-only listener prevents duplicate board
+      // saves when both window listeners receive the same key event.
       if (!['c', 'x', 'v'].includes(key)) return;
+      // React Flow and this canvas listener own node copy/cut/paste only when
+      // the user has not selected visible text inside a card.
+      if (key === 'c' && hasNativeTextSelection()) return;
       event.preventDefault();
       if (key === 'v') {
         if (!assetClipboard.current.length) { setNotice('资产剪贴板为空'); return; }
@@ -5322,9 +5394,9 @@ function Studio() {
         </header>
         <div className="studio-content">
           {busy && <div className="progress-bar" />}
-          {mode === 'story' && <StoryWorkbench story={story} storyRun={storyRun} dirty={storyDirty} busy={busy} notice={notice} assetPromptRun={assetPromptRun} onChange={(next) => { setStory((current) => current ? { ...current, story: next } : current); markStoryDirty(); }} onSave={saveStory} onGenerateOptimized={() => { void generateStoryCandidate('optimize'); }} onGenerateStoryboard={() => { void generateStoryCandidate('direct'); }} onRegenerate={(feedback, runId, workflow) => { void generateStoryCandidate(workflow, { feedback, runId }); }} onAccept={acceptStoryLayer} onRollback={rollbackStory} onOpenAssetBoard={openAssetBoard} onGenerateAssetPrompts={generateAssetPrompts} />}
+          {mode === 'story' && <StoryWorkbench projectId={projectId || ''} story={story} storyRun={storyRun} dirty={storyDirty} busy={busy} notice={notice} assetPromptRun={assetPromptRun} onChange={(next) => { setStory((current) => current ? { ...current, story: next } : current); markStoryDirty(); }} onSave={saveStory} onGenerateOptimized={() => { void generateStoryCandidate('optimize'); }} onGenerateStoryboard={() => { void generateStoryCandidate('direct'); }} onGenerateStoryboardFromScript={(script, runId) => { void generateStoryCandidate('direct', { sourceScriptOverride: script, sourceRunId: runId }); }} onRegenerate={(feedback, runId, workflow) => { void generateStoryCandidate(workflow, { feedback, runId }); }} onAccept={acceptStoryLayer} onRollback={rollbackStory} onOpenAssetBoard={openAssetBoard} onPrepareAssetIntent={prepareAssetIntent} onGenerateAssetPrompts={(assetIntentVersion) => generateAssetPrompts(undefined, { assetIntentVersion })} />}
           {mode === 'home' && <HomeView dashboard={dashboard} error={dashboardError} currentProjectId={projectId} busy={busy} onSelectProject={(id) => { setProjectId(id); setMode('home'); }} onOpenTask={openDashboardTask} onOpenStage={openDashboardStage} onRefresh={() => { void refreshDashboard(); }} />}
-          {mode === 'audio' && <AudioStudioView projectId={projectId} projectName={project?.document.name || '当前项目'} envelope={audioStudio} assetLibrary={assetLibrary} settings={settings} story={story} busy={busy} onSave={saveAudioStudio} onRefresh={refreshAudioStudio} onRefreshMinimaxCatalog={refreshMinimaxCatalog} onCreateAsset={createAudioAsset} onNotice={setNotice} onDirtyChange={(isDirty) => { if (!isDirty) setAudioDirty(false); }} onDocumentChange={handleAudioDocumentChange} onOpenStory={() => setMode('story')} />}
+          {mode === 'audio' && <Suspense fallback={<div className="canvas-loading" role="status">正在加载声音资产工坊…</div>}><LazyAudioStudioView projectId={projectId} projectName={project?.document.name || '当前项目'} envelope={audioStudio} assetLibrary={assetLibrary} settings={settings} story={story} busy={busy} onSave={saveAudioStudio} onRefresh={refreshAudioStudio} onRefreshMinimaxCatalog={refreshMinimaxCatalog} onCreateAsset={createAudioAsset} onNotice={setNotice} onDirtyChange={(isDirty) => { if (!isDirty) setAudioDirty(false); }} onDocumentChange={handleAudioDocumentChange} onOpenStory={() => setMode('story')} /></Suspense>}
           {mode === 'timeline' && <TimelineView envelope={timelineEnvelope} preflight={timelinePreflight} story={story} assetLibrary={assetLibrary} renderJob={renderJob} busy={busy} onChange={(document) => { setTimelineEnvelope((current) => current ? { ...current, document } : current); markTimelineDirty(); }} onSave={saveTimeline} onAssemble={assembleTimeline} onPreview={previewTimeline} onRender={renderTimeline} />}
           {mode === 'settings' && <SettingsView settings={settings} busy={busy} onRefresh={refreshSettings} onSaveProvider={saveSettingsProvider} onAddPreset={addSettingsPreset} onDeleteProvider={deleteSettingsProvider} onWriteCredential={writeSettingsCredential} onImportCredential={importSettingsCredential} onClearCredential={clearSettingsCredential} onProbe={probeSettingsProvider} />}
           {mode === 'canvas' && (

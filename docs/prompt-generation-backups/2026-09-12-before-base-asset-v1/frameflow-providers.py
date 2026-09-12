@@ -706,14 +706,6 @@ STORYBOARD_OUTPUT_SCHEMA = {
     "properties": {
         "sourceScriptVersionId": {"type": ["string", "null"]},
         "workflowMode": {"type": "string"},
-        "sourceScriptHash": {"type": "string"},
-        "sourceBeatLedger": {"type": "array", "items": {"type": "object", "additionalProperties": True}},
-        "sourceBeatCoverage": {"type": "object", "additionalProperties": True},
-        "handoffStatus": {"type": "string"},
-        "acceptanceAllowed": {"type": "boolean"},
-        "scriptAcceptanceAllowed": {"type": "boolean"},
-        "blockingIssues": {"type": "array", "items": {"type": "object", "additionalProperties": True}},
-        "normalizationReport": {"type": "object", "additionalProperties": True},
         "shotBudgetAssessment": {"type": "object", "additionalProperties": True},
         "proposedScript": {"type": "string"},
         "structure": {"type": "array", "items": {"type": "object", "additionalProperties": True}},
@@ -752,7 +744,6 @@ STORYBOARD_OUTPUT_SCHEMA = {
                     "action": {"type": "string"},
                     "visibleEvent": {"type": "string"},
                     "eventConsequence": {"type": "string"},
-                    "sourceBeatIds": {"type": "array", "items": {"type": "string"}},
                     "spatialGeography": {"type": ["string", "object"], "additionalProperties": True},
                     "materialEvidence": {"type": ["string", "object"], "additionalProperties": True},
                     "lightingCausality": {"type": ["string", "object"], "additionalProperties": True},
@@ -982,42 +973,6 @@ ASSET_PROMPT_OUTPUT_SCHEMA = {
         "warnings": {"type": "array", "items": {"type": "string"}},
     },
     "required": ["assets", "fusionPlans", "missingAssetRegister", "dependencyTable", "routingPlan", "nextActions", "warnings"],
-    "additionalProperties": True,
-}
-
-ASSET_PROMPT_CONSISTENCY_OUTPUT_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "reviews": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "assetId": {"type": "string"},
-                    "decision": {"type": "string", "enum": ["pass", "needs_repair"]},
-                    "issueCodes": {"type": "array", "items": {"type": "string"}},
-                    "issues": {"type": "array", "items": {"type": "string"}},
-                    "conciseReason": {"type": "string"},
-                    "checks": {
-                        "type": "object",
-                        "properties": {
-                            "identity_anchor": {"type": "boolean"},
-                            "asset_scope": {"type": "boolean"},
-                            "base_state": {"type": "boolean"},
-                            "geometry": {"type": "boolean"},
-                            "prompt_contract": {"type": "boolean"},
-                        },
-                        "required": ["identity_anchor", "asset_scope", "base_state", "geometry", "prompt_contract"],
-                        "additionalProperties": True,
-                    },
-                },
-                "required": ["assetId", "decision", "issueCodes", "issues", "conciseReason", "checks"],
-                "additionalProperties": True,
-            },
-        },
-        "summary": {"type": "string"},
-    },
-    "required": ["reviews", "summary"],
     "additionalProperties": True,
 }
 
